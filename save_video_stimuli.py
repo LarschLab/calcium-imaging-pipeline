@@ -1,5 +1,4 @@
 import time
-
 from psychopy import visual, core, event, monitors, tools, filters
 from pathlib import Path
 import numpy as np
@@ -12,7 +11,7 @@ PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor) #pixels per centimete
 FPS = 60  # Frame rate (frames per second)
 
 # Experiment time parameters
-SPONTANEOUS_ACTIVITY_SEC = 5.66 #10 min
+SPONTANEOUS_ACTIVITY_SEC = 8.49 #10 min
 GRATING_DURATION_SEC = 20  # Total duration for which the grating will be displayed, in seconds
 LOOM_DURATION_SEC = 3  # Duration of the stimulus (seconds)
 INTER_STIMULUS_SEC = 10 # Duration of inter stimulus pause (seconds)

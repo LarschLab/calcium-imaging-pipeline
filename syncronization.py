@@ -16,10 +16,16 @@ monitor.setSizePix(PIXELS_MONITOR)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor) #pixels per centimeter
 FPS = 60  # Frame rate (frames per second)
 
+# Path of stimuli and to save the log
+STIMULI_PATH = Path(r'C:\Users\zebrafish\code\2p\stimuli\group_10dots.csv')  # Define the path to save the stimuli
+CSV_PATH = Path(r'C:\Users\zebrafish\code\2p\data')  # Define the path to save the log
+
 # Experiment time parameters
 BACKGROUND_sec = 3
 STIMULUS_sec = 3
 N_CYCLES = 100
+N_DOTS = 10
+SIZE = 0.3
 
 # Initialize the window for visual stimulus
 win = visual.Window(
@@ -37,6 +43,9 @@ circle = visual.Circle(
     fillColor="red",  # circle color
     lineColor="red") # circle outline color (optional)
 
+group_dots = [visual.Circle(win, size=SIZE, fillColor='black', pos=[0, 0], units='cm') for _ in range(N_DOTS)]
+dots_positions_df = pd.read_csv(STIMULI_PATH)
+
 # Initialize Arduino connection
 BOARD = Arduino('COM3')  # Set the Arduino board COM port
 TRIGGER_PIN = 12  # Pin number to trigger stimulus
@@ -44,7 +53,6 @@ pin = BOARD.get_pin(f'd:{TRIGGER_PIN}:o')  # Output pin to control stimulus trig
 
 # Time and event logging
 event_log = []  # List to store event logs
-CSV_PATH = Path(r'C:\Users\zebrafish\code\2p\data')  # Define the path to save the log
 timer = core.Clock()  # Timer to track time during the experiment
 pin.write(1)  # Send a trigger signal to Arduino to mark the start
 
@@ -52,6 +60,7 @@ pin.write(1)  # Send a trigger signal to Arduino to mark the start
 event_log.append({'event': 'trigger_start_exp', 'timestamp': timer.getTime()})
 print("Experiment started and trigger sent")
 pin.write(0)
+
 for cycle in range(N_CYCLES):
     print(f"Starting stimulus cycle {cycle + 1}...")
     event_log.append({'event': f'background_{cycle}', 'timestamp': timer.getTime()})
@@ -62,9 +71,13 @@ for cycle in range(N_CYCLES):
 
     print(f"CIRCLE")
     pin.write(1)
-    event_log.append({'event': f'circle_{cycle}', 'timestamp': timer.getTime()})
+    event_log.append({'event': f'dots_{cycle}', 'timestamp': timer.getTime()})
+
     for frame in range(FPS * STIMULUS_sec):
-        circle.draw()
+        for i in range(N_DOTS):
+            value = dots_positions_df[f'dot{i}_x'][frame], dots_positions_df[f'dot{i}_y'][frame]
+            group_dots[i].pos = value
+            group_dots[i].draw()
         win.flip()
     pin.write(0)
 
@@ -77,5 +90,5 @@ win.close()  # Close the PsychoPy window
 # Save the event log to a CSV file
 df_timestamps = pd.DataFrame(event_log)
 current_date = datetime.datetime.now()
-filename = current_date.strftime("%Y-%m-%d-%H%M") + f'_synchro_StaticCircle.csv'
+filename = current_date.strftime("%Y-%m-%d-%H%M") + f'_synchro_DynamicDots.csv'
 df_timestamps.to_csv(CSV_PATH / filename, index=None)
