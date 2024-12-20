@@ -51,11 +51,18 @@ center = visual.Rect(
     fillColor="red",  # circle color
     lineColor="red") # circle outline color (optional)
 
+circle = visual.Circle(
+    win=win,
+    units='cm',
+    size=2,
+    fillColor="red",  # circle color
+    lineColor="red") # circle outline color (optional)
+
 # Draw and display the grid
 for rect in rectangles:
     rect.draw()
 
-center.draw()
+circle.draw()
 win.flip()
 
 # Wait for a keypress to close
