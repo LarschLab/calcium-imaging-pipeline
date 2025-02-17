@@ -26,15 +26,17 @@ win = visual.Window(
 )
 
 # Parameters for the cross
-line_length = 100  # Length of each arm of the cross
+vert_line_length = 0.3 * PIXEL_CM_RATIO# Length of vert line
+horiz_line_length = 0.8 * PIXEL_CM_RATIO # Length of each arm of the cross
+
 line_width = 3    # Width (thickness) of the lines
 line_color = "white"  # Color of the lines
 
 # Create the vertical rectangle (part of the cross)
-vertical_rect = visual.Rect(win, width=line_width, height=line_length, fillColor=line_color, lineColor=line_color, pos=(0, 0))
+vertical_rect = visual.Rect(win, width=line_width, height=vert_line_length, fillColor=line_color, lineColor=line_color, pos=(0, 0))
 
 # Create the horizontal rectangle (part of the cross)
-horizontal_rect = visual.Rect(win, width=line_length, height=line_width, fillColor=line_color, lineColor=line_color, pos=(0, 0))
+horizontal_rect = visual.Rect(win, width=horiz_line_length, height=line_width, fillColor=line_color, lineColor=line_color, pos=(0, 0))
 
 # Draw the cross (both vertical and horizontal rectangles)
 vertical_rect.draw()

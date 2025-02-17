@@ -16,7 +16,7 @@ PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centime
 
 # Initialize the window for visual stimulus
 win = visual.Window(
-    color=(-1, -1, -1),  # background color (white)
+    color="white",  # background color (white)
     units="pix",  # pixel units for easier handling of size and position
     monitor=monitor,
     screen=1,
@@ -43,26 +43,46 @@ for row in range(rows):
     rect = visual.Rect(win, width=800, height=5, fillColor="black", lineColor="black", pos=(0, y_pos))
     rectangles.append(rect)
 
+cross_vert = visual.Rect(
+    win=win,
+    units='pix',
+    width=5,  # thickness of the vertical line
+    height=0.3*PIXEL_CM_RATIO,  # length of the vertical line (longer)
+    fillColor="red",
+    lineColor="red"
+)
+
+cross_horiz = visual.Rect(
+    win=win,
+    units='pix',
+    width=0.8*PIXEL_CM_RATIO,  # length of the horizontal line (shorter)
+    height=5,  # thickness of the horizontal line
+    fillColor="red",
+    lineColor="red"
+)
+
 center = visual.Rect(
     win=win,
     units='pix',
-    width=3*PIXEL_CM_RATIO,
-    height=3*PIXEL_CM_RATIO,
+    width=2*PIXEL_CM_RATIO,
+    height=2*PIXEL_CM_RATIO,
     fillColor="red",  # circle color
     lineColor="red") # circle outline color (optional)
 
-circle = visual.Circle(
-    win=win,
-    units='cm',
-    size=2,
-    fillColor="red",  # circle color
-    lineColor="red") # circle outline color (optional)
+# circle = visual.Circle(
+#     win=win,
+#     units='cm',
+#     size=2,
+#     fillColor="red",  # circle color
+#     lineColor="red") # circle outline color (optional)
 
 # Draw and display the grid
-for rect in rectangles:
-    rect.draw()
+# for rect in rectangles:
+#     rect.draw()
 
-circle.draw()
+#center.draw()
+cross_vert.draw()
+cross_horiz.draw()
 win.flip()
 
 # Wait for a keypress to close

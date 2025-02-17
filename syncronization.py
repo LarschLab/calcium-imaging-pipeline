@@ -1,6 +1,6 @@
 """
 @author: Matilde Perrino
-Created on 2024-11-11
+Created on 2024-12-20
 """
 
 from psychopy import visual, core, event, monitors, tools
@@ -17,13 +17,13 @@ PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor) #pixels per centimete
 FPS = 60  # Frame rate (frames per second)
 
 # Path of stimuli and to save the log
-STIMULI_PATH = Path(r'C:\Users\zebrafish\code\2p\stimuli\group_10dots.csv')  # Define the path to save the stimuli
-CSV_PATH = Path(r'C:\Users\zebrafish\code\2p\data')  # Define the path to save the log
+STIMULI_PATH = Path(r'C:\Users\zebrafish\code\2p_visual_stimulation\stimuli\group_10dots.csv')  # Define the path to save the stimuli
+CSV_PATH = Path(r'C:\Users\zebrafish\code\2p_visual_stimulation\data')  # Define the path to save the log
 
 # Experiment time parameters
 BACKGROUND_sec = 3
 STIMULUS_sec = 3
-N_CYCLES = 100
+N_CYCLES = 10
 N_DOTS = 10
 SIZE = 0.3
 
@@ -43,7 +43,7 @@ circle = visual.Circle(
     fillColor="red",  # circle color
     lineColor="red") # circle outline color (optional)
 
-group_dots = [visual.Circle(win, size=SIZE, fillColor='black', pos=[0, 0], units='cm') for _ in range(N_DOTS)]
+group_dots = [visual.Circle(win, size=SIZE, fillColor='red', pos=[0, 0], units='cm') for _ in range(N_DOTS)]
 dots_positions_df = pd.read_csv(STIMULI_PATH)
 
 # Initialize Arduino connection
@@ -63,8 +63,8 @@ pin.write(0)
 
 for cycle in range(N_CYCLES):
     print(f"Starting stimulus cycle {cycle + 1}...")
-    event_log.append({'event': f'background_{cycle}', 'timestamp': timer.getTime()})
     print(f"BACKGROUND")
+    event_log.append({'event': f'background_{cycle}', 'timestamp': timer.getTime()})
 
     for frame in range(FPS * BACKGROUND_sec):
         win.flip()
@@ -82,6 +82,7 @@ for cycle in range(N_CYCLES):
     pin.write(0)
 
 # Log the end of the experiment
+pin.write(1)
 event_log.append({'event': 'end_exp', 'timestamp': timer.getTime()})
 pin.write(0)  # Send a trigger signal to Arduino to mark the end
 print("Experiment ended")

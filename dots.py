@@ -26,7 +26,7 @@ start/end are logged with timestamps. These event logs are saved to a CSV file f
 subsequent analysis.
 
 @author: Matilde Perrino
-Created on 2024-11-11
+Created on 2025-02-16
 """
 from psychopy import visual, core, event, monitors, tools, gui, data
 from pyfirmata import Arduino
@@ -43,10 +43,11 @@ FPS = 60  # Frame rate (frames per second)
 
 #Set data path
 data_path = Path(r'C:\Users\zebrafish\code\2p\data')  # Define the path to save the log
+stimuli_path = Path(r'C:\Users\zebrafish\code\2p_visual_stimulation\stimuli\LR_thalamus_bout_exp01')
 
 #Metadata dictionary
 metadata_dict = {
-                "experiment_name": "loom_grat_juveniles",
+                "experiment_name": "LR_thalamus_bout",
                 "experimenter": "Matilde",
                 "experiment_date": data.getDateStr(format="%Y-%m-%d-%H%M"),
                 "fish_ID": 1,
@@ -61,12 +62,13 @@ metadata_dict = {
                 "general_comments": None}
 
 experiment_params = {
-    "pre_stimulus_period_sec" : 600, #10 min
-    "gratings_sec" : 30,  # Total duration for which the grating will be displayed, in seconds
-    "loom_sec" : 3,  # Duration of the loom stimulus (seconds)
-    "inter_trial_sec" : 60,  # Duration of the loom stimulus (seconds)
-    "n_cycles" : 30,  # Number of stimulus cycles
-    "after_stimulus_period_sec" : 300 # 3 min final blank screen
+    "pre_stim_resting_sec" : 900, #15 min
+    "inter_stim_pause_sec" : 20,
+    "inter_acq_block_pause_sec": 20,
+    "n_cycles" : 9,  # Number of stimulus cycles
+    "n_trial_per_acq_cycle" : 16,
+    "dot_size_cm" : 0.2, #2 mm
+    "max_n_dots" : 2
     }
 
 #open GUI for metadata
@@ -77,104 +79,84 @@ if not dlg.OK:
 
 exp_path = data_path / metadata_dict['experiment_date'][:10] / f'fish_{metadata_dict["fish_ID"]}'
 exp_path.mkdir(exist_ok=True, parents=True)
-#TODO distance between table and bottom of petri dish has to be 24.3 cm
 
-# Experiment time parameters
-SPONTANEOUS_ACTIVITY_SEC = 600 #10 min
-GRATING_DURATION_SEC = 30  # Total duration for which the grating will be displayed, in seconds
-LOOM_DURATION_SEC = 3  # Duration of the stimulus (seconds)
-INTER_STIMULUS_SEC = 60 # Duration of inter stimulu pause (seconds)
-N_CYCLES = 30  # Number of stimulus cycles
-END_EXP_SEC = 300 # 5 min final blank screen
+#Import stimuli
+stimuli_dict = {}
 
-# Set properties for the grating stimulus
-SIZE_STRIPE_CM = 0.5  # Size of one grating stripe in centimeters
-SPEED_CM_SEC = 1  # Speed of the grating in cm per second
+for file_path in stimuli_path.glob('*.csv'):  # Use glob to match CSV files
+    df = pd.read_csv(file_path)
+    stimuli_dict[file_path.stem.split('_')[0]] = df
 
-# Parameters for the looming circle effect
-START_RADIUS_CM = 0.5  # Minimum radius in cm
-END_RADIUS_CM = 3.5  # Maximum radius in cm
-RADIUS_STEP = ((END_RADIUS_CM - START_RADIUS_CM) *
-               PIXEL_CM_RATIO / (LOOM_DURATION_SEC * FPS))  # Radius change per frame
+n_frames_trial = len(df)
+conditions = [{'stimulus' : key} for key in stimuli_dict.keys()]
+trials = data.TrialHandler(nReps=experiment_params['n_cycles'], method='random', trialList=conditions, name='trials')
 
 # Initialize the window for visual stimulus
 win = visual.Window(
-    color=(1, 1, 1),  # background color (black)
+    color='red',  # background color (black)
     units="pix",  # pixel units for easier handling of size and position
     monitor=monitor,
     screen=1,
     fullscr=True
 )
 
-# Create the grating stimulus
-grating = visual.GratingStim(
-    win=win,  # Reference to the window where it will be drawn
-    tex="sin",  # Use a sinewave texture for the grating pattern
-    units='cm',  # Specify the size units as centimeters for easier scaling
-    ori=0,  # Orientation of the grating in degrees (90 means vertical)
-    sf=SIZE_STRIPE_CM*2,  #How many cycles per unit (cm). e.g. if SIZE_STRIPE_CM == 0.5, then a cycle is 1 cm
-    phase=0  # Initial phase of the sinewave (start position of the grating)
-)
-
-# Initialize a black circle for the looming effect
-looming_circle = visual.Circle(
+circle = visual.Circle(
     win=win,
-    fillColor="black",  # circle color
-    lineColor="black"  # circle outline color (optional)
-)
+    units='cm',
+    size=experiment_params['dot_size_cm'],
+    fillColor="red",  # circle color
+    lineColor="red") # circle outline color (optional)
+
+dots = [visual.Circle(win, size=experiment_params['dot_size_cm'], fillColor='black', pos=[0, 0], units='cm') for _ in range(experiment_params['max_n_dots'])]
 
 # Initialize Arduino connection
 BOARD = Arduino('COM3')  # Set the Arduino board COM port
-TRIGGER_PIN = 11  # Pin number to trigger stimulus
-pin = BOARD.get_pin(f'd:{TRIGGER_PIN}:o')  # Output pin to control stimulus trigger
+ACQ_TRIGGER_PIN = 11  # Pin number to start acquisition stimulus
+AUX_TRIGGER_PIN = 13 # Pin number to log stimuli timestamps
+pin_acq = BOARD.get_pin(f'd:{ACQ_TRIGGER_PIN}:o')  # Output pin to control stimulus trigger
+pin_aux = BOARD.get_pin(f'd:{AUX_TRIGGER_PIN}:o')
 
 # Time and event logging
 event_log = []  # List to store event logs
 timer = core.Clock()  # Timer to track time during the experiment
 
 # Log the start of the experiment
-event_log.append({'fish_ID': metadata_dict["fish_ID"],'event': 'trigger_start_exp', 'timestamp': timer.getTime()})
-pin.write(1)  # Send a trigger signal to Arduino to mark the start
+event_log.append({'event': 'trigger_start_exp', 'timestamp': timer.getTime()})
+pin_acq.write(1)  # Send a trigger signal to Arduino to mark the start
+pin_acq.write(0)
 print("Experiment started and trigger sent")
 
 # # # Start the spontaneous activity blank screen
-for frame in range(FPS * SPONTANEOUS_ACTIVITY_SEC):
-    remaining_time = SPONTANEOUS_ACTIVITY_SEC - timer.getTime()
+for frame in range(FPS * experiment_params['pre_stim_resting_sec']):
     win.flip()  # Update the window
 
-# Start the stimuli cycles
-for cycle in range(N_CYCLES):
-    print(f"Starting stimulus cycle {cycle + 1}...")
-    event_log.append({'fish_ID': metadata_dict["fish_ID"], 'event': f'gratings_{cycle}', 'timestamp': timer.getTime()})
-    print(f"Starting gratings")
-    for frame in range(GRATING_DURATION_SEC * FPS):  # Loop through each frame in the total duration
-        # Update the grating's phase (position of the pattern) based on the speed
-        # The phase is incremented by the speed of the grating per frame (frame * SPEED_CM_SEC/FPS)
-        # and wrapped around (using modulus 1) to prevent it from exceeding the range [0, 1]
-        grating.phase = - (frame * SPEED_CM_SEC / FPS) % 1
-        grating.draw()
+for i, trial in enumerate(trials):
+    df = stimuli_dict[trial]
+    n_dots = len(df.columns)//2
+
+    if i % 16 == 0: #16 is the number of trials of each block of recording
+        for frame in range(FPS *experiment_params['inter_acq_block_pause_sec']):
+            win.flip()
+        pin_acq.write(1)
+        pin_acq.write(0)
+
+    for frame in range(FPS * experiment_params['inter_stim_pause_sec']/2):
         win.flip()
 
-    # Log the start of the stimulus cycle
-    event_log.append({'fish_ID': metadata_dict["fish_ID"],'event': f'loom_{cycle}', 'timestamp': timer.getTime()})
-    #pin.write(1)  # Trigger stimulus on Arduino
-    looming_circle.radius = START_RADIUS_CM
-    print(f"Starting looming")
-    # Create the looming effect by increasing the circle's radius
-    for frame in range(FPS * LOOM_DURATION_SEC):
-        looming_circle.radius += RADIUS_STEP  # Increase radius per frame
-        looming_circle.draw()  # Draw the circle on the screen
-        win.flip()  # Update the window with the drawn circle
+    event_log.append({'event': trial, 'timestamp': timer.getTime()})
+    pin_aux.write(1)
+    for frame in n_frames_trial:
+        for i in range(n_dots):
+            value = df[f'dot{i}_x'][frame], df[f'dot{i}_y'][frame]
+            dots[i].pos = value
+            dots[i].draw()
+        win.flip()
+    event_log.append({'event': trial + '_end', 'timestamp': timer.getTime()})
+    pin_aux.write(0)
 
-    # Log the inter-stimulus delay
-    #pin.write(0)  # Turn off stimulus on Arduino
-    event_log.append({'fish_ID': metadata_dict["fish_ID"],'event': f'interstim_pause_{cycle}', 'timestamp': timer.getTime()})
-    print(f"Starting pause")
-    for frame in range(FPS * INTER_STIMULUS_SEC):
-        win.flip()  # Update the window
-
-for frame in range(FPS * END_EXP_SEC):
-    win.flip()  # Update the window
+    #event_log.append({'event': 'inter_trial_pause', 'timestamp': timer.getTime()})
+    for frame in range(FPS * experiment_params['inter_stim_pause_sec']/2):
+        win.flip()
 
 # Log the end of the experiment
 event_log.append({'fish_ID': metadata_dict["fish_ID"],'event': 'end_exp', 'timestamp': timer.getTime()})
@@ -193,4 +175,4 @@ metadata_df = pd.DataFrame([metadata_dict])
 exp_param_df = pd.DataFrame([experiment_params])
 
 exp_data_df = pd.concat([metadata_df, exp_param_df], axis=1)
-exp_data_df.to_csv(exp_path / metadata_filename, index=False)
+#exp_data_df.to_csv(exp_path / metadata_filename, index=False)
