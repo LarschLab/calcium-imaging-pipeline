@@ -21,7 +21,7 @@ Created on: 2025-02-17
 
 # Imports and Setup
 from psychopy import visual, core, event, monitors, tools, gui, data
-#from pyfirmata import Arduino
+from pyfirmata import Arduino
 import pandas as pd
 import datetime
 from pathlib import Path
@@ -34,17 +34,17 @@ PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centime
 FPS = 60
 
 # Data and Stimuli Paths
-data_path = Path(r'C:\Users\zebrafish\code\2p_visual_stimulation\data')
-stimuli_path = Path(r'C:\Users\zebrafish\code\2p_visual_stimulation\stimuli\LR_thalamus_bout_exp01')
+data_path = Path(r'Z:\FAC\FBM\CIG\jlarsch\default\D2c\Matilde\2p')
+stimuli_path = data_path / 'LR_thalamus_bout_exp01\stimuli'
 
 metadata = {
-    "experiment_name": "LR_thalamus_bout",
+    "experiment_name": "LR_thalamus_bout_exp01",
     "experimenter": "Matilde",
     "experiment_date": data.getDateStr(format="%Y-%m-%d-%H%M"),
     "fish_ID": 1,
-    "fish_birth": "07/02/2025",
-    "fish_age": None,
-    "genotype": "huc-GCamp6s",
+    "fish_birth": "2025-01-31",
+    "fish_age_dpf": None,
+    "genotype": "huc:H2B-GCamp6s",
     "size": "medium",
     "time_embedding": None,
     "respond_to_omr": False,
@@ -54,13 +54,13 @@ metadata = {
 }
 
 params = {
-    "pre_stim_resting_sec": 900,      # 15 minutes blank screen
-    "pre_stim_pause_sec": 10,         # Pause before stimulus
-    "post_stim_pause_sec": 10,        # Pause after stimulus
-    "inter_block_pause_sec": 20,      # Pause between acquisition blocks
-    "n_trials_per_block": 16,         # Trials per block
-    "n_rep_trial": 8,                 # Repetitions per stimulus
-    "dot_size_cm": 0.2,
+    "pre_stim_resting_sec": 774.666667, # around 12.91 minutes blank screen
+    "pre_stim_pause_sec": 10,           # Pause before stimulus
+    "post_stim_pause_sec": 10,          # Pause after stimulus
+    "inter_block_pause_sec": 20,        # Pause between acquisition blocks
+    "n_trials_per_block": 16,           # Trials per block
+    "n_rep_trial": 8,                   # Repetitions per stimulus
+    "dot_radius_cm": 0.1,
     "max_n_dots": 2
 }
 
@@ -73,8 +73,12 @@ dlg = gui.DlgFromDict(params, title="Experiment Parameters", sortKeys=False)
 if not dlg.OK:
     core.quit()
 
+fish_birth = datetime.datetime.strptime(metadata['fish_birth'], "%Y-%m-%d")
+today = datetime.datetime.today()
+metadata['fish_age_dpf'] = (today - fish_birth).days
+
 # Create directory for saving experiment data
-exp_dir = data_path / metadata["experiment_date"][:10] / f'fish_{metadata["fish_ID"]}'
+exp_dir = data_path / metadata["experiment_name"]/ metadata["experiment_date"][:10] / f'f{metadata["fish_ID"]}'
 exp_dir.mkdir(exist_ok=True, parents=True)
 
 # Load stimuli CSV files
@@ -92,7 +96,7 @@ trial_sequence = []
 
 # Set up PsychoPy window and dot stimuli
 win = visual.Window(color="red", units="pix", monitor=monitor, screen=1, fullscr=True)
-dots = [visual.Circle(win=win, size=params["dot_size_cm"],
+dots = [visual.Circle(win=win, radius=params["dot_radius_cm"],
                       fillColor="black", pos=[0, 0], units="cm")
         for _ in range(params["max_n_dots"])]
 
@@ -119,11 +123,10 @@ block_event_log.append({'event': f'B{block_num}_start', 'timestamp': block_clock
 print("Experiment started and trigger sent")
 
 # Spontaneous activity (blank screen)
-for frame in range(FPS * params['pre_stim_resting_sec']):
+for frame in range(int(round(FPS * float(params['pre_stim_resting_sec']),1))):
     win.flip()
 
-exp_event_log.append({'event': f'B{block_num}_end', 'timestamp': exp_clock.getTime()})
-block_event_log.append({'event': f'B{block_num}_end', 'timestamp': block_clock.getTime()})
+
 
 for idx, trial in enumerate(trials):
     stimulus_key = trial["stimulus"]
@@ -133,10 +136,12 @@ for idx, trial in enumerate(trials):
 
     # If the block is complete, finish the block, pause, and start a new one
     if idx % params["n_trials_per_block"] == 0:
+
         exp_event_log.append({'event': f'B{block_num}_end', 'timestamp': exp_clock.getTime()})
         block_event_log.append({'event': f'B{block_num}_end', 'timestamp': block_clock.getTime()})
-        exp_event_log.append({'event': f'B{block_num}_interblock_pause', 'timestamp': exp_clock.getTime()})
 
+        exp_event_log.append({'event': f'B{block_num}_interblock_pause', 'timestamp': exp_clock.getTime()})
+        #print('inter_block_pause_sec')
         for _ in range(FPS * params['inter_block_pause_sec']):
             win.flip()
         block_num += 1
@@ -153,6 +158,8 @@ for idx, trial in enumerate(trials):
         win.flip()
 
     # Stimulus presentation
+    #print('drawing dot')
+    #print(stimulus_key)
     pin_aux.write(1)
     exp_event_log.append({'event': f'B{block_num}_stim{idx}_{stimulus_key}', 'timestamp': exp_clock.getTime()})
     block_event_log.append({'event': f'B{block_num}_stim{idx}_{stimulus_key}', 'timestamp': block_clock.getTime()})
@@ -180,19 +187,45 @@ win.close()  # Close the PsychoPy window
 current_date = datetime.datetime.now().strftime("%Y-%m-%d-%H%M")
 
 df_experiment_log = pd.DataFrame(exp_event_log)
-exp_log_filename = current_date + f'_fish{metadata["fish_ID"]}_experiment_log.csv'
+exp_log_filename = current_date + f'_f{metadata["fish_ID"]}_experiment_log.csv'
 df_experiment_log.to_csv(exp_dir / exp_log_filename, index=False)
 
 df_block_log = pd.DataFrame(block_event_log)
-block_log_filename = f"{current_date}_fish{metadata['fish_ID']}_block_log.csv"
+block_log_filename = f"{current_date}_f{metadata['fish_ID']}_block_log.csv"
 df_block_log.to_csv(exp_dir / block_log_filename, index=False)
 
 df_trial_sequence = pd.DataFrame(trial_sequence, columns=["stimulus"])
-trial_sequence_filename = f"{current_date}_fish{metadata['fish_ID']}_trial_sequence.csv"
+trial_sequence_filename = f"{current_date}_f{metadata['fish_ID']}_trial_sequence.csv"
 df_trial_sequence.to_csv(exp_dir / trial_sequence_filename, index=False)
 
-metadata_df = pd.DataFrame([metadata])
-params_df = pd.DataFrame([params])
-exp_metadata = pd.concat([metadata_df, params_df], axis=1)
-metadata_filename = f"{current_date}_fish{metadata['fish_ID']}_metadata.csv"
+# Convert dictionaries into list of tuples
+metadata_list = [(key, value) for key, value in metadata.items()]
+params_list = [(key, value) for key, value in params.items()]
+all_data = metadata_list + params_list
+exp_metadata = pd.DataFrame(all_data, columns=["parameter", "value"])
+
+metadata_filename = f"{current_date}_f{metadata['fish_ID']}_metadata.csv"
+exp_metadata.to_csv(exp_dir / metadata_filename, index=False)
+
+metadata['fish_died'] = False
+anatomy_params = {'frames_per_slice': 150,
+                  'step_size_um' : 2,
+                  'wavelenght' : 851,
+                  'AOM_power' : 57
+}
+dlg = gui.DlgFromDict(metadata, title="Metadata", sortKeys=False)
+if not dlg.OK:
+    core.quit()
+
+dlg = gui.DlgFromDict(anatomy_params, title="Anatomy", sortKeys=False)
+if not dlg.OK:
+    core.quit()
+
+# Convert dictionaries into list of tuples
+metadata_list = [(key, value) for key, value in metadata.items()]
+params_list = [(key, value) for key, value in params.items()]
+anatomy_list = [(key, value) for key, value in anatomy_params.items()]
+all_data = metadata_list + params_list + anatomy_list
+exp_metadata = pd.DataFrame(all_data, columns=["parameter", "value"])
+metadata_filename = f"{current_date}_f{metadata['fish_ID']}_metadata.csv"
 exp_metadata.to_csv(exp_dir / metadata_filename, index=False)
