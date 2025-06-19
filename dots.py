@@ -41,8 +41,8 @@ metadata = {
     "experiment_name": "LR_thalamus_bout_exp01",
     "experimenter": "Matilde",
     "experiment_date": data.getDateStr(format="%Y-%m-%d-%H%M"),
-    "fish_ID": 1,
-    "fish_birth": "2025-01-31",
+    "fish_ID": 23,
+    "fish_birth": "2025-06-03",
     "fish_age_dpf": None,
     "genotype": "huc:H2B-GCamp6s",
     "size": "medium",
@@ -60,12 +60,26 @@ params = {
     "inter_block_pause_sec": 20,        # Pause between acquisition blocks
     "n_trials_per_block": 16,           # Trials per block
     "n_rep_trial": 8,                   # Repetitions per stimulus
-    "dot_radius_cm": 0.1,
+    "dot_radius_cm": 0.2,
     "max_n_dots": 2
+}
+
+functional_params = {'frames_per_slice': 2,
+                     'n_slices' : 4,
+                     'n_volumes' : 1458,
+                     'step_size' : 10,
+                     'volume_rate' :1.87,
+                     'AOM_mW' : 32,
+                     'ETL_start' : -15,
+                     'pump_speed': 0
 }
 
 # Get metadata and parameters via GUI
 dlg = gui.DlgFromDict(metadata, title="Metadata", sortKeys=False)
+if not dlg.OK:
+    core.quit()
+
+dlg = gui.DlgFromDict(functional_params, title="Functional Scanning Parameters", sortKeys=False)
 if not dlg.OK:
     core.quit()
 
@@ -78,8 +92,10 @@ today = datetime.datetime.today()
 metadata['fish_age_dpf'] = (today - fish_birth).days
 
 # Create directory for saving experiment data
-exp_dir = data_path / metadata["experiment_name"]/ metadata["experiment_date"][:10] / f'f{metadata["fish_ID"]}'
+exp_dir = data_path / metadata["experiment_name"]/ metadata["experiment_date"][:10] / f'f{metadata["fish_ID"]}' / '01_metadata'
 exp_dir.mkdir(exist_ok=True, parents=True)
+folder_2p = exp_dir.parent / '00_raw'
+folder_2p.mkdir(exist_ok=True, parents=True)
 
 # Load stimuli CSV files
 stimuli = {}
@@ -122,10 +138,14 @@ exp_event_log.append({'event': f'B{block_num}_start', 'timestamp': exp_clock.get
 block_event_log.append({'event': f'B{block_num}_start', 'timestamp': block_clock.getTime()})
 print("Experiment started and trigger sent")
 
-# Spontaneous activity (blank screen)
+frame_block_clock = core.Clock()
+block_time_stamps = [{'event': f'B{block_num}_start', 'timestamp': frame_block_clock.getTime()}]
+
+# # Spontaneous activity (blank screen)
 for frame in range(int(round(FPS * float(params['pre_stim_resting_sec']),1))):
     win.flip()
-
+    block_time_stamps.append({'event': f'frame{frame}', 'timestamp': frame_block_clock.getTime()})
+block_time_stamps.append({'event': f'B{block_num}_end', 'timestamp': frame_block_clock.getTime()})
 
 
 for idx, trial in enumerate(trials):
@@ -141,7 +161,7 @@ for idx, trial in enumerate(trials):
         block_event_log.append({'event': f'B{block_num}_end', 'timestamp': block_clock.getTime()})
 
         exp_event_log.append({'event': f'B{block_num}_interblock_pause', 'timestamp': exp_clock.getTime()})
-        #print('inter_block_pause_sec')
+        print('inter_block_pause_sec')
         for _ in range(FPS * params['inter_block_pause_sec']):
             win.flip()
         block_num += 1
@@ -163,6 +183,7 @@ for idx, trial in enumerate(trials):
     pin_aux.write(1)
     exp_event_log.append({'event': f'B{block_num}_stim{idx}_{stimulus_key}', 'timestamp': exp_clock.getTime()})
     block_event_log.append({'event': f'B{block_num}_stim{idx}_{stimulus_key}', 'timestamp': block_clock.getTime()})
+    #print(f'drawing B{block_num}_stim{idx}_{stimulus_key}')
     for frame in range(n_frames_trial):
         for dot_idx in range(n_dots):
             pos = df[f'dot{dot_idx}_x'][frame], df[f'dot{dot_idx}_y'][frame]
@@ -198,20 +219,26 @@ df_trial_sequence = pd.DataFrame(trial_sequence, columns=["stimulus"])
 trial_sequence_filename = f"{current_date}_f{metadata['fish_ID']}_trial_sequence.csv"
 df_trial_sequence.to_csv(exp_dir / trial_sequence_filename, index=False)
 
+df_test = pd.DataFrame(block_time_stamps)
+df_test_filename = current_date + f'_f{metadata["fish_ID"]}_block0test.csv'
+df_test.to_csv(exp_dir / df_test_filename, index=False)
+
 # Convert dictionaries into list of tuples
 metadata_list = [(key, value) for key, value in metadata.items()]
 params_list = [(key, value) for key, value in params.items()]
-all_data = metadata_list + params_list
+functional_list = [(key, value) for key, value in functional_params.items()]
+
+all_data = metadata_list + params_list + functional_list
 exp_metadata = pd.DataFrame(all_data, columns=["parameter", "value"])
 
 metadata_filename = f"{current_date}_f{metadata['fish_ID']}_metadata.csv"
 exp_metadata.to_csv(exp_dir / metadata_filename, index=False)
 
 metadata['fish_died'] = False
-anatomy_params = {'frames_per_slice': 150,
-                  'step_size_um' : 2,
-                  'wavelenght' : 851,
-                  'AOM_power' : 57
+anatomy_params = {'frames_per_slice_anatomy': 90,
+                  'step_size_um_anatomy' : 2,
+                  'wavelenght_anatomy' : 850,
+                  'AOM_anatomy' : 57
 }
 dlg = gui.DlgFromDict(metadata, title="Metadata", sortKeys=False)
 if not dlg.OK:
@@ -224,8 +251,10 @@ if not dlg.OK:
 # Convert dictionaries into list of tuples
 metadata_list = [(key, value) for key, value in metadata.items()]
 params_list = [(key, value) for key, value in params.items()]
+functional_list = [(key, value) for key, value in functional_params.items()]
 anatomy_list = [(key, value) for key, value in anatomy_params.items()]
-all_data = metadata_list + params_list + anatomy_list
+
+all_data = metadata_list + params_list + functional_list + anatomy_list
 exp_metadata = pd.DataFrame(all_data, columns=["parameter", "value"])
 metadata_filename = f"{current_date}_f{metadata['fish_ID']}_metadata.csv"
 exp_metadata.to_csv(exp_dir / metadata_filename, index=False)
