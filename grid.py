@@ -10,7 +10,7 @@ from psychopy import visual, core, event, monitors, tools
 
 # Set monitor properties
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('Dell', width=13.7)
+monitor = monitors.Monitor('Dell', width=14.5)#13.7
 monitor.setSizePix(PIXELS_MONITOR)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centimeter
 
@@ -63,9 +63,9 @@ cross_horiz = visual.Rect(
 
 center = visual.Rect(
     win=win,
-    units='pix',
-    width=2*PIXEL_CM_RATIO,
-    height=2*PIXEL_CM_RATIO,
+    units='cm',
+    width=0.4,
+    height=0.4,
     fillColor="red",  # circle color
     lineColor="red") # circle outline color (optional)
 
@@ -80,7 +80,7 @@ center = visual.Rect(
 # for rect in rectangles:
 #     rect.draw()
 
-#center.draw()
+center.draw()
 cross_vert.draw()
 cross_horiz.draw()
 win.flip()

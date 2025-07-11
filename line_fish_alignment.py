@@ -14,7 +14,7 @@ import math
 
 # Set projector screen properties
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('DLP', width=13.7)
+monitor = monitors.Monitor('DLP', width=14.5)
 monitor.setSizePix(PIXELS_MONITOR)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centimeter
 
@@ -36,7 +36,7 @@ line.draw()
 
 distance_point = 0.1 * PIXEL_CM_RATIO
 dot_size = 0.1 * PIXEL_CM_RATIO
-dot = visual.Circle(win=win, size=dot_size, fillColor="white", pos=[dx-distance_point, dy+distance_point])
+dot = visual.Circle(win=win, size=dot_size, fillColor="white", pos=[dx+distance_point, dy-distance_point]) #inverted x,y upo right was [dx-distance_point, dy+distance_point]
 dot.draw()
 
 # Define the perpendicular line's length and direction

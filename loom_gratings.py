@@ -160,6 +160,7 @@ for cycle in range(N_CYCLES):
     #pin.write(1)  # Trigger stimulus on Arduino
     looming_circle.radius = START_RADIUS_CM
     print(f"Starting looming")
+
     # Create the looming effect by increasing the circle's radius
     for frame in range(FPS * LOOM_DURATION_SEC):
         looming_circle.radius += RADIUS_STEP  # Increase radius per frame

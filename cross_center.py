@@ -12,7 +12,7 @@ from psychopy import visual, core, event, monitors, tools
 
 #Set projector screen properties
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('Dell', width=13.7)
+monitor = monitors.Monitor('Dell', width=14.5)#13.7
 monitor.setSizePix(PIXELS_MONITOR)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor) #pixels per centimeter
 
