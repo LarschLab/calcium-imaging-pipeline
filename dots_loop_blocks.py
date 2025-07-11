@@ -61,7 +61,7 @@ metadata = {
     "respond_to_vibrations": False,
     "respond_to_bouts": False,
     "embedding_comments": None,
-    "projector_power" : 40,
+    "projector_LED_current": 40,
     "general_comments": None
 }
 
@@ -116,7 +116,7 @@ metadata['fish_age_dpf'] = (today - fish_birth).days
 metadata['path_to_stimuli'] = str(stimuli_path)
 
 # Create directory for saving experiment data
-exp_dir = data_path / metadata["experiment_name"] / '2p' / f'f{metadata["fish_ID"]}' / '01_metadata'
+exp_dir = data_path / metadata["experimenter"] / '2p' / metadata["experiment_name"] / f'f{metadata["fish_ID"]}' / '01_metadata'
 exp_dir.mkdir(exist_ok=True, parents=True)
 folder_2p = exp_dir.parent / '00_raw'
 folder_2p.mkdir(exist_ok=True, parents=True)
