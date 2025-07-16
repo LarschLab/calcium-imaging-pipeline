@@ -174,7 +174,7 @@ try:
     for idx, trial in enumerate(trials):
         stimulus_key = trial["stimulus"]
         df = stimuli[stimulus_key]
-        n_dots = len(df.columns) // 2
+        n_dots = len(df.columns) // 3
         n_frames_trial = len(df)
         trial_sequence.append(stimulus_key)
 
@@ -212,9 +212,11 @@ try:
             for dot_idx in range(n_dots):
                 x = df[f'dot{dot_idx}_x'][frame]
                 y = df[f'dot{dot_idx}_y'][frame]
+                radius = df[f'dot{dot_idx}_radius'][frame]
                 if flip_coordinates:
                     x, y = -x, -y
                 pos = (x, y)
+                dots[dot_idx].radius = radius
                 dots[dot_idx].pos = pos
                 dots[dot_idx].draw()
             win.flip()
