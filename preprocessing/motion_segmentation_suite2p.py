@@ -5,8 +5,45 @@ import shutil
 import time
 import copy
 import re
+import gc
 import tifffile as tf
 
+def get_file_index(path: Path) -> int:
+    """Extract numeric index from filenames like 'file005000_chan0.tif'."""
+    match = re.search(r"file(\d+)", path.name)
+    if match:
+        return int(match.group(1))
+    return -1  # fallback if pattern not found
+
+def join_reg_tiffs_to_one(reg_folder: Path, out_tiff: Path):
+    """
+    Join Suite2p motion-corrected chunks into a single BigTIFF.
+
+    - Read all `file*_chan0.tif` in `reg_folder` (sorted)
+    - Append frames to one output stack at `out_tiff`
+    - Overwrite existing file if present
+
+    Parameters:
+    - reg_folder (Path): Folder with Suite2p `reg_tif` chunks
+    - out_tiff (Path): Output path for the merged TIFF stack
+    """
+    tiff_files = sorted(reg_folder.glob("file*_chan0.tif"), key=get_file_index)
+
+    # Ensure the destination directory exists (create parents as needed)
+    out_tiff.parent.mkdir(parents=True, exist_ok=True)
+
+    # If an output file already exists, remove it so we overwrite cleanly
+    if out_tiff.exists():
+        out_tiff.unlink()
+
+    # Open a writer for the output stack; BigTIFF handles >4 GB files safely
+    with tf.TiffWriter(out_tiff, bigtiff=True) as tw:
+        for f in tiff_files:
+            with tf.TiffFile(f) as tif:
+                for page in tif.pages:
+                    tw.write(page.asarray(), contiguous=True)
+
+    print(f"✅ Wrote joined stack: {out_tiff}")
 
 def move_processed_files(plane_idx, segmented_folder, mcorrected_folder):
     """
@@ -28,15 +65,9 @@ def move_processed_files(plane_idx, segmented_folder, mcorrected_folder):
         return
 
     fish_id = segmented_folder.parent.name
+    out_tiff = mcorrected_folder / f"{fish_id}_plane{plane_idx}_mcorrected.tif"
 
-    # Move registered TIFF chunks
-    for tiff_file in sorted(reg_folder.glob("file*_chan0.tif")):
-        new_name = f"{fish_id}_plane{plane_idx}_mcorrected.tif"
-        dest_file = mcorrected_folder / new_name
-        if dest_file.exists():
-            dest_file.unlink()
-        shutil.move(str(tiff_file), str(dest_file))
-        print(f"✅ Moved {tiff_file.name} → {dest_file.name}")
+    join_reg_tiffs_to_one(reg_folder, out_tiff)
 
     # Move segmentation .npy files
     s2p_folder = segmented_folder / "suite2p/plane0"
@@ -70,6 +101,7 @@ def run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk=None):
     ops['data_path'] = [str(plane_file.parent)]
     ops['save_path0'] = str(segmented_folder)
     ops['keep_movie_raw'] = False
+    ops['delete_bin'] = True
 
     if fast_disk is not None:
         ops['fast_disk'] = str(fast_disk)
@@ -77,9 +109,10 @@ def run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk=None):
     # Automatically set batch_size to total number of frames in TIFF
     with tf.TiffFile(plane_file) as tif:
         n_frames = len(tif.pages)
-    ops['batch_size'] = n_frames
+    ops['batch_size'] = 500 #if n_frames > 500 else n_frames
 
     suite2p.run_s2p(ops=ops)
+    gc.collect()
 
 
 def find_plane_file(pre_dir, plane_idx):
@@ -134,6 +167,7 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None):
         print(f"Processing plane {plane_idx} → {plane_file.name}")
         run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk)
         move_processed_files(plane_idx, segmented_folder, mcorrected_folder)
+        gc.collect()
 
 
 def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None):
@@ -164,15 +198,15 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
 
 if __name__ == "__main__":
 
-    data_root = "D:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
-    ops_file_path = data_root + "/suite2p_ops_may2025.npy"    # global Suite2p ops file
+    data_root = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
+    ops_file_path = data_root + "/suite2p_ops_sep_2025_cp.npy"    # global Suite2p ops file
 
-    selected_fish = [1]
+    selected_fish = np.arange(11,12)  # Fish IDs to process
     fish_to_process = [f"f{fish}" for fish in selected_fish]
     planes_to_process = [0, 1, 2, 3, 4]  # Planes to process
     fps = 2
 
-    fast_disk_path = Path("E:/Matilde")  # Optional fast disk path
+    fast_disk_path = Path("F:/Matilde")  # Optional fast disk path
 
     batch_process(
         data_root,

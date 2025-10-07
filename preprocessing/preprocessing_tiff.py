@@ -24,7 +24,7 @@ def correct_chunk_int16_to_uint16(chunk, offset):
     return chunk_int32.astype(np.uint16)
 
 
-def load_tiff_file(filepath):
+def load_tiff_file(filepath, n_planes, n_frames_per_plane):
     """
     Load a multi-page TIFF file into a 3D NumPy array.
 
@@ -34,8 +34,26 @@ def load_tiff_file(filepath):
     Returns:
     - np.ndarray: 3D array (frames, height, width).
     """
+
+    frames = []
     with tf.TiffFile(filepath) as tif:
-        return np.stack([page.asarray() for page in tif.pages])
+        for i, page in enumerate(tif.pages):
+            try:
+                arr = page.asarray()
+                frames.append(arr)
+            except Exception as e:
+                print(f"⚠️ {filepath.name}: stopped at frame {i} due to error: {e}")
+                # frame to remove to make it divisible by n_planes * n_frames_per_plane
+                to_remove = len(frames)%(n_planes * n_frames_per_plane)
+                frames = frames[:-to_remove]
+                break  # stop reading further pages
+    if not frames:
+        raise ValueError(f"{filepath.name}: no readable frames")
+
+    return np.stack(frames)
+
+    # with tf.TiffFile(filepath) as tif:
+    #     return np.stack([page.asarray() for page in tif.pages])
 
 
 def remove_vflyback_frames(frames, frames_per_volume, vflyback_frames=1):
@@ -58,8 +76,6 @@ def remove_vflyback_frames(frames, frames_per_volume, vflyback_frames=1):
     keep_idx = np.array([
         i for i in range(total_frames)
         if (i % frames_per_volume) < (frames_per_volume - vflyback_frames)])
-
-
 
     return frames[keep_idx]
 
@@ -156,7 +172,7 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
                 continue
 
             print(f"  Loading {tif_file.name}")
-            frames = load_tiff_file(tif_file)
+            frames = load_tiff_file(tif_file, n_planes, n_frames_per_plane)
 
             if protocol == "resonant":
                 frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
@@ -270,10 +286,10 @@ def parallel_preprocess(fish_ids, input_base, output_base, protocol="resonant", 
 
 if __name__ == "__main__":
 
-    input_path = "E:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
-    output_path = "D:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
+    input_path = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
+    output_path = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
 
-    selected_fish = [2]
+    selected_fish = [16]
     fish_ids = [f"f{fish}" for fish in selected_fish]
 
     protocol = "resonant"  # or "linear"
@@ -283,7 +299,7 @@ if __name__ == "__main__":
     volume_flyback_frames = 0
     remove_first_frame = True  # Waiting time between frames in resonant protocol
 
-    blocks = [2, 3, 4]  # or None if you want to process all blocks
+    blocks = [2, 3]  # or None if you want to process all blocks
 
     start_time = time.time()
 
