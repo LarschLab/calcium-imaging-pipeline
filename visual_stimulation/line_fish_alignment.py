@@ -13,21 +13,24 @@ Created on: 2025-02-17
 from psychopy import visual, core, event, monitors, tools, gui
 import math
 
-# Set projector screen properties
+#Set projector screen properties
+#Monitor and window setup
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('DLP', width=14.5)
+monitor = monitors.Monitor('DLC_Projector', width=15.2)
 monitor.setSizePix(PIXELS_MONITOR)
-PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centimeter
+PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)
+FPS = 60
+monitor.setDistance(1)
 
 # GUI
 dlg = gui.Dlg(title="Dot Position Selector")
-dlg.addField("Dot position:", choices=["top-right", "bottom-left"])
+dlg.addField("Dot position:", choices=["bottom-left", "top-right"])
 if not dlg.show():
     core.quit()
 dot_position = dlg.data[0]  # "top-right" or "bottom-left"
 
 # Initialize window (units in pixels)
-win = visual.Window(color=(-1, -1, -1), units="pix", monitor=monitor, screen=1, fullscr=True)
+win = visual.Window(size=PIXELS_MONITOR,units="pix", fullscr=True, color="red", monitor=monitor, screen=1)
 
 # Define line parameters
 line_length_cm = 0.6

@@ -34,14 +34,13 @@ stimuli_path = Path(stimuli_path_str)
 
 # ===== Monitor & window settings =====
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('DLC_Projector', width=14.5)
+monitor = monitors.Monitor('DLC_Projector', width=15.2)
 monitor.setSizePix(PIXELS_MONITOR)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)  # pixels per centimeter
+monitor.setDistance(1)
 FPS = 60
 
-
 # ===== Base data root =====
-# We will create: Z:\...\07_Data\<experimenter>\<fish_ID>\...
 data_path = Path(r'Z:\FAC\FBM\CIG\jlarsch\default\D2c\07_Data')
 
 # ===== Metadata & params =====
@@ -134,8 +133,7 @@ trials = data.TrialHandler(nReps=stimuli_params["n_rep_stim"], method="random", 
 trial_sequence = []
 
 # ===== PsychoPy window =====
-win = visual.Window(color="red", units="pix", monitor=monitor, screen=1, fullscr=True)
-
+win = visual.Window(size=PIXELS_MONITOR, color="red", units="pix", monitor=monitor, screen=1, fullscr=True)
 
 
 dots = [visual.Circle(win=win, radius=0.2, fillColor="black", pos=[0, 0], units="cm")

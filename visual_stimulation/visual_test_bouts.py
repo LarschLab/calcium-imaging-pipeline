@@ -38,11 +38,14 @@ stimuli_files = sorted(stimuli_dir.glob("*.csv"))[:3]
 stimuli = {f.stem: pd.read_csv(f) for f in stimuli_files}
 
 # Monitor and window setup
-monitor = monitors.Monitor('DLC_Projector', width=14.5)
-monitor.setSizePix([1280, 800])
+PIXELS_MONITOR = [1280, 800]
+monitor = monitors.Monitor('DLC_Projector', width=15.2)
+monitor.setSizePix(PIXELS_MONITOR)
+monitor.setDistance(1)
 PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)
 FPS = 60
-win = visual.Window(units="pix", fullscr=True, color="red", monitor=monitor, screen=1)
+
+win = visual.Window(size=PIXELS_MONITOR, units="pix", fullscr=True, color="red", monitor=monitor, screen=1)
 
 # Create reusable dot objects
 dots = [visual.Circle(win, radius=dot_radius_cm, fillColor="black", units="cm") for _ in range(max_dots)]
