@@ -114,7 +114,7 @@ metadata['fish_age_dpf'] = (today - fish_birth).days
 metadata['path_to_stimuli'] = str(stimuli_path)
 
 # ===== Build experiment folder structure (utils) =====
-data_root = data_path / str(metadata["experimenter"])
+data_root = data_path / str(metadata["experimenter"]) / 'Microscopy'
 exp_name = str(metadata["fish_ID"])  # or f"L500_f{int(metadata['fish_ID']):02d}"
 paths = init_experiment_tree(data_root, exp_name)
 meta_dir = paths["raw_2p_metadata"]  # all logs/CSV parameters go here
