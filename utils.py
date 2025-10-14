@@ -1,6 +1,6 @@
 from pathlib import Path
 
-def init_experiment_tree(base_dir, exp_name):
+def init_experiment_tree(base_dir, fish_name):
     """
     Create standard folder tree for a 2p experiment and return key paths.
 
@@ -8,7 +8,7 @@ def init_experiment_tree(base_dir, exp_name):
     ----------
     base_dir : Path
         Root directory like Z:/.../07_Data/<experimenter>.
-    exp_name : str
+    fish name : str
         Experiment folder name (e.g., metadata['fish_ID'] as string).
 
     Returns
@@ -17,7 +17,7 @@ def init_experiment_tree(base_dir, exp_name):
         Useful paths: root, raw_2p_metadata, raw_2p_functional, raw_2p_anatomy,
         analysis_suite2p, plots.
     """
-    root = base_dir / exp_name
+    root = base_dir / fish_name
 
     rel_dirs = [
         # 01_raw
