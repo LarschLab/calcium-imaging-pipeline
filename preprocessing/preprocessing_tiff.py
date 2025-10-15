@@ -161,7 +161,7 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     Returns:
     - np.ndarray: Full concatenated image stack.
     """
-    raw_folder = Path(input_base) / fish_id / "00_raw"
+    raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
     tiffs = sorted(raw_folder.glob("*.tif"))
 
     all_blocks = []
@@ -213,7 +213,8 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
     """
     full_stack = concatenate_blocks(fish_id, input_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
     full_stack = correct_negative_values_mp_safe(full_stack)
-    output_path = Path(output_base) / fish_id / "02_preprocessed"
+    output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+    output_path.mkdir(parents=True, exist_ok=True)
 
     if protocol == "resonant":
         for plane_idx in range(n_planes):
@@ -286,11 +287,10 @@ def parallel_preprocess(fish_ids, input_base, output_base, protocol="resonant", 
 
 if __name__ == "__main__":
 
-    input_path = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
-    output_path = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
+    input_path = "F:/Matilde/2p_data"
+    output_path = "F:/Matilde/2p_data"
 
-    selected_fish = [16]
-    fish_ids = [f"f{fish}" for fish in selected_fish]
+    fish_ids = ["L500_f01"]
 
     protocol = "resonant"  # or "linear"
 

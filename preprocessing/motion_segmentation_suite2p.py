@@ -45,7 +45,7 @@ def join_reg_tiffs_to_one(reg_folder: Path, out_tiff: Path):
 
     print(f"✅ Wrote joined stack: {out_tiff}")
 
-def move_processed_files(plane_idx, segmented_folder, mcorrected_folder):
+def move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_id):
     """
     Move Suite2p outputs into organized folders:
     - Move registered TIFF chunks into the motion-corrected folder
@@ -53,37 +53,40 @@ def move_processed_files(plane_idx, segmented_folder, mcorrected_folder):
 
     Parameters:
     - plane_idx (int): Plane index currently processed
-    - segmented_folder (Path): Suite2p output base folder
+    - analysis_s2p_folder (Path): Suite2p output base folder
     - mcorrected_folder (Path): Destination folder for motion-corrected TIFF files
     """
 
     # Path to the reg folder with TIFF files
-    reg_folder = segmented_folder / f"suite2p/plane0/reg_tif"
+    reg_folder = analysis_s2p_folder / f"suite2p/plane0/reg_tif"
 
     if not reg_folder.exists():
         print(f"⚠️ Registered folder not found for plane {plane_idx} in {reg_folder}")
         return
 
-    fish_id = segmented_folder.parent.name
     out_tiff = mcorrected_folder / f"{fish_id}_plane{plane_idx}_mcorrected.tif"
 
     join_reg_tiffs_to_one(reg_folder, out_tiff)
 
     # Move segmentation .npy files
-    s2p_folder = segmented_folder / "suite2p/plane0"
-    destination = segmented_folder / f"plane{plane_idx}"
+    s2p_folder = analysis_s2p_folder / "suite2p/plane0"
+    destination = analysis_s2p_folder / f"plane{plane_idx}"
     destination.mkdir(exist_ok=True)
+
     for seg_file in sorted(s2p_folder.glob('*.npy')):
-        dest_file = destination / seg_file.name
+        new_name = f"{fish_id}_{seg_file.name}"
+        dest_file = destination / new_name
         if dest_file.exists():
             dest_file.unlink()
         shutil.move(str(seg_file), str(dest_file))
         print(f"✅ Moved {seg_file.name} → {dest_file}")
 
     # Clean up Suite2p temporary folder
-    shutil.rmtree(segmented_folder / "suite2p")
+    shutil.rmtree(analysis_s2p_folder / "suite2p")
 
-def run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk=None):
+    return destination
+
+def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     """
     Prepare and run Suite2p segmentation on a single TIFF file.
 
@@ -99,16 +102,13 @@ def run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk=None):
     ops['fs'] = fps
     ops['tiff_list'] = [plane_file]
     ops['data_path'] = [str(plane_file.parent)]
-    ops['save_path0'] = str(segmented_folder)
+    ops['save_path0'] = str(save_path0)
     ops['keep_movie_raw'] = False
     ops['delete_bin'] = True
 
     if fast_disk is not None:
         ops['fast_disk'] = str(fast_disk)
 
-    # Automatically set batch_size to total number of frames in TIFF
-    with tf.TiffFile(plane_file) as tif:
-        n_frames = len(tif.pages)
     ops['batch_size'] = 500 #if n_frames > 500 else n_frames
 
     suite2p.run_s2p(ops=ops)
@@ -134,7 +134,7 @@ def find_plane_file(pre_dir, plane_idx):
     return candidates[0]
 
 
-def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None):
+def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, storage_root=None):
     """
     Process Suite2p registration and segmentation for all selected planes of one fish.
 
@@ -144,19 +144,21 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None):
     - selected_planes (list[int]): Plane indices to process
     - fps (float) : framerate
     - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
+    - storage_root (str or Path or None): Optional root path where final outputs will be copied (mirror)
     """
-    pre_dir = fish_folder / "02_preprocessed"
+    pre_dir = fish_folder / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     if not pre_dir.exists():
         print(f"⚠️ Skipping {fish_folder.name}: no 'preprocessed' folder found.")
         return
 
     # Create output folders for motion-corrected files and segmentation
-    mcorrected_folder = fish_folder / "03_motion_corrected"
-    segmented_folder = fish_folder / "04_segmented"
-    mcorrected_folder.mkdir(exist_ok=True)
-    segmented_folder.mkdir(exist_ok=True)
+    mcorrected_folder = fish_folder / "02_reg/00_preprocessing/2p_functional/02_motionCorrected"
+    analysis_s2p_folder = fish_folder / "03_analysis/functional/suite2P"
 
-    print(f"Created folders: {mcorrected_folder}, {segmented_folder}")
+    mcorrected_folder.mkdir(parents=True, exist_ok=True)
+    analysis_s2p_folder.mkdir(parents=True, exist_ok=True)
+
+    print(f"Created folders: {mcorrected_folder}, {analysis_s2p_folder}")
 
     for plane_idx in selected_planes:
         # Look for TIFF file corresponding to current plane
@@ -165,8 +167,22 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None):
             print(f"⚠️ Plane {plane_idx} not found.")
             continue
         print(f"Processing plane {plane_idx} → {plane_file.name}")
-        run_suite2p(plane_file, global_ops, segmented_folder, fps, fast_disk)
-        move_processed_files(plane_idx, segmented_folder, mcorrected_folder)
+        run_suite2p(plane_file, global_ops, analysis_s2p_folder, fps, fast_disk)
+        src_folder = move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_folder.name)
+        
+        if storage_root is not None and src_folder:
+            storage_root_p = Path(storage_root)
+            storage_fish_base = storage_root_p / fish_folder.name
+
+            rel_folder = src_folder.relative_to(fish_folder)
+            dst_folder = storage_fish_base / rel_folder
+            dst_folder.mkdir(parents=True, exist_ok=True)
+            for f in src_folder.iterdir():
+                if f.is_file():
+                    dst_file = dst_folder / f.name
+                    shutil.copy2(str(f), str(dst_file))
+                    print(f"📁 Mirrored segmentation file: {f} → {dst_file}")
+        
         gc.collect()
 
 
@@ -177,6 +193,7 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
     Parameters:
     - data_root (Path): Root directory containing all fish folders
     - ops_path (Path): Path to Suite2p ops file (saved as .npy dictionary)
+    - storage_root (Path): Root folder where outputs will be mirrored/copied
     - fish_ids (list[str] or None): List of fish folder names to process (or all if None)
     - selected_planes (list[int]): Plane indices to process
     - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
@@ -192,17 +209,19 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
 
         start_time = time.time()
         print(f"\n📂 Processing fish: {fish_folder.name}")
-        process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk)
+        process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk, storage_root=storage_root)
         elapsed = time.time() - start_time
         print(f"⏱️ Finished processing {fish_folder.name} in {elapsed / 60:.2f} min.\n")
 
 if __name__ == "__main__":
 
-    data_root = "F:/Matilde/2p_data/speed_groupsize_thalamus_exp03"
+    data_root = "F:/Matilde/2p_data"
+    storage_root = "Z:/D2c/07_Data/Matilde/Microscopy"  # Root folder for data storage
+
     ops_file_path = data_root + "/suite2p_ops_sep_2025_cp.npy"    # global Suite2p ops file
 
-    selected_fish = np.arange(11,12)  # Fish IDs to process
-    fish_to_process = [f"f{fish}" for fish in selected_fish]
+    #selected_fish = np.arange(11,12)  # Fish IDs to process
+    fish_to_process = ["L500_f01"]  # Fish IDs to process
     planes_to_process = [0, 1, 2, 3, 4]  # Planes to process
     fps = 2
 
@@ -211,6 +230,7 @@ if __name__ == "__main__":
     batch_process(
         data_root,
         ops_file_path,
+        storage_root,
         fps,
         fish_ids=fish_to_process,
         selected_planes=planes_to_process,

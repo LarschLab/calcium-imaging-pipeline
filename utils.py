@@ -28,6 +28,11 @@ def init_experiment_tree(base_dir, fish_name):
         "01_raw/2p/metadata",
 
         # 02_reg
+        "02_reg/00_preprocessing/2p_anatomy",
+        "02_reg/00_preprocessing/2p_functional/01_individualPlanes",
+        "02_reg/00_preprocessing/2p_functional/02_motionCorrected",
+        "02_reg/00_preprocessing/r1",
+        "02_reg/00_preprocessing/rn",
         "02_reg/01_r1-2p/logs",
         "02_reg/01_r1-2p/matrices",
         "02_reg/02_rn-r1/transMatrices",

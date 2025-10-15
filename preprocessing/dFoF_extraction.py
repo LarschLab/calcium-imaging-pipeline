@@ -92,12 +92,13 @@ def compute_dff(fluorescence_trace, F0_baseline):
     return (fluorescence_trace - F0_baseline) / baseline_safe
 
 
-def process_suite2p_fluorescence(f_path, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40):
+def process_suite2p_fluorescence(fish, s2p_folder, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40):
     """
     Complete extraction pipeline: from Suite2p raw output to ΔF/F traces.
 
     Parameters:
-    - f_path (Path): Path to plane folder containing Suite2p files.
+    - fish (str): Fish ID for logging.
+    - s2p_folder (Path): Path to plane folder containing Suite2p files.
     - fps (float): Imaging rate in Hz.
     - tau (float): Calcium decay constant (seconds).
     - percentile (int): Percentile for baseline estimation.
@@ -107,8 +108,8 @@ def process_suite2p_fluorescence(f_path, fps, tau, percentile=8, instability_rat
     - np.ndarray: ΔF/F0 traces (T x N_final).
     - np.ndarray: Retained ROI indices relative to full Suite2p ROI list.
     """
-    fluorescence_trace = load_fluorescence_data(f_path / "F.npy")
-    iscell_mask = np.load(f_path / "iscell.npy")[:, 0].astype(bool)
+    fluorescence_trace = load_fluorescence_data(s2p_folder / f"{fish}_F.npy")
+    iscell_mask = np.load(s2p_folder / f"{fish}_iscell.npy")[:, 0].astype(bool)
 
     # Keep only ROIs classified as cells
     fluorescence_trace = fluorescence_trace[:, iscell_mask]
@@ -142,8 +143,9 @@ if __name__ == "__main__":
 
     # Parameters
     #base_data_path = Path("D:/Matilde/2p_data/LR_thalamus_bout_exp01")
-    base_data_path = Path("/Volumes/LAB-MATI/Lausanne/2p/speed_groupsize_thalamus_exp03")
-    fish_selected = np.arange(1, 3)  # List of fish numbers to process
+    #base_data_path = Path("/Volumes/LAB-MATI/Lausanne/2p/speed_groupsize_thalamus_exp03")
+    base_data_path = Path("F:/Matilde/2p_data")
+    fish_selected = ['L500_f01']  # List of fish numbers to process
 
     n_planes = 5
     fps = 2.0 # Imaging rate in Hz
@@ -153,16 +155,17 @@ if __name__ == "__main__":
 
 
     for fish in fish_selected:
-        fish_id = f"f{fish:02d}"
-        segmented_path = base_data_path / fish_id / "04_segmented"
+        fish_folder = base_data_path / fish
+        s2p_folder = fish_folder / "03_analysis/functional/suite2P"
         print(f"\n🔍 Processing {fish_id} in {segmented_path}")
 
         for i in range(n_planes):
             print(f"\n📦 Processing plane {i}")
-            f_path = segmented_path / f"plane{i}"
-            if (f_path / "F.npy").exists():
+            plane_path = s2p_folder / f"plane{i}"
+            if (plane_path / f"{fish}_F.npy").exists():
                 deltaF_F, final_indices = process_suite2p_fluorescence(
-                    f_path,
+                    fish,
+                    plane_path,
                     fps,
                     tau,
                     percentile=percentile,
@@ -170,12 +173,12 @@ if __name__ == "__main__":
                 )
 
                 # ---- Save outputs to 05_dff/plane{i} ----
-                out_dir = base_data_path / fish_id / "05_dFoF" / f"plane{i}"
+                out_dir = s2p_folder.parent / "dFoF" / f"plane{i}"
                 out_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save arrays
-                np.save(out_dir / "dFoF.npy", deltaF_F)  # shape T x N_final
-                np.save(out_dir / "roi_filtered.npy", final_indices)
+                np.save(out_dir / f"{fish}_dFoF.npy", deltaF_F)  # shape T x N_final
+                np.save(out_dir / f"{fish}_filtered_roi_indices.npy", final_indices)
 
                 # Save minimal metadata
                 meta = {
