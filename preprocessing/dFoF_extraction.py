@@ -162,7 +162,7 @@ if __name__ == "__main__":
         for i in range(n_planes):
             print(f"\n📦 Processing plane {i}")
             plane_path = s2p_folder / f"plane{i}"
-            if (plane_path / f"{fish}_F.npy").exists():
+            if (plane_path / f"{fish}_plane{i}_F.npy").exists():
                 deltaF_F, final_indices = process_suite2p_fluorescence(
                     fish,
                     plane_path,
@@ -172,13 +172,9 @@ if __name__ == "__main__":
                     instability_ratio=instability_ratio
                 )
 
-                # ---- Save outputs to 05_dff/plane{i} ----
-                out_dir = s2p_folder.parent / "dFoF" / f"plane{i}"
-                out_dir.mkdir(parents=True, exist_ok=True)
-
                 # Save arrays
-                np.save(out_dir / f"{fish}_dFoF.npy", deltaF_F)  # shape T x N_final
-                np.save(out_dir / f"{fish}_filtered_roi_indices.npy", final_indices)
+                np.save(plane_path / f"{fish}_plane{i}_dFoF.npy", deltaF_F)  # shape T x N_final
+                np.save(plane_path / f"{fish}_plane{i}_filtered_roi_indices.npy", final_indices)
 
                 # Save minimal metadata
                 meta = {
@@ -197,12 +193,12 @@ if __name__ == "__main__":
                     },
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
-                with (out_dir / "meta.json").open("w", encoding="utf-8") as f:
+                with (plane_path / f"{fish}_plane{i}_dFoF_metadata.json").open("w", encoding="utf-8") as f:
                     import json
 
                     json.dump(meta, f, indent=2)
 
-                print(f"Saved to {out_dir}")
+                print(f"Saved to {plane_path}")
                 # -----------------------------------------
 
             else:

@@ -74,7 +74,7 @@ def move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish
     destination.mkdir(exist_ok=True)
 
     for seg_file in sorted(s2p_folder.glob('*.npy')):
-        new_name = f"{fish_id}_{seg_file.name}"
+        new_name = f"{fish_id}_plane{plane_idx}_{seg_file.name}"
         dest_file = destination / new_name
         if dest_file.exists():
             dest_file.unlink()

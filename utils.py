@@ -53,7 +53,6 @@ def init_experiment_tree(base_dir, fish_name):
         # 03_analysis
         "03_analysis/structural/cellpose",
         "03_analysis/functional/suite2P",
-        "03_analysis/functional/dFoF",
 
         # 04_plots
         "04_plots",
