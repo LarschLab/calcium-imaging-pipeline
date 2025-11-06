@@ -157,7 +157,7 @@ if __name__ == "__main__":
     for fish in fish_selected:
         fish_folder = base_data_path / fish
         s2p_folder = fish_folder / "03_analysis/functional/suite2P"
-        print(f"\n🔍 Processing {fish_id} in {segmented_path}")
+        print(f"\n🔍 Processing {fish} in {s2p_folder}")
 
         for i in range(n_planes):
             print(f"\n📦 Processing plane {i}")
@@ -182,7 +182,7 @@ if __name__ == "__main__":
 
                 # Save minimal metadata
                 meta = {
-                    "fish_id": fish_id,
+                    "fish_id": fish,
                     "plane_index": i,
                     "source_folder": str(f_path),
                     "params": {
