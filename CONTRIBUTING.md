@@ -1,12 +1,13 @@
-# 🧭 LarschLab Collaboration Guide
+# 🧭 Collaboration Guide
 
 ## Overview
-This repository is maintained by **@matilde-perrino**.  
+This repository is maintained by **@matildede**.  
 All members of the **LarschLab organization** can view and use the code.  
 To suggest modifications or improvements, please work through **branches and pull requests (PRs)**.  
 Direct pushes to the `main` branch are restricted — only Matilde can push directly.
 
 ---
+If you use Github Desktop, follow these instructions
 
 ## 🌱 1. Clone the repository
 
@@ -84,6 +85,4 @@ Your local repo now includes your merged changes.
 - Never push directly to `main`.  
 - Ask questions or open a **Draft PR** if you want early feedback.  
 
----
 
-Thank you for contributing to LarschLab projects! 🧠⚗️
