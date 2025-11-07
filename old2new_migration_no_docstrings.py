@@ -77,13 +77,27 @@ def migrate_files(experiment_root, base_dir, xlsx_path):
                 status, note = copy_file(f, dst)
                 results.append({'time': datetime.now(), 'source': str(f), 
                               'destination': str(dst), 'status': status, 'note': note})
+                
+        s2p_dir = fish_dir / '04_segmented'
+        if s2p_dir.exists():
+            s2p_path = paths['root'] / '03_analysis/functional/suite2P'
+            for plane_dir in s2p_dir.iterdir():
+                if plane_dir.is_dir() and re.match(r'plane\d+', plane_dir.name):
+                    new_plane_dir = s2p_path / plane_dir.name
+                    for file in plane_dir.glob(f'*.npy'):
+                        new_name = f"{new_fish}_{plane_dir.name}_{file.name}"
+                        dst = new_plane_dir / new_name
+                        status, note = copy_file(file, dst)
+                        results.append({'time': datetime.now(), 'source': str(file), 
+                                      'destination': str(dst), 'status': status, 'note': note})
+                
         
         # Save manifest for this fish
         manifest_df = pd.DataFrame(results)
         manifest_df.to_csv(paths['root'] / 'migration_manifest.csv', index=False)
 
 if __name__ == "__main__":
-    xlsx_path = Path("migration_mapping.xlsx")
+    xlsx_path = Path("oldnames_to_new.xlsx")
     experiment_root = Path("Z:/OldData/Experiment1")
     base_dir = Path("Z:/NewData")
     
