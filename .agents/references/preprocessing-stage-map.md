@@ -1,0 +1,44 @@
+# Preprocessing Stage Map
+
+Purpose
+
+Show the ordered preprocessing flow from raw functional TIFFs to Suite2P outputs and dF/F artifacts.
+
+Use this file when
+
+- The task changes a preprocessing stage or its outputs.
+- You need rerun implications or the first downstream consumer.
+
+## Stages
+1. Raw functional ingest
+   - Owner: `preprocessing/preprocessing_tiff.py`
+   - Inputs: `01_raw/2p/functional/*.tif`
+   - Key functions: `load_tiff_file`, `extract_block_number`, `concatenate_blocks`
+   - Outputs: in-memory stacked frames filtered by protocol and selected blocks
+2. Frame cleanup and plane extraction
+   - Owner: `preprocessing/preprocessing_tiff.py`
+   - Key functions: `remove_vflyback_frames`, `correct_negative_values_mp_safe`, `process_fish`
+   - Outputs: `02_reg/00_preprocessing/2p_functional/01_individualPlanes/<fish>_plane*.tif` for resonant or `<fish>_stack.tif` for linear, plus `<fish>_preprocessing_metadata.json`
+3. Suite2P motion correction and segmentation
+   - Owner: `preprocessing/motion_segmentation_suite2p.py`
+   - Key functions: `find_plane_file`, `run_suite2p`, `join_reg_tiffs_to_one`, `move_processed_files`, `process_fish`
+   - Outputs: `<fish>_plane*_mcorrected.tif` in `02_motionCorrected` and renamed `.npy` artifacts in `03_analysis/functional/suite2P/plane*`
+4. Fluorescence filtering and dF/F extraction
+   - Owner: `preprocessing/dFoF_extraction.py`
+   - Key functions: `load_fluorescence_data`, `filter_dim_rois`, `compute_percentile_baseline`, `compute_dff`, `process_suite2p_fluorescence`
+   - Outputs: `<fish>_plane*_dFoF.npy`, `<fish>_plane*_filtered_roi_indices.npy`, and `<fish>_plane*_dFoF_metadata.json`
+
+## Downstream checks
+- After stage 2 changes, verify expected plane TIFF names and preprocessing metadata JSON.
+- After stage 3 changes, verify the first plane folder contains correctly renamed Suite2P `.npy` outputs and a joined motion-corrected TIFF.
+- After stage 4 changes, verify saved dF/F arrays and ROI index arrays match the expected plane folder.
+
+## Validation surface
+- Default lightweight check: `python3 -m py_compile preprocessing/*.py utils.py old2new_migration_no_docstrings.py`
+- Pure-function changes can be validated with a narrow local snippet or fixture if available.
+- Full Suite2P and filesystem-heavy runs are manual/integration validation unless the user explicitly wants them executed.
+
+## Navigation notes
+- For path ownership, read `canonical-data-layout.md`.
+- For callable ownership, read `symbol-index.md`.
+- For mixed-state issues or resume work, read `current-state.md`.
