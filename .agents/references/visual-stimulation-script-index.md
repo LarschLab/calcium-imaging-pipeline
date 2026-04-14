@@ -5,9 +5,9 @@ Purpose
 Map common visual-stimulation tasks to the smallest owning script.
 
 ## Acquisition owners
-- `visual_stimulation/dots_gui.py`: primary operator entrypoint for the dots-family GUI, parameter editing, timeline preview, and run launch.
+- `visual_stimulation/dots_gui.py`: primary operator entrypoint for the dots-family GUI, parameter editing, timeline preview, sample-stimulus selection, mock-run toggle, and run launch.
 - `visual_stimulation/dots_protocol.py`: shared dots-family owner for stimulus loading, exact trial-order generation, and planned schedule construction.
-- `visual_stimulation/dots_runner.py`: shared dots-family owner for PsychoPy execution, Arduino triggers, and metadata/log CSV writes.
+- `visual_stimulation/dots_runner.py`: shared dots-family owner for PsychoPy execution, Arduino triggers, mock execution, and metadata/log CSV writes.
 - `visual_stimulation/dots_loop_stimuli.py`: thin wrapper that opens the GUI with sequential per-stimulus acquisition mode preselected.
 - `visual_stimulation/dots_loop_blocks.py`: thin wrapper that opens the GUI with block rollover mode preselected.
 - `visual_stimulation/dots_continous_session.py`: thin wrapper that opens the GUI with continuous-session mode preselected.
@@ -27,3 +27,5 @@ Map common visual-stimulation tasks to the smallest owning script.
 ## Shared ownership notes
 - The `dots_*` family now shares planning and execution through `dots_protocol.py` and `dots_runner.py`; wrapper scripts are launch surfaces, not behavior owners.
 - `utils.init_experiment_tree` still owns canonical output location semantics even when a visual script hardcodes a path.
+- Bundled remote-test stimuli live in `visual_stimulation/sample_stimuli/dots_mock`.
+- Mock runs write the canonical experiment tree under the GUI-selected mock output root, defaulting to `tmp/mock_runs`.

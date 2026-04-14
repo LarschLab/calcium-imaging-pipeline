@@ -9,6 +9,8 @@ from dots_protocol import (
     MODE_CHOICES,
     MODE_LABELS,
     DotsRunPlan,
+    MOCK_OUTPUT_ROOT,
+    SAMPLE_STIMULI_DIR,
     build_run_plan,
     format_duration,
     get_mode_defaults,
@@ -42,6 +44,8 @@ class DotsGuiApp:
 
         self.mode_var = tk.StringVar(value=initial_mode)
         self.stimuli_dir_var = tk.StringVar()
+        self.mock_mode_var = tk.BooleanVar(value=False)
+        self.mock_output_root_var = tk.StringVar(value=str(MOCK_OUTPUT_ROOT))
         self.summary_var = tk.StringVar(value="Load a stimulus folder, review parameters, then preview.")
         self.status_var = tk.StringVar(value="Waiting for input.")
 
@@ -90,6 +94,25 @@ class DotsGuiApp:
         folder_row.columnconfigure(0, weight=1)
         ttk.Entry(folder_row, textvariable=self.stimuli_dir_var).grid(row=0, column=0, sticky="ew")
         ttk.Button(folder_row, text="Browse", command=self._browse_stimuli_dir).grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(folder_row, text="Use Sample", command=self._use_sample_stimuli).grid(row=0, column=2, padx=(8, 0))
+
+        self.mock_mode_button = ttk.Checkbutton(
+            controls,
+            text="Mock run",
+            variable=self.mock_mode_var,
+            command=self._on_mock_mode_toggle,
+        )
+        self.mock_mode_button.grid(row=2, column=0, sticky="w", pady=(10, 0))
+
+        self.mock_output_row = ttk.Frame(controls)
+        self.mock_output_row.columnconfigure(0, weight=1)
+        ttk.Entry(self.mock_output_row, textvariable=self.mock_output_root_var).grid(row=0, column=0, sticky="ew")
+        ttk.Button(self.mock_output_row, text="Browse", command=self._browse_mock_output_root).grid(
+            row=0, column=1, padx=(8, 0)
+        )
+        self.mock_output_label = ttk.Label(controls, text="Mock Output Root")
+        self.mock_output_label.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        self.mock_output_row.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(10, 0))
 
         self.forms_container = ttk.Frame(left)
         self.forms_container.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
@@ -127,6 +150,8 @@ class DotsGuiApp:
             ttk.Label(legend, text=kind.replace("_", " ")).grid(row=0, column=idx * 2 + 1, padx=(0, 16))
 
         self.timeline_canvas.bind("<Configure>", lambda _: self._draw_timeline())
+        self.mock_output_root_var.trace_add("write", lambda *_: self._mark_dirty())
+        self._update_mock_output_visibility()
 
     def _load_mode(self, mode: str) -> None:
         self.mode_var.set(mode)
@@ -175,6 +200,29 @@ class DotsGuiApp:
             self.stimuli_dir_var.set(selected)
             self._mark_dirty("Stimulus folder changed. Preview again to refresh the plan.")
 
+    def _use_sample_stimuli(self) -> None:
+        self.stimuli_dir_var.set(str(SAMPLE_STIMULI_DIR))
+        self._mark_dirty("Sample stimulus folder selected. Preview again to refresh the plan.")
+
+    def _browse_mock_output_root(self) -> None:
+        selected = filedialog.askdirectory(title="Select the root folder for mock-run outputs")
+        if selected:
+            self.mock_output_root_var.set(selected)
+            self._mark_dirty("Mock output root changed. Preview again to refresh the plan.")
+
+    def _on_mock_mode_toggle(self) -> None:
+        self._update_mock_output_visibility()
+        mode_label = "enabled" if self.mock_mode_var.get() else "disabled"
+        self._mark_dirty(f"Mock run {mode_label}. Preview again to refresh the plan.")
+
+    def _update_mock_output_visibility(self) -> None:
+        if self.mock_mode_var.get():
+            self.mock_output_label.grid()
+            self.mock_output_row.grid()
+        else:
+            self.mock_output_label.grid_remove()
+            self.mock_output_row.grid_remove()
+
     def _mark_dirty(self, status: str | None = None) -> None:
         self.dirty = True
         self.current_plan = None
@@ -209,12 +257,15 @@ class DotsGuiApp:
             metadata = self._collect_group_values("metadata")
             functional_params = self._collect_group_values("functional_params")
             stimuli_params = self._collect_group_values("stimuli_params")
+            runtime_defaults = dict(self.runtime_defaults)
+            runtime_defaults["mock_mode"] = bool(self.mock_mode_var.get())
+            runtime_defaults["mock_output_root"] = self.mock_output_root_var.get() or str(MOCK_OUTPUT_ROOT)
             metadata, functional_params, stimuli_params, runtime = prepare_run_config(
                 self.mode_var.get(),
                 metadata,
                 functional_params,
                 stimuli_params,
-                self.runtime_defaults,
+                runtime_defaults,
                 self.stimuli_dir_var.get(),
             )
             stimuli_catalog = load_stimuli_catalog(self.stimuli_dir_var.get(), self.mode_var.get())
@@ -238,6 +289,7 @@ class DotsGuiApp:
             f"Stimuli: {summary['n_stimuli']} files\n"
             f"Trials: {summary['total_trials']}\n"
             f"Total duration: {summary['total_duration_pretty']} ({summary['total_duration_sec']:.2f} sec)\n"
+            f"Mock run: {'yes' if self.current_plan.runtime.get('mock_mode') else 'no'}\n"
             f"First trials: {first_trials}"
         )
         self.status_var.set("Preview is current. Run will use this exact schedule.")
@@ -307,7 +359,8 @@ class DotsGuiApp:
         if self.dirty or not self.current_plan:
             messagebox.showwarning("Preview required", "Preview the current settings before running.")
             return
-        if not messagebox.askyesno("Start experiment", "Launch the experiment with the previewed schedule?"):
+        run_label = "mock run" if self.current_plan.runtime.get("mock_mode") else "experiment"
+        if not messagebox.askyesno("Start experiment", f"Launch the {run_label} with the previewed schedule?"):
             return
 
         self.root.withdraw()

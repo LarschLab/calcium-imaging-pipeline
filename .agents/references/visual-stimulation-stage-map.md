@@ -12,7 +12,7 @@ Use this file when
 ## Main run flow for `dots_*` scripts
 1. Operator setup
    - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
-   - Outputs: in-memory metadata, selected stimulus directory, monitor config, planned trial order, preview timeline
+   - Outputs: in-memory metadata, selected stimulus directory, monitor config, mock-run flags, planned trial order, preview timeline
 2. Experiment tree bootstrap
    - Owner region: `visual_stimulation/dots_runner.py` `init_experiment_tree` call and `meta_dir` selection
    - Output destination: `01_raw/2p/metadata` in the canonical experiment tree
@@ -22,12 +22,17 @@ Use this file when
 4. PsychoPy and Arduino execution loop
    - Owner region: `visual_stimulation/dots_runner.py` window creation, pin setup, clocks, trial/block loops
    - Outputs: event logs held in memory until finalization
+4a. Mock execution loop
+   - Owner region: `visual_stimulation/dots_runner.py` mock backend
+   - Behavior: no PsychoPy window, no Arduino access, deterministic simulated timestamps
+   - Outputs: same CSV artifacts as a hardware run, written under the canonical tree rooted at the selected mock output directory
 5. Finalization and log writing
    - Owner region: `visual_stimulation/dots_runner.py` save/output block
    - Outputs: experiment log CSV, block log CSV, trial sequence CSV, planned schedule CSV, metadata CSV
 6. Post-run anatomy append
    - Owner region: `visual_stimulation/dots_runner.py` follow-up dialogs after the first metadata write
    - Output: metadata CSV overwritten with anatomy values appended
+   - Mock branch: writes default anatomy values without PsychoPy dialogs
 
 ## Other script families
 - `loom_gratings.py`: standalone protocol with its own metadata/timestamp CSV save path, outside the canonical tree.
@@ -41,6 +46,7 @@ Use this file when
   - `python3 -m py_compile visual_stimulation/*.py utils.py`
   - `python3 -m unittest tests.test_dots_protocol`
 - Runtime validation for PsychoPy, Arduino, dialogs, and full-screen rendering is manual unless explicitly requested.
+- Mock-run validation can be done remotely by launching the GUI, loading `visual_stimulation/sample_stimuli/dots_mock`, enabling `Mock run`, and checking the generated tree under `tmp/mock_runs`.
 - For metadata-writing changes, inspect the save block in the owner script and verify filename patterns and destination directory.
 
 ## Navigation notes

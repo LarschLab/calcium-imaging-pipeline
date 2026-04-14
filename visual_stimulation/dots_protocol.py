@@ -20,6 +20,9 @@ ARDUINO_PORT = "COM3"
 ACQ_TRIGGER_PIN = 11
 AUX_TRIGGER_PIN = 13
 DATA_PATH = Path(r"Z:\FAC\FBM\CIG\jlarsch\default\D2c\07_Data")
+VISUAL_STIMULATION_DIR = Path(__file__).resolve().parent
+SAMPLE_STIMULI_DIR = VISUAL_STIMULATION_DIR / "sample_stimuli" / "dots_mock"
+MOCK_OUTPUT_ROOT = VISUAL_STIMULATION_DIR.parent / "tmp" / "mock_runs"
 
 MODE_LOOP_STIMULI = "loop_stimuli"
 MODE_LOOP_BLOCKS = "loop_blocks"
@@ -157,6 +160,8 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "mock_mode": False,
+            "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }
     elif mode == MODE_LOOP_BLOCKS:
         metadata = {
@@ -217,6 +222,8 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "mock_mode": False,
+            "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }
     elif mode == MODE_CONTINUOUS_SESSION:
         metadata = {
@@ -278,6 +285,8 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "mock_mode": False,
+            "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }
     else:
         raise ValueError(f"Unsupported dots mode: {mode}")
@@ -347,6 +356,8 @@ def prepare_run_config(
 
     prepared_runtime["stimuli_dir"] = str(Path(stimuli_dir))
     prepared_runtime["mode"] = mode
+    prepared_runtime["mock_mode"] = bool(prepared_runtime.get("mock_mode", False))
+    prepared_runtime["mock_output_root"] = str(Path(prepared_runtime.get("mock_output_root", MOCK_OUTPUT_ROOT)))
     return prepared_metadata, prepared_functional, prepared_stimuli, prepared_runtime
 
 

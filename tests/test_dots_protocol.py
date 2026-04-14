@@ -14,12 +14,14 @@ from dots_protocol import (  # noqa: E402
     MODE_LOOP_BLOCKS,
     MODE_LOOP_STIMULI,
     FPS,
+    SAMPLE_STIMULI_DIR,
     build_run_plan,
     get_mode_defaults,
     load_stimuli_catalog,
     plan_to_schedule_rows,
     prepare_run_config,
 )
+from dots_runner import run_planned_experiment  # noqa: E402
 
 
 class DotsProtocolTests(unittest.TestCase):
@@ -128,6 +130,56 @@ class DotsProtocolTests(unittest.TestCase):
             post_segments = [segment for segment in plan.timeline if segment.kind == "poststim_pause"]
             self.assertEqual(len(post_segments), 1)
             self.assertAlmostEqual(post_segments[0].duration_sec, 7.0, places=6)
+
+    def test_mock_run_writes_canonical_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            stimuli_dir = tmp_path / "stimuli"
+            stimuli_dir.mkdir()
+            self._write_stimulus(stimuli_dir / "stim1.csv", frames=60)
+            self._write_stimulus(stimuli_dir / "stim2.csv", frames=60)
+
+            defaults = get_mode_defaults(MODE_LOOP_STIMULI)
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["runtime"]["mock_mode"] = True
+            defaults["runtime"]["mock_output_root"] = str(tmp_path / "mock_runs")
+
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_STIMULI,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                stimuli_dir,
+            )
+            catalog = load_stimuli_catalog(stimuli_dir, MODE_LOOP_STIMULI)
+            plan = build_run_plan(MODE_LOOP_STIMULI, metadata, functional, stimuli_params, runtime, catalog)
+
+            meta_dir = run_planned_experiment(plan)
+
+            expected_meta_dir = (
+                Path(runtime["mock_output_root"]) / str(metadata["fish_ID"]) / "01_raw" / "2p" / "metadata"
+            )
+            self.assertEqual(meta_dir, expected_meta_dir)
+            written_files = {path.name for path in meta_dir.iterdir()}
+            self.assertTrue(any(name.endswith("_experiment_log.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_block_log.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_trial_sequence.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_planned_schedule.csv") for name in written_files))
+            metadata_files = [path for path in meta_dir.iterdir() if path.name.endswith("_metadata.csv")]
+            self.assertEqual(len(metadata_files), 1)
+
+            metadata_df = pd.read_csv(metadata_files[0])
+            metadata_map = dict(zip(metadata_df["parameter"], metadata_df["value"]))
+            self.assertEqual(str(metadata_map["mock_mode"]).lower(), "true")
+            self.assertEqual(int(metadata_map["planned_total_trials"]), plan.total_trials)
+
+    def test_sample_fixture_catalog_loads(self) -> None:
+        catalog = load_stimuli_catalog(SAMPLE_STIMULI_DIR, MODE_LOOP_STIMULI)
+        self.assertGreaterEqual(len(catalog), 2)
+        self.assertTrue(all(stim.frame_count > 0 for stim in catalog))
 
     @staticmethod
     def _write_stimulus(path: Path, frames: int) -> None:
