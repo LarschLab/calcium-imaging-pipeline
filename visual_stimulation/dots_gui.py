@@ -33,6 +33,12 @@ AUTO_PREVIEW_DEBOUNCE_MS = 400
 LABEL_TOOLTIP_DELAY_MS = 500
 TIMELINE_PREVIEW_HEIGHT_PX = 250
 INPUT_GROUP_ROWS = ("metadata", "functional_params", "stimuli_params")
+FORM_GROUP_COLUMNS = 3
+DEFAULT_WINDOW_GEOMETRY = "1800x1250"
+MIN_WINDOW_WIDTH = 1600
+WINDOW_SAFETY_MARGIN_PX = 80
+TOOLTIP_BG_COLOR = "#111827"
+TOOLTIP_FG_COLOR = "#f9fafb"
 
 FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
     "metadata": {
@@ -88,11 +94,17 @@ BASE_TIMELINE_COLORS = {
 }
 
 
+def compute_group_grid_positions(group_keys: tuple[str, ...], columns: int) -> dict[str, tuple[int, int]]:
+    if columns <= 0:
+        raise ValueError("columns must be a positive integer")
+    return {group_key: (index // columns, index % columns) for index, group_key in enumerate(group_keys)}
+
+
 class DotsGuiApp:
     def __init__(self, root: tk.Tk, initial_mode: str):
         self.root = root
         self.root.title("Dots Experiment Launcher")
-        self.root.geometry("1380x900")
+        self._configure_window_geometry()
 
         self.mode_var = tk.StringVar(value=initial_mode)
         self.stimuli_dir_var = tk.StringVar()
@@ -122,8 +134,10 @@ class DotsGuiApp:
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(1, weight=0)
 
-        ttk.LabelFrame(preview, text="Summary", padding=10).grid(row=0, column=0, sticky="ew")
-        ttk.Label(preview, textvariable=self.summary_var, wraplength=1260, justify="left").grid(
+        summary_frame = ttk.LabelFrame(preview, text="Summary", padding=10)
+        summary_frame.grid(row=0, column=0, sticky="ew")
+        summary_frame.columnconfigure(0, weight=1)
+        ttk.Label(summary_frame, textvariable=self.summary_var, wraplength=1260, justify="left").grid(
             row=0, column=0, sticky="ew", pady=(10, 12)
         )
 
@@ -201,6 +215,8 @@ class DotsGuiApp:
         self.forms_canvas.configure(yscrollcommand=forms_scrollbar.set)
 
         self.forms_container = ttk.Frame(self.forms_canvas)
+        for column_index in range(FORM_GROUP_COLUMNS):
+            self.forms_container.columnconfigure(column_index, weight=1, uniform="form-group")
         self.forms_canvas_window = self.forms_canvas.create_window((0, 0), window=self.forms_container, anchor="nw")
         self.forms_container.bind("<Configure>", lambda _: self._sync_forms_scrollregion())
         self.forms_canvas.bind(
@@ -230,6 +246,17 @@ class DotsGuiApp:
         self.mock_output_root_var.trace_add("write", lambda *_: self._mark_dirty())
         self._update_mock_output_visibility()
 
+    def _configure_window_geometry(self) -> None:
+        default_width, default_height = (int(value) for value in DEFAULT_WINDOW_GEOMETRY.split("x", 1))
+        available_width = max(self.root.winfo_screenwidth() - WINDOW_SAFETY_MARGIN_PX, 640)
+        available_height = max(self.root.winfo_screenheight() - WINDOW_SAFETY_MARGIN_PX, 480)
+        startup_width = min(default_width, available_width)
+        startup_height = min(default_height, available_height)
+        min_width = min(MIN_WINDOW_WIDTH, available_width)
+        min_height = 1
+        self.root.geometry(f"{startup_width}x{startup_height}")
+        self.root.minsize(min_width, min_height)
+
     def _load_mode(self, mode: str) -> None:
         self.mode_var.set(mode)
         defaults = get_mode_defaults(mode)
@@ -237,12 +264,15 @@ class DotsGuiApp:
         for child in self.forms_container.winfo_children():
             child.destroy()
         self.field_vars = {}
+        group_positions = compute_group_grid_positions(INPUT_GROUP_ROWS, FORM_GROUP_COLUMNS)
 
         group_labels = dict(FIELD_GROUPS)
-        for row_index, group_key in enumerate(INPUT_GROUP_ROWS):
+        for group_key in INPUT_GROUP_ROWS:
+            row_index, column_index = group_positions[group_key]
             group_label = group_labels[group_key]
             frame = ttk.LabelFrame(self.forms_container, text=group_label, padding=10)
-            frame.grid(row=row_index, column=0, sticky="new", pady=(0, 12))
+            right_pad = 12 if column_index < FORM_GROUP_COLUMNS - 1 else 0
+            frame.grid(row=row_index, column=column_index, sticky="ew", pady=(0, 12), padx=(0, right_pad))
             frame.columnconfigure(1, weight=1)
             self.field_vars[group_key] = {}
             values = defaults[group_key]
@@ -581,14 +611,19 @@ class DelayedTooltip:
         tooltip = tk.Toplevel(self.widget)
         tooltip.wm_overrideredirect(True)
         tooltip.wm_geometry(f"+{x}+{y}")
-        label = ttk.Label(
+        tooltip.configure(background=TOOLTIP_BG_COLOR)
+        label = tk.Label(
             tooltip,
             text=self.text,
             justify="left",
-            padding=(8, 6),
             relief="solid",
             borderwidth=1,
             wraplength=420,
+            padx=8,
+            pady=6,
+            bg=TOOLTIP_BG_COLOR,
+            fg=TOOLTIP_FG_COLOR,
+            highlightthickness=0,
         )
         label.grid(row=0, column=0, sticky="nsew")
         self._tooltip_window = tooltip

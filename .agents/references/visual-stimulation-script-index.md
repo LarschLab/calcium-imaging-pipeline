@@ -5,7 +5,7 @@ Purpose
 Map common visual-stimulation tasks to the smallest owning script.
 
 ## Acquisition owners
-- `visual_stimulation/dots_gui.py`: primary operator entrypoint for the dots-family GUI, parameter editing, auto-refresh-only timeline preview (path + field changes, no manual preview button), per-stimulus-type timeline coloring, sample-stimulus selection, mock-run toggle, and run launch.
+- `visual_stimulation/dots_gui.py`: primary operator entrypoint for the dots-family GUI, parameter editing with a fixed three-column Metadata/Functional/Stimulus form row, high-contrast delayed hover-help on field labels, auto-refresh-only timeline preview (path + field changes, no manual preview button), per-stimulus-type timeline coloring, sample-stimulus selection, mock-run toggle, and run launch.
 - `visual_stimulation/dots_protocol.py`: shared dots-family owner for stimulus loading, exact trial-order generation, and planned schedule construction.
 - `visual_stimulation/dots_runner.py`: shared dots-family owner for PsychoPy execution, Arduino triggers, mock execution, and metadata/log CSV writes.
 - `visual_stimulation/dots_loop_stimuli.py`: thin wrapper that opens the GUI with sequential per-stimulus acquisition mode preselected.
