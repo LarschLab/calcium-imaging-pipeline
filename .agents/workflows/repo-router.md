@@ -13,6 +13,7 @@ Use this file when
 ## Read this first
 - Open `../references/canonical-data-layout.md` first for path, folder, output, or artifact-ownership confusion.
 - Open `../references/current-state.md` first for resume, inconsistency, or migration-continuation tasks.
+- Open `../references/recent-changes.md` when resuming work or closing a slice so the workflow-specific rolling log is read/updated.
 
 ## Workflow profile dispatch
 - `preprocessing/*.py`, `utils.py`, `old2new_migration_no_docstrings.py`, raw TIFF ingest, plane extraction, Suite2P, motion correction, dF/F, or migration/layout tasks -> `preprocessing-router.md`

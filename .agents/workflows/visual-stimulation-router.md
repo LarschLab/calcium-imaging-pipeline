@@ -33,4 +33,4 @@ Use this file when
 - `grid.py`, `line_fish_alignment.py`, `visual_test_bouts.py`, and `test_arduino.py` are setup/support tools, not metadata authorities.
 - `metadata_sync_analysis.py` and `save_video_stimuli.py` are offline support owners.
 - Hardware, GUI, and full-screen behavior require manual validation unless the user explicitly asks to run them.
-- Handoff log for unfinished work: `../references/recent-changes-visual-stimulation.md`
+- Rolling change log (append after each completed or paused slice): `../references/recent-changes-visual-stimulation.md`

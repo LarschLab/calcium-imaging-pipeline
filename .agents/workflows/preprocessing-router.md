@@ -32,4 +32,4 @@ Use this file when
 - `preprocessing/motion_segmentation_suite2p.py` owns Suite2P execution, joined motion-corrected TIFFs, and plane-specific Suite2P output placement.
 - `preprocessing/dFoF_extraction.py` owns downstream fluorescence filtering and dF/F artifacts.
 - `old2new_migration_no_docstrings.py` is a migration wrapper over canonical layout rules; change it only for migration behavior, not to redefine the tree.
-- Handoff log for unfinished work: `../references/recent-changes-preprocessing.md`
+- Rolling change log (append after each completed or paused slice): `../references/recent-changes-preprocessing.md`

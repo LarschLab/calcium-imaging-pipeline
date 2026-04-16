@@ -12,7 +12,7 @@ Use this file when
 ## Main run flow for `dots_*` scripts
 1. Operator setup
    - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
-   - Outputs: in-memory metadata, selected stimulus directory, monitor config, mock-run flags, planned trial order, preview timeline
+   - Outputs: in-memory metadata (via scrollable parameter forms), selected stimulus directory, monitor config, mock-run flags, planned trial order, auto-refresh preview timeline with stimulus-type coloring
 2. Experiment tree bootstrap
    - Owner region: `visual_stimulation/dots_runner.py` `init_experiment_tree` call and `meta_dir` selection
    - Output destination: `01_raw/2p/metadata` in the canonical experiment tree

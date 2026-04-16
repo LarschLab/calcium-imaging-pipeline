@@ -628,6 +628,18 @@ def format_duration(total_seconds: float) -> str:
     return f"{minutes:d}:{seconds:02d}"
 
 
+def infer_stimulus_type(stimulus_name: str | None) -> str:
+    if not stimulus_name:
+        return "unknown"
+    normalized = stimulus_name.strip()
+    if not normalized:
+        return "unknown"
+    tokens = re.split(r"[_\-\s]+", normalized)
+    if tokens and tokens[0]:
+        return tokens[0]
+    return normalized
+
+
 def compute_fish_age_days(fish_birth: str | None) -> int | None:
     if not fish_birth:
         return None

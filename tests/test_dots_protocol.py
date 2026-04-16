@@ -17,6 +17,7 @@ from dots_protocol import (  # noqa: E402
     SAMPLE_STIMULI_DIR,
     build_run_plan,
     get_mode_defaults,
+    infer_stimulus_type,
     load_stimuli_catalog,
     plan_to_schedule_rows,
     prepare_run_config,
@@ -180,6 +181,12 @@ class DotsProtocolTests(unittest.TestCase):
         catalog = load_stimuli_catalog(SAMPLE_STIMULI_DIR, MODE_LOOP_STIMULI)
         self.assertGreaterEqual(len(catalog), 2)
         self.assertTrue(all(stim.frame_count > 0 for stim in catalog))
+
+    def test_infer_stimulus_type_groups_variants(self) -> None:
+        self.assertEqual(infer_stimulus_type("LeConti_trajectory"), "LeConti")
+        self.assertEqual(infer_stimulus_type("loom-left-fast"), "loom")
+        self.assertEqual(infer_stimulus_type("stimulus"), "stimulus")
+        self.assertEqual(infer_stimulus_type(""), "unknown")
 
     @staticmethod
     def _write_stimulus(path: Path, frames: int) -> None:

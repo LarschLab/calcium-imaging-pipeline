@@ -17,6 +17,7 @@ This repository uses a routed instruction system under `.agents/`. Start here, t
 - Treat visual stimulation run scripts as wrapper-orchestration owners; keep shared behavior aligned across the relevant script family unless divergence is deliberate.
 - Validate after edits. Do not claim success from static reasoning alone.
 - If public behavior, output ownership, or callable surfaces change, update the relevant `.agents/references/` doc in the same pass.
+- After each completed or paused change slice, append the matching workflow `recent-changes-*.md` log entry (not only unfinished work).
 
 ## Reference files
 - `.agents/workflows/repo-router.md`: top-level dispatcher for all repo tasks.
