@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import datetime as dt
+import math
 import re
 import random
 from dataclasses import dataclass
@@ -65,6 +66,16 @@ class PlannedTrial:
 
 
 @dataclass(frozen=True)
+class PlannedBlock:
+    block_num: int
+    trial_indices: list[int]
+    start_sec: float
+    end_sec: float
+    duration_sec: float
+    acquisition_frame_count: int
+
+
+@dataclass(frozen=True)
 class TimelineSegment:
     order: int
     kind: str
@@ -91,12 +102,25 @@ class DotsRunPlan:
     runtime: dict[str, Any]
     stimuli_catalog: list[StimulusSpec]
     trials: list[PlannedTrial]
+    planned_blocks: list[PlannedBlock]
     timeline: list[TimelineSegment]
     total_duration_sec: float
 
     @property
     def total_trials(self) -> int:
         return len(self.trials)
+
+    @property
+    def planned_block_count(self) -> int:
+        return len(self.planned_blocks)
+
+    @property
+    def planned_block_frame_counts(self) -> list[int]:
+        return [block.acquisition_frame_count for block in self.planned_blocks]
+
+    @property
+    def planned_total_acquisition_frames(self) -> int:
+        return sum(self.planned_block_frame_counts)
 
 
 def get_mode_defaults(mode: str) -> dict[str, Any]:
@@ -190,7 +214,6 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "n_trials_per_block": 16,
             "n_rep_stim": 4,
             "max_n_dots": 6,
-            "manual_block_frames": "",
         }
         functional_params = {
             "mode": "resonant",
@@ -254,7 +277,6 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "n_rep_stim": 4,
             "dot_radius_cm": 0.2,
             "max_n_dots": 6,
-            "manual_block_frames": "",
         }
         functional_params = {
             "mode": "linear",
@@ -373,153 +395,44 @@ def build_run_plan(
 ) -> DotsRunPlan:
     stimulus_by_key = {stimulus.runtime_key: stimulus for stimulus in stimuli_catalog}
     order = _build_trial_order(mode, runtime, stimuli_params, stimuli_catalog)
+    block_size = int(stimuli_params.get("n_trials_per_block", 1))
+    if mode != MODE_LOOP_STIMULI and block_size <= 0:
+        raise ValueError("n_trials_per_block must be greater than 0")
 
     timeline: list[TimelineSegment] = []
     trials: list[PlannedTrial] = []
+    planned_blocks: list[PlannedBlock] = []
     current_time = 0.0
     order_index = 0
-    block_num = 0
 
-    current_time, order_index = _append_timed_segment(
-        timeline,
-        order_index,
-        current_time,
-        "rest",
-        float(stimuli_params.get("pre_stim_resting_sec", 0)),
-        "Pre-stimulus rest",
-        block_num=block_num,
-    )
+    block_groups = _build_block_trial_groups(mode, order, block_size)
+    pre_stim_rest = float(stimuli_params.get("pre_stim_resting_sec", 0))
+    pre_stim_pause = float(stimuli_params.get("pre_stim_pause_sec", 0))
+    post_stim_pause = float(stimuli_params.get("post_stim_pause_sec", 0))
+    inter_block_pause = float(stimuli_params.get("inter_block_pause_sec", 0))
+    framerate = float(functional_params.get("framerate", 0))
+    trial_index = 0
 
-    if mode == MODE_LOOP_STIMULI:
+    for block_num, block_trial_keys in enumerate(block_groups):
+        block_start = current_time
         current_time, order_index = _append_marker(
-            timeline, order_index, current_time, "trigger", "B0_start", block_num=0
+            timeline, order_index, current_time, "trigger", f"B{block_num}_start", block_num=block_num
         )
-        for trial_index, stimulus_key in enumerate(order):
+        if block_num == 0:
+            current_time, order_index = _append_timed_segment(
+                timeline,
+                order_index,
+                current_time,
+                "rest",
+                pre_stim_rest,
+                "Pre-stimulus rest",
+                block_num=block_num,
+            )
+
+        block_trial_indices: list[int] = []
+        for stimulus_key in block_trial_keys:
             stimulus = stimulus_by_key[stimulus_key]
-            trials.append(
-                PlannedTrial(
-                    trial_index=trial_index,
-                    block_num=0,
-                    stimulus_key=stimulus.runtime_key,
-                    stimulus_name=stimulus.display_name,
-                    stimulus_path=stimulus.path,
-                    frame_count=stimulus.frame_count,
-                    n_dots=stimulus.n_dots,
-                    duration_sec=stimulus.duration_sec,
-                )
-            )
-            current_time, order_index = _append_timed_segment(
-                timeline,
-                order_index,
-                current_time,
-                "prestim_pause",
-                float(stimuli_params.get("pre_stim_pause_sec", 0)),
-                f"Trial {trial_index + 1} pre-pause",
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-            current_time, order_index = _append_marker(
-                timeline,
-                order_index,
-                current_time,
-                "trigger",
-                f"B0_acq_start_stim{trial_index}",
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-            current_time, order_index = _append_marker(
-                timeline,
-                order_index,
-                current_time,
-                "trigger",
-                f"B0_aux_pulse_stim{trial_index}",
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-            current_time, order_index = _append_timed_segment(
-                timeline,
-                order_index,
-                current_time,
-                "stimulus",
-                stimulus.duration_sec,
-                stimulus.display_name,
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-            current_time, order_index = _append_marker(
-                timeline,
-                order_index,
-                current_time,
-                "trigger",
-                f"B0_aux_pulse_end_stim{trial_index}",
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-            current_time, order_index = _append_timed_segment(
-                timeline,
-                order_index,
-                current_time,
-                "poststim_pause",
-                float(stimuli_params.get("post_stim_pause_sec", 0)),
-                f"Trial {trial_index + 1} post-pause",
-                trial_index=trial_index,
-                block_num=0,
-                stimulus_key=stimulus.runtime_key,
-                stimulus_name=stimulus.display_name,
-                stimulus_path=str(stimulus.path),
-            )
-        current_time, order_index = _append_marker(
-            timeline, order_index, current_time, "trigger", "B0_end", block_num=0
-        )
-    else:
-        current_time, order_index = _append_marker(
-            timeline, order_index, current_time, "trigger", "B0_start", block_num=0
-        )
-        block_size = int(stimuli_params.get("n_trials_per_block", 1))
-        inter_block_pause = float(stimuli_params.get("inter_block_pause_sec", 0))
-        post_pause = float(
-            stimuli_params.get(
-                "pre_stim_pause_sec" if mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec",
-                0,
-            )
-        )
-        for trial_index, stimulus_key in enumerate(order):
-            if block_size <= 0:
-                raise ValueError("n_trials_per_block must be greater than 0")
-            if trial_index % block_size == 0:
-                current_time, order_index = _append_marker(
-                    timeline, order_index, current_time, "trigger", f"B{block_num}_end", block_num=block_num
-                )
-                current_time, order_index = _append_timed_segment(
-                    timeline,
-                    order_index,
-                    current_time,
-                    "interblock_pause",
-                    inter_block_pause,
-                    f"Block {block_num} pause",
-                    block_num=block_num,
-                )
-                block_num += 1
-                current_time, order_index = _append_marker(
-                    timeline, order_index, current_time, "trigger", f"B{block_num}_start", block_num=block_num
-                )
-
-            stimulus = stimulus_by_key[stimulus_key]
+            block_trial_indices.append(trial_index)
             trials.append(
                 PlannedTrial(
                     trial_index=trial_index,
@@ -537,8 +450,32 @@ def build_run_plan(
                 order_index,
                 current_time,
                 "prestim_pause",
-                float(stimuli_params.get("pre_stim_pause_sec", 0)),
+                pre_stim_pause,
                 f"Trial {trial_index + 1} pre-pause",
+                trial_index=trial_index,
+                block_num=block_num,
+                stimulus_key=stimulus.runtime_key,
+                stimulus_name=stimulus.display_name,
+                stimulus_path=str(stimulus.path),
+            )
+            current_time, order_index = _append_marker(
+                timeline,
+                order_index,
+                current_time,
+                "trigger",
+                f"B{block_num}_acq_start_stim{trial_index}",
+                trial_index=trial_index,
+                block_num=block_num,
+                stimulus_key=stimulus.runtime_key,
+                stimulus_name=stimulus.display_name,
+                stimulus_path=str(stimulus.path),
+            )
+            current_time, order_index = _append_marker(
+                timeline,
+                order_index,
+                current_time,
+                "trigger",
+                f"B{block_num}_aux_pulse_stim{trial_index}",
                 trial_index=trial_index,
                 block_num=block_num,
                 stimulus_key=stimulus.runtime_key,
@@ -558,12 +495,26 @@ def build_run_plan(
                 stimulus_name=stimulus.display_name,
                 stimulus_path=str(stimulus.path),
             )
+            current_time, order_index = _append_marker(
+                timeline,
+                order_index,
+                current_time,
+                "trigger",
+                f"B{block_num}_aux_pulse_end_stim{trial_index}",
+                trial_index=trial_index,
+                block_num=block_num,
+                stimulus_key=stimulus.runtime_key,
+                stimulus_name=stimulus.display_name,
+                stimulus_path=str(stimulus.path),
+            )
             current_time, order_index = _append_timed_segment(
                 timeline,
                 order_index,
                 current_time,
                 "poststim_pause",
-                post_pause,
+                post_stim_pause if mode == MODE_LOOP_STIMULI else (
+                    pre_stim_pause if mode == MODE_LOOP_BLOCKS else post_stim_pause
+                ),
                 f"Trial {trial_index + 1} post-pause",
                 trial_index=trial_index,
                 block_num=block_num,
@@ -571,9 +522,32 @@ def build_run_plan(
                 stimulus_name=stimulus.display_name,
                 stimulus_path=str(stimulus.path),
             )
+            trial_index += 1
+
         current_time, order_index = _append_marker(
             timeline, order_index, current_time, "trigger", f"B{block_num}_end", block_num=block_num
         )
+        planned_blocks.append(
+            PlannedBlock(
+                block_num=block_num,
+                trial_indices=block_trial_indices,
+                start_sec=block_start,
+                end_sec=current_time,
+                duration_sec=current_time - block_start,
+                acquisition_frame_count=math.ceil((current_time - block_start) * framerate),
+            )
+        )
+
+        if block_num < len(block_groups) - 1:
+            current_time, order_index = _append_timed_segment(
+                timeline,
+                order_index,
+                current_time,
+                "interblock_pause",
+                inter_block_pause,
+                f"Block {block_num} pause",
+                block_num=block_num,
+            )
 
     return DotsRunPlan(
         mode=mode,
@@ -583,6 +557,7 @@ def build_run_plan(
         runtime=copy.deepcopy(runtime),
         stimuli_catalog=list(stimuli_catalog),
         trials=trials,
+        planned_blocks=planned_blocks,
         timeline=timeline,
         total_duration_sec=current_time,
     )
@@ -610,6 +585,23 @@ def plan_to_schedule_rows(plan: DotsRunPlan) -> list[dict[str, Any]]:
     return rows
 
 
+def plan_to_planned_block_rows(plan: DotsRunPlan) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for block in plan.planned_blocks:
+        rows.append(
+            {
+                "mode": plan.mode,
+                "block_num": block.block_num,
+                "trial_indices": ", ".join(str(trial_index) for trial_index in block.trial_indices),
+                "start_sec": round(block.start_sec, 6),
+                "end_sec": round(block.end_sec, 6),
+                "duration_sec": round(block.duration_sec, 6),
+                "acquisition_frame_count": block.acquisition_frame_count,
+            }
+        )
+    return rows
+
+
 def summarize_plan(plan: DotsRunPlan) -> dict[str, Any]:
     summary = {
         "mode": plan.mode,
@@ -620,10 +612,10 @@ def summarize_plan(plan: DotsRunPlan) -> dict[str, Any]:
         "n_stimuli": len(plan.stimuli_catalog),
     }
     if plan.mode in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
-        manual_block_frames, derived_planes_per_block, derived_total_planes = _compute_manual_block_plane_summary(plan)
-        summary["manual_block_frames"] = ", ".join(str(frame_count) for frame_count in manual_block_frames)
-        summary["derived_planes_per_block"] = derived_planes_per_block
-        summary["derived_total_planes"] = derived_total_planes
+        summary["planned_block_count"] = plan.planned_block_count
+        summary["planned_block_durations_sec"] = [round(block.duration_sec, 6) for block in plan.planned_blocks]
+        summary["planned_block_frame_counts"] = plan.planned_block_frame_counts
+        summary["planned_total_acquisition_frames"] = plan.planned_total_acquisition_frames
     return summary
 
 
@@ -655,51 +647,6 @@ def compute_fish_age_days(fish_birth: str | None) -> int | None:
     return (dt.datetime.today() - parsed).days
 
 
-def _compute_manual_block_plane_summary(plan: DotsRunPlan) -> tuple[list[int], list[float], float]:
-    manual_field = plan.stimuli_params.get("manual_block_frames", "")
-    manual_block_frames = _parse_manual_block_frames(manual_field)
-    planned_block_count = _planned_block_count_from_trials(plan.trials)
-    if len(manual_block_frames) != planned_block_count:
-        raise ValueError(
-            "manual_block_frames count does not match planned block count "
-            f"({len(manual_block_frames)} entered vs {planned_block_count} planned)"
-        )
-
-    framerate = float(plan.functional_params.get("framerate", 0))
-    derived_planes_per_block = [frame_count / FPS * framerate for frame_count in manual_block_frames]
-    derived_total_planes = sum(derived_planes_per_block)
-    return manual_block_frames, derived_planes_per_block, derived_total_planes
-
-
-def _parse_manual_block_frames(raw_value: Any) -> list[int]:
-    raw_text = "" if raw_value is None else str(raw_value)
-    parts = [part.strip() for part in raw_text.split(",")]
-    if not raw_text.strip() or any(part == "" for part in parts):
-        raise ValueError(
-            "manual_block_frames is required for block-based modes and must be a comma-separated list "
-            "of positive integers."
-        )
-
-    frame_counts: list[int] = []
-    for part in parts:
-        try:
-            frame_count = int(part)
-        except ValueError as exc:
-            raise ValueError(f"manual_block_frames contains a non-numeric value: '{part}'") from exc
-        if frame_count <= 0:
-            raise ValueError(f"manual_block_frames entries must be positive integers; got {frame_count}")
-        frame_counts.append(frame_count)
-    return frame_counts
-
-
-def _planned_block_count_from_trials(trials: list[PlannedTrial]) -> int:
-    ordered_blocks: list[int] = []
-    for trial in trials:
-        if trial.block_num not in ordered_blocks:
-            ordered_blocks.append(trial.block_num)
-    return len(ordered_blocks)
-
-
 def _build_trial_order(
     mode: str,
     runtime: dict[str, Any],
@@ -723,6 +670,12 @@ def _build_trial_order(
         rng.shuffle(chunk)
         order.extend(chunk)
     return order
+
+
+def _build_block_trial_groups(mode: str, order: list[str], block_size: int) -> list[list[str]]:
+    if mode == MODE_LOOP_STIMULI:
+        return [list(order)]
+    return [order[index : index + block_size] for index in range(0, len(order), block_size)]
 
 
 def _numeric_sort_key(path: Path) -> tuple[int, str]:

@@ -11,14 +11,14 @@ Use this file when
 
 ## Main run flow for `dots_*` scripts
 1. Operator setup
-   - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
-   - Outputs: in-memory metadata (via scrollable parameter forms), selected stimulus directory, monitor config, mock-run flags, planned trial order, auto-refresh preview timeline with stimulus-type coloring
+    - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
+    - Outputs: in-memory metadata (via scrollable parameter forms), selected stimulus directory, monitor config, mock-run flags, planned trial order, automatic block-duration/frame planning, auto-refresh preview timeline with stimulus-type coloring
 2. Experiment tree bootstrap
    - Owner region: `visual_stimulation/dots_runner.py` `init_experiment_tree` call and `meta_dir` selection
    - Output destination: `01_raw/2p/metadata` in the canonical experiment tree
 3. Stimulus CSV loading and trial sequence construction
-   - Owner region: `visual_stimulation/dots_protocol.py` stimulus catalog load and run-plan build
-   - Outputs: in-memory stimulus tables, exact trial order, planned schedule rows
+    - Owner region: `visual_stimulation/dots_protocol.py` stimulus catalog load and run-plan build
+    - Outputs: in-memory stimulus tables, exact trial order, planned schedule rows, planned block rows with block duration and acquisition frame counts
 4. PsychoPy and Arduino execution loop
    - Owner region: `visual_stimulation/dots_runner.py` window creation, pin setup, clocks, trial/block loops
    - Outputs: event logs held in memory until finalization
@@ -27,8 +27,8 @@ Use this file when
    - Behavior: no PsychoPy window, no Arduino access, deterministic simulated timestamps
    - Outputs: same CSV artifacts as a hardware run, written under the canonical tree rooted at the selected mock output directory
 5. Finalization and log writing
-   - Owner region: `visual_stimulation/dots_runner.py` save/output block
-   - Outputs: experiment log CSV, block log CSV, trial sequence CSV, planned schedule CSV, metadata CSV
+    - Owner region: `visual_stimulation/dots_runner.py` save/output block
+    - Outputs: experiment log CSV, block log CSV, trial sequence CSV, planned schedule CSV, planned blocks CSV, metadata CSV
 6. Post-run anatomy append
    - Owner region: `visual_stimulation/dots_runner.py` follow-up dialogs after the first metadata write
    - Output: metadata CSV overwritten with anatomy values appended
@@ -44,7 +44,7 @@ Use this file when
 ## Validation surface
 - Default lightweight checks:
   - `python3 -m py_compile visual_stimulation/*.py utils.py`
-  - `python3 -m unittest tests.test_dots_protocol`
+  - `python3 -m unittest tests.test_dots_protocol tests.test_dots_gui_preview`
 - Runtime validation for PsychoPy, Arduino, dialogs, and full-screen rendering is manual unless explicitly requested.
 - Mock-run validation can be done remotely by launching the GUI, loading `visual_stimulation/sample_stimuli/dots_mock`, enabling `Mock run`, and checking the generated tree under `tmp/mock_runs`.
 - For metadata-writing changes, inspect the save block in the owner script and verify filename patterns and destination directory.

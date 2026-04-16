@@ -3,12 +3,13 @@
 This repository uses a routed instruction system under `.agents/`. Start here, then follow the workflow router and only read the smallest reference file needed for the current task.
 
 ## Required startup order
-1. Open `.agents/workflows/repo-router.md`.
-2. Follow its dispatch table to the correct workflow profile.
-3. Read the smallest relevant reference doc named by that profile router.
-4. Open stage maps or symbol indexes only if the first reference doc is not enough.
-5. Open owning modules before large runnable scripts.
-6. Open large script regions only when the owner module or reference doc is insufficient.
+1. Open `coding.md` for the shared coding-behavior policies.
+2. Open `.agents/workflows/repo-router.md`.
+3. Follow its dispatch table to the correct workflow profile.
+4. Read the smallest relevant reference doc named by that profile router.
+5. Open stage maps or symbol indexes only if the first reference doc is not enough.
+6. Open owning modules before large runnable scripts.
+7. Open large script regions only when the owner module or reference doc is insufficient.
 
 ## Non-negotiable repo rules
 - Preserve the canonical experiment tree defined in `utils.py` unless the task is an intentional layout migration.
@@ -20,6 +21,7 @@ This repository uses a routed instruction system under `.agents/`. Start here, t
 - After each completed or paused change slice, append the matching workflow `recent-changes-*.md` log entry (not only unfinished work).
 
 ## Reference files
+- `coding.md`: shared coding-behavior policies generated from `setupAgents.md`.
 - `.agents/workflows/repo-router.md`: top-level dispatcher for all repo tasks.
 - `.agents/workflows/preprocessing-router.md`: routing for TIFF preprocessing, Suite2P, dF/F, and migration/layout work.
 - `.agents/workflows/visual-stimulation-router.md`: routing for PsychoPy runs, triggers, metadata logs, and support tools.

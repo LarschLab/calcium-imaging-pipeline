@@ -86,7 +86,6 @@ FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
         "n_rep_stim": "How many repetitions per stimulus entry.",
         "max_n_dots": "Maximum number of dots allowed in selected stimuli.",
         "dot_radius_cm": "Dot radius in centimeters when fixed radius mode is used.",
-        "manual_block_frames": "Required for block-based modes: comma-separated 2P frame counts per planned block (e.g., 96640, 96610).",
     },
 }
 
@@ -116,33 +115,19 @@ def build_base_preview_summary(plan: DotsRunPlan) -> str:
     )
 
 
-def enrich_preview_summary_with_manual_block_frames(plan: DotsRunPlan, base_summary: str) -> tuple[str, str | None]:
+def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: str) -> tuple[str, str | None]:
     if plan.mode not in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
         return base_summary, None
-    try:
-        summary = summarize_plan(plan)
-    except ValueError as exc:
-        warning = (
-            "Manual frame validation warning: "
-            f"{exc}. Derived plane counts are unavailable until this list is corrected."
-        )
-        summary_text = (
-            f"{base_summary}\n"
-            f"Manual frame list: invalid ({exc})\n"
-            "Derived planes per block: unavailable\n"
-            "Derived final planes: unavailable"
-        )
-        return summary_text, warning
-
-    planes_per_block = ", ".join(
-        f"Block {block_index + 1}: {planes:.2f}"
-        for block_index, planes in enumerate(summary["derived_planes_per_block"])
+    summary = summarize_plan(plan)
+    block_lines = ", ".join(
+        f"B{block.block_num}: {format_duration(block.duration_sec)} ({block.duration_sec:.2f} sec, {block.acquisition_frame_count} frames)"
+        for block in plan.planned_blocks
     )
     summary_text = (
         f"{base_summary}\n"
-        f"Manual frame list: {summary['manual_block_frames']}\n"
-        f"Derived planes per block: {planes_per_block}\n"
-        f"Derived final planes: {summary['derived_total_planes']:.2f}"
+        f"Planned blocks: {summary['planned_block_count']}\n"
+        f"Block durations and frames: {block_lines}\n"
+        f"Total planned acquisition frames: {summary['planned_total_acquisition_frames']}"
     )
     return summary_text, None
 
@@ -502,7 +487,7 @@ class DotsGuiApp:
             return
 
         summary_text = build_base_preview_summary(self.current_plan)
-        summary_text, run_block_reason = enrich_preview_summary_with_manual_block_frames(self.current_plan, summary_text)
+        summary_text, run_block_reason = enrich_preview_summary_with_block_planning(self.current_plan, summary_text)
         self.summary_var.set(summary_text)
         if run_block_reason:
             self.status_var.set(f"Preview is current, but run is blocked: {run_block_reason}")

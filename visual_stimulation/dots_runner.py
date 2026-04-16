@@ -12,6 +12,7 @@ from dots_protocol import (
     FPS,
     MODE_LOOP_BLOCKS,
     MODE_LOOP_STIMULI,
+    plan_to_planned_block_rows,
     plan_to_schedule_rows,
 )
 from utils import init_experiment_tree
@@ -144,58 +145,55 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
             log_event("B0_end")
         else:
-            pin_acq.write(1)
-            pin_acq.write(0)
-            log_event("B0_start")
-            _flip_for_duration(win, float(stimuli_params["pre_stim_resting_sec"]))
-
             post_pause_key = "pre_stim_pause_sec" if plan.mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec"
-            for trial in plan.trials:
-                if trial.trial_index % int(stimuli_params["n_trials_per_block"]) == 0:
-                    log_event(f"B{block_num}_end")
+            for block_index, planned_block in enumerate(plan.planned_blocks):
+                block_num = planned_block.block_num
+                pin_acq.write(1)
+                pin_acq.write(0)
+                block_clock = core.Clock()
+                log_event(f"B{block_num}_start")
+                if block_index == 0:
+                    _flip_for_duration(win, float(stimuli_params["pre_stim_resting_sec"]))
+
+                for trial_index in planned_block.trial_indices:
+                    trial = plan.trials[trial_index]
+                    trial_sequence.append(trial.stimulus_name)
+                    data_frame = stimulus_frames[trial.stimulus_key]
+
+                    log_event(f"B{block_num}_prestim{trial.trial_index}_pause")
+                    _flip_for_duration(win, float(stimuli_params["pre_stim_pause_sec"]))
+
+                    pin_aux.write(1)
+                    print(trial.stimulus_name, "started")
+                    log_event(f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_name}")
+                    _draw_stimulus(
+                        win,
+                        dots,
+                        data_frame,
+                        trial.n_dots,
+                        flip_coordinates,
+                        dot_radius_mode=runtime.get("dot_radius_mode", "per_frame"),
+                        fixed_radius=float(stimuli_params.get("dot_radius_cm", dot_radius)),
+                        pin_aux=pin_aux,
+                        exp_event_log=exp_event_log,
+                        block_event_log=block_event_log,
+                        exp_clock=exp_clock,
+                        block_clock=block_clock,
+                        block_num=block_num,
+                        trial_index=trial.trial_index,
+                        stimulus_key=trial.stimulus_name,
+                        use_loom_markers=False,
+                    )
+                    pin_aux.write(0)
+
+                    log_event(f"B{block_num}_poststim{trial.trial_index}_pause")
+                    _flip_for_duration(win, float(stimuli_params[post_pause_key]))
+
+                log_event(f"B{block_num}_end")
+                if block_index < len(plan.planned_blocks) - 1:
                     exp_event_log.append({"event": f"B{block_num}_interblock_pause", "timestamp": exp_clock.getTime()})
                     print("inter_block_pause_sec")
                     _flip_for_duration(win, float(stimuli_params["inter_block_pause_sec"]))
-
-                    block_num += 1
-                    block_clock = core.Clock()
-                    pin_acq.write(1)
-                    pin_acq.write(0)
-                    log_event(f"B{block_num}_start")
-
-                trial_sequence.append(trial.stimulus_name)
-                data_frame = stimulus_frames[trial.stimulus_key]
-
-                log_event(f"B{block_num}_prestim{trial.trial_index}_pause")
-                _flip_for_duration(win, float(stimuli_params["pre_stim_pause_sec"]))
-
-                pin_aux.write(1)
-                print(trial.stimulus_name, "started")
-                log_event(f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_name}")
-                _draw_stimulus(
-                    win,
-                    dots,
-                    data_frame,
-                    trial.n_dots,
-                    flip_coordinates,
-                    dot_radius_mode=runtime.get("dot_radius_mode", "per_frame"),
-                    fixed_radius=float(stimuli_params.get("dot_radius_cm", dot_radius)),
-                    pin_aux=pin_aux,
-                    exp_event_log=exp_event_log,
-                    block_event_log=block_event_log,
-                    exp_clock=exp_clock,
-                    block_clock=block_clock,
-                    block_num=block_num,
-                    trial_index=trial.trial_index,
-                    stimulus_key=trial.stimulus_name,
-                    use_loom_markers=False,
-                )
-                pin_aux.write(0)
-
-                log_event(f"B{block_num}_poststim{trial.trial_index}_pause")
-                _flip_for_duration(win, float(stimuli_params[post_pause_key]))
-
-            log_event(f"B{block_num}_end")
     except KeyboardInterrupt:
         print("\nManual interruption detected. Finalizing and saving logs...")
     finally:
@@ -258,36 +256,37 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
             state.advance(float(stimuli_params["post_stim_pause_sec"]))
         state.log_event(exp_event_log, block_event_log, "B0_end")
     else:
-        block_num = 0
-        state.log_event(exp_event_log, block_event_log, "B0_start")
-        state.advance(float(stimuli_params["pre_stim_resting_sec"]))
         post_pause_key = "pre_stim_pause_sec" if plan.mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec"
-        for trial in plan.trials:
-            if trial.trial_index % int(stimuli_params["n_trials_per_block"]) == 0:
-                state.log_event(exp_event_log, block_event_log, f"B{block_num}_end")
+        for block_index, planned_block in enumerate(plan.planned_blocks):
+            block_num = planned_block.block_num
+            state.log_event(exp_event_log, block_event_log, f"B{block_num}_start")
+            if block_index == 0:
+                state.advance(float(stimuli_params["pre_stim_resting_sec"]))
+
+            for trial_index in planned_block.trial_indices:
+                trial = plan.trials[trial_index]
+                trial_sequence.append(trial.stimulus_name)
+                state.log_event(exp_event_log, block_event_log, f"B{block_num}_prestim{trial.trial_index}_pause")
+                state.advance(float(stimuli_params["pre_stim_pause_sec"]))
+                state.log_event(exp_event_log, block_event_log, f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_name}")
+                _simulate_stimulus(
+                    state,
+                    exp_event_log,
+                    block_event_log,
+                    trial,
+                    plan,
+                    block_num=block_num,
+                    stimulus_key=trial.stimulus_name,
+                    use_loom_markers=False,
+                )
+                state.log_event(exp_event_log, block_event_log, f"B{block_num}_poststim{trial.trial_index}_pause")
+                state.advance(float(stimuli_params[post_pause_key]))
+
+            state.log_event(exp_event_log, block_event_log, f"B{block_num}_end")
+            if block_index < len(plan.planned_blocks) - 1:
                 exp_event_log.append({"event": f"B{block_num}_interblock_pause", "timestamp": state.exp_time})
                 state.advance(float(stimuli_params["inter_block_pause_sec"]))
-                block_num += 1
                 state.reset_block()
-                state.log_event(exp_event_log, block_event_log, f"B{block_num}_start")
-
-            trial_sequence.append(trial.stimulus_name)
-            state.log_event(exp_event_log, block_event_log, f"B{block_num}_prestim{trial.trial_index}_pause")
-            state.advance(float(stimuli_params["pre_stim_pause_sec"]))
-            state.log_event(exp_event_log, block_event_log, f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_name}")
-            _simulate_stimulus(
-                state,
-                exp_event_log,
-                block_event_log,
-                trial,
-                plan,
-                block_num=block_num,
-                stimulus_key=trial.stimulus_name,
-                use_loom_markers=False,
-            )
-            state.log_event(exp_event_log, block_event_log, f"B{block_num}_poststim{trial.trial_index}_pause")
-            state.advance(float(stimuli_params[post_pause_key]))
-        state.log_event(exp_event_log, block_event_log, f"B{block_num}_end")
 
     current_date = datetime.datetime.now().strftime("%Y-%m-%d-%H%M")
     _save_outputs(
@@ -428,6 +427,9 @@ def _save_outputs(
     pd.DataFrame(trial_sequence, columns=["stimulus"]).to_csv(
         meta_dir / f"{current_date}_f{fish_id}_trial_sequence.csv", index=False
     )
+    pd.DataFrame(plan_to_planned_block_rows(plan)).to_csv(
+        meta_dir / f"{current_date}_f{fish_id}_planned_blocks.csv", index=False
+    )
     pd.DataFrame(plan_to_schedule_rows(plan)).to_csv(
         meta_dir / f"{current_date}_f{fish_id}_planned_schedule.csv", index=False
     )
@@ -500,6 +502,12 @@ def _build_metadata_rows(
     metadata_to_save["dots_mode"] = plan.mode
     metadata_to_save["planned_total_duration_sec"] = round(plan.total_duration_sec, 6)
     metadata_to_save["planned_total_trials"] = plan.total_trials
+    metadata_to_save["planned_block_count"] = plan.planned_block_count
+    metadata_to_save["planned_block_durations_sec"] = ", ".join(
+        f"{block.duration_sec:.6f}" for block in plan.planned_blocks
+    )
+    metadata_to_save["planned_block_frame_counts"] = ", ".join(str(frame_count) for frame_count in plan.planned_block_frame_counts)
+    metadata_to_save["planned_total_acquisition_frames"] = plan.planned_total_acquisition_frames
     metadata_to_save["planned_order_locked"] = True
     metadata_to_save["mock_mode"] = bool(runtime.get("mock_mode"))
 
