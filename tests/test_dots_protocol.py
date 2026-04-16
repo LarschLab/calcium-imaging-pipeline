@@ -21,6 +21,7 @@ from dots_protocol import (  # noqa: E402
     load_stimuli_catalog,
     plan_to_schedule_rows,
     prepare_run_config,
+    summarize_plan,
 )
 from dots_runner import run_planned_experiment  # noqa: E402
 
@@ -132,6 +133,95 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertEqual(len(post_segments), 1)
             self.assertAlmostEqual(post_segments[0].duration_sec, 7.0, places=6)
 
+    def test_block_mode_summary_accepts_valid_manual_block_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+            plan = self._build_block_mode_plan(MODE_LOOP_BLOCKS, tmp_path, manual_block_frames="120, 180")
+
+            summary = summarize_plan(plan)
+
+            self.assertEqual(summary["manual_block_frames"], "120, 180")
+            self.assertEqual(summary["derived_planes_per_block"], [4.0, 6.0])
+            self.assertEqual(summary["derived_total_planes"], 10.0)
+
+    def test_block_mode_summary_rejects_manual_block_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+            plan = self._build_block_mode_plan(MODE_LOOP_BLOCKS, tmp_path, manual_block_frames="120")
+
+            with self.assertRaisesRegex(ValueError, "does not match planned block count"):
+                summarize_plan(plan)
+
+    def test_block_mode_summary_rejects_non_numeric_or_non_positive_manual_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+
+            non_numeric_plan = self._build_block_mode_plan(MODE_CONTINUOUS_SESSION, tmp_path, manual_block_frames="120, abc")
+            with self.assertRaisesRegex(ValueError, "non-numeric value"):
+                summarize_plan(non_numeric_plan)
+
+            non_positive_plan = self._build_block_mode_plan(MODE_CONTINUOUS_SESSION, tmp_path, manual_block_frames="120, 0")
+            with self.assertRaisesRegex(ValueError, "positive integers"):
+                summarize_plan(non_positive_plan)
+
+    def test_block_mode_summary_uses_block_frames_formula(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+            plan = self._build_block_mode_plan(
+                MODE_CONTINUOUS_SESSION,
+                tmp_path,
+                manual_block_frames="60, 90",
+                framerate=4,
+            )
+
+            summary = summarize_plan(plan)
+
+            self.assertEqual(summary["derived_planes_per_block"], [4.0, 6.0])
+            self.assertEqual(summary["derived_total_planes"], 10.0)
+
+    def test_summary_keys_are_mode_specific_for_manual_block_frames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+
+            loop_stimuli_defaults = get_mode_defaults(MODE_LOOP_STIMULI)
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_STIMULI,
+                loop_stimuli_defaults["metadata"],
+                loop_stimuli_defaults["functional_params"],
+                loop_stimuli_defaults["stimuli_params"],
+                loop_stimuli_defaults["runtime"],
+                tmp_path,
+            )
+            loop_stimuli_catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_STIMULI)
+            loop_stimuli_plan = build_run_plan(
+                MODE_LOOP_STIMULI,
+                metadata,
+                functional,
+                stimuli_params,
+                runtime,
+                loop_stimuli_catalog,
+            )
+            loop_stimuli_summary = summarize_plan(loop_stimuli_plan)
+            self.assertNotIn("manual_block_frames", loop_stimuli_summary)
+            self.assertNotIn("derived_planes_per_block", loop_stimuli_summary)
+            self.assertNotIn("derived_total_planes", loop_stimuli_summary)
+
+            loop_blocks_plan = self._build_block_mode_plan(MODE_LOOP_BLOCKS, tmp_path, manual_block_frames="120, 180")
+            loop_blocks_summary = summarize_plan(loop_blocks_plan)
+            self.assertIn("manual_block_frames", loop_blocks_summary)
+            self.assertIn("derived_planes_per_block", loop_blocks_summary)
+            self.assertIn("derived_total_planes", loop_blocks_summary)
+
     def test_mock_run_writes_canonical_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -198,6 +288,33 @@ class DotsProtocolTests(unittest.TestCase):
             }
         )
         data.to_csv(path, index=False)
+
+    @staticmethod
+    def _build_block_mode_plan(
+        mode: str,
+        stimuli_dir: Path,
+        manual_block_frames: str,
+        framerate: float = 2,
+    ):
+        defaults = get_mode_defaults(mode)
+        defaults["stimuli_params"]["n_rep_stim"] = 2
+        defaults["stimuli_params"]["n_trials_per_block"] = 2
+        defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+        defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+        defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+        defaults["stimuli_params"]["inter_block_pause_sec"] = 0
+        defaults["stimuli_params"]["manual_block_frames"] = manual_block_frames
+        defaults["functional_params"]["framerate"] = framerate
+        metadata, functional, stimuli_params, runtime = prepare_run_config(
+            mode,
+            defaults["metadata"],
+            defaults["functional_params"],
+            defaults["stimuli_params"],
+            defaults["runtime"],
+            stimuli_dir,
+        )
+        catalog = load_stimuli_catalog(stimuli_dir, mode)
+        return build_run_plan(mode, metadata, functional, stimuli_params, runtime, catalog)
 
 
 if __name__ == "__main__":

@@ -190,6 +190,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "n_trials_per_block": 16,
             "n_rep_stim": 4,
             "max_n_dots": 6,
+            "manual_block_frames": "",
         }
         functional_params = {
             "mode": "resonant",
@@ -253,6 +254,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "n_rep_stim": 4,
             "dot_radius_cm": 0.2,
             "max_n_dots": 6,
+            "manual_block_frames": "",
         }
         functional_params = {
             "mode": "linear",
@@ -609,7 +611,7 @@ def plan_to_schedule_rows(plan: DotsRunPlan) -> list[dict[str, Any]]:
 
 
 def summarize_plan(plan: DotsRunPlan) -> dict[str, Any]:
-    return {
+    summary = {
         "mode": plan.mode,
         "mode_label": MODE_LABELS[plan.mode],
         "total_duration_sec": round(plan.total_duration_sec, 3),
@@ -617,6 +619,12 @@ def summarize_plan(plan: DotsRunPlan) -> dict[str, Any]:
         "total_trials": plan.total_trials,
         "n_stimuli": len(plan.stimuli_catalog),
     }
+    if plan.mode in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
+        manual_block_frames, derived_planes_per_block, derived_total_planes = _compute_manual_block_plane_summary(plan)
+        summary["manual_block_frames"] = ", ".join(str(frame_count) for frame_count in manual_block_frames)
+        summary["derived_planes_per_block"] = derived_planes_per_block
+        summary["derived_total_planes"] = derived_total_planes
+    return summary
 
 
 def format_duration(total_seconds: float) -> str:
@@ -645,6 +653,51 @@ def compute_fish_age_days(fish_birth: str | None) -> int | None:
         return None
     parsed = dt.datetime.strptime(fish_birth, "%Y-%m-%d")
     return (dt.datetime.today() - parsed).days
+
+
+def _compute_manual_block_plane_summary(plan: DotsRunPlan) -> tuple[list[int], list[float], float]:
+    manual_field = plan.stimuli_params.get("manual_block_frames", "")
+    manual_block_frames = _parse_manual_block_frames(manual_field)
+    planned_block_count = _planned_block_count_from_trials(plan.trials)
+    if len(manual_block_frames) != planned_block_count:
+        raise ValueError(
+            "manual_block_frames count does not match planned block count "
+            f"({len(manual_block_frames)} entered vs {planned_block_count} planned)"
+        )
+
+    framerate = float(plan.functional_params.get("framerate", 0))
+    derived_planes_per_block = [frame_count / FPS * framerate for frame_count in manual_block_frames]
+    derived_total_planes = sum(derived_planes_per_block)
+    return manual_block_frames, derived_planes_per_block, derived_total_planes
+
+
+def _parse_manual_block_frames(raw_value: Any) -> list[int]:
+    raw_text = "" if raw_value is None else str(raw_value)
+    parts = [part.strip() for part in raw_text.split(",")]
+    if not raw_text.strip() or any(part == "" for part in parts):
+        raise ValueError(
+            "manual_block_frames is required for block-based modes and must be a comma-separated list "
+            "of positive integers."
+        )
+
+    frame_counts: list[int] = []
+    for part in parts:
+        try:
+            frame_count = int(part)
+        except ValueError as exc:
+            raise ValueError(f"manual_block_frames contains a non-numeric value: '{part}'") from exc
+        if frame_count <= 0:
+            raise ValueError(f"manual_block_frames entries must be positive integers; got {frame_count}")
+        frame_counts.append(frame_count)
+    return frame_counts
+
+
+def _planned_block_count_from_trials(trials: list[PlannedTrial]) -> int:
+    ordered_blocks: list[int] = []
+    for trial in trials:
+        if trial.block_num not in ordered_blocks:
+            ordered_blocks.append(trial.block_num)
+    return len(ordered_blocks)
 
 
 def _build_trial_order(

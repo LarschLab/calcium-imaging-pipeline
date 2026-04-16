@@ -8,7 +8,9 @@ from typing import Any
 
 from dots_protocol import (
     MODE_CHOICES,
+    MODE_CONTINUOUS_SESSION,
     MODE_LABELS,
+    MODE_LOOP_BLOCKS,
     DotsRunPlan,
     MOCK_OUTPUT_ROOT,
     SAMPLE_STIMULI_DIR,
@@ -39,6 +41,7 @@ MIN_WINDOW_WIDTH = 1600
 WINDOW_SAFETY_MARGIN_PX = 80
 TOOLTIP_BG_COLOR = "#111827"
 TOOLTIP_FG_COLOR = "#f9fafb"
+PREVIEW_PENDING_RUN_BLOCK_REASON = "Wait for auto-preview to refresh current settings before running."
 
 FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
     "metadata": {
@@ -83,6 +86,7 @@ FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
         "n_rep_stim": "How many repetitions per stimulus entry.",
         "max_n_dots": "Maximum number of dots allowed in selected stimuli.",
         "dot_radius_cm": "Dot radius in centimeters when fixed radius mode is used.",
+        "manual_block_frames": "Required for block-based modes: comma-separated 2P frame counts per planned block (e.g., 96640, 96610).",
     },
 }
 
@@ -98,6 +102,49 @@ def compute_group_grid_positions(group_keys: tuple[str, ...], columns: int) -> d
     if columns <= 0:
         raise ValueError("columns must be a positive integer")
     return {group_key: (index // columns, index % columns) for index, group_key in enumerate(group_keys)}
+
+
+def build_base_preview_summary(plan: DotsRunPlan) -> str:
+    first_trials = ", ".join(trial.stimulus_name for trial in plan.trials[:6]) or "none"
+    return (
+        f"Mode: {MODE_LABELS[plan.mode]}\n"
+        f"Stimuli: {len(plan.stimuli_catalog)} files\n"
+        f"Trials: {plan.total_trials}\n"
+        f"Total duration: {format_duration(plan.total_duration_sec)} ({plan.total_duration_sec:.2f} sec)\n"
+        f"Mock run: {'yes' if plan.runtime.get('mock_mode') else 'no'}\n"
+        f"First trials: {first_trials}"
+    )
+
+
+def enrich_preview_summary_with_manual_block_frames(plan: DotsRunPlan, base_summary: str) -> tuple[str, str | None]:
+    if plan.mode not in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
+        return base_summary, None
+    try:
+        summary = summarize_plan(plan)
+    except ValueError as exc:
+        warning = (
+            "Manual frame validation warning: "
+            f"{exc}. Derived plane counts are unavailable until this list is corrected."
+        )
+        summary_text = (
+            f"{base_summary}\n"
+            f"Manual frame list: invalid ({exc})\n"
+            "Derived planes per block: unavailable\n"
+            "Derived final planes: unavailable"
+        )
+        return summary_text, warning
+
+    planes_per_block = ", ".join(
+        f"Block {block_index + 1}: {planes:.2f}"
+        for block_index, planes in enumerate(summary["derived_planes_per_block"])
+    )
+    summary_text = (
+        f"{base_summary}\n"
+        f"Manual frame list: {summary['manual_block_frames']}\n"
+        f"Derived planes per block: {planes_per_block}\n"
+        f"Derived final planes: {summary['derived_total_planes']:.2f}"
+    )
+    return summary_text, None
 
 
 class DotsGuiApp:
@@ -117,6 +164,8 @@ class DotsGuiApp:
         self.runtime_defaults: dict[str, Any] = {}
         self.current_plan: DotsRunPlan | None = None
         self._preview_after_id: str | None = None
+        self.preview_is_current = False
+        self.run_block_reason = PREVIEW_PENDING_RUN_BLOCK_REASON
         self.dirty = True
 
         self._build_layout()
@@ -373,12 +422,17 @@ class DotsGuiApp:
 
     def _mark_dirty(self, status: str | None = None) -> None:
         self.dirty = True
-        self.current_plan = None
-        self.run_button.configure(state="disabled")
+        self.preview_is_current = False
+        self._set_run_block_reason(PREVIEW_PENDING_RUN_BLOCK_REASON)
         self._render_legend()
         if status:
             self.status_var.set(status)
         self._schedule_auto_preview()
+
+    def _set_run_block_reason(self, reason: str | None) -> None:
+        self.run_block_reason = reason
+        can_run = self.preview_is_current and self.current_plan is not None and reason is None
+        self.run_button.configure(state="normal" if can_run else "disabled")
 
     def _schedule_auto_preview(self) -> None:
         if self._preview_after_id is not None:
@@ -442,21 +496,21 @@ class DotsGuiApp:
             if show_dialog:
                 messagebox.showerror("Preview failed", str(exc))
             self.status_var.set(f"Preview failed: {exc}")
+            self.preview_is_current = False
+            self.dirty = True
+            self._set_run_block_reason(f"Preview must succeed before running: {exc}")
             return
 
-        summary = summarize_plan(self.current_plan)
-        first_trials = ", ".join(trial.stimulus_name for trial in self.current_plan.trials[:6]) or "none"
-        self.summary_var.set(
-            f"Mode: {summary['mode_label']}\n"
-            f"Stimuli: {summary['n_stimuli']} files\n"
-            f"Trials: {summary['total_trials']}\n"
-            f"Total duration: {summary['total_duration_pretty']} ({summary['total_duration_sec']:.2f} sec)\n"
-            f"Mock run: {'yes' if self.current_plan.runtime.get('mock_mode') else 'no'}\n"
-            f"First trials: {first_trials}"
-        )
-        self.status_var.set("Preview is current. Run will use this exact schedule.")
+        summary_text = build_base_preview_summary(self.current_plan)
+        summary_text, run_block_reason = enrich_preview_summary_with_manual_block_frames(self.current_plan, summary_text)
+        self.summary_var.set(summary_text)
+        if run_block_reason:
+            self.status_var.set(f"Preview is current, but run is blocked: {run_block_reason}")
+        else:
+            self.status_var.set("Preview is current. Run will use this exact schedule.")
+        self.preview_is_current = True
         self.dirty = False
-        self.run_button.configure(state="normal")
+        self._set_run_block_reason(run_block_reason)
         self._render_legend()
         self._draw_timeline()
 
@@ -565,8 +619,12 @@ class DotsGuiApp:
             canvas.create_line(x, top - 6, x, top + len(tracks) * row_height, fill="#111827", dash=(3, 3))
 
     def run_plan(self) -> None:
-        if self.dirty or not self.current_plan:
-            messagebox.showwarning("Preview pending", "Wait for auto-preview to refresh current settings before running.")
+        if self.run_block_reason:
+            title = "Run blocked" if self.preview_is_current else "Preview pending"
+            messagebox.showwarning(title, self.run_block_reason)
+            return
+        if not self.current_plan:
+            messagebox.showwarning("Preview pending", PREVIEW_PENDING_RUN_BLOCK_REASON)
             return
         run_label = "mock run" if self.current_plan.runtime.get("mock_mode") else "experiment"
         if not messagebox.askyesno("Start experiment", f"Launch the {run_label} with the previewed schedule?"):
