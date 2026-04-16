@@ -30,6 +30,55 @@ FIELD_GROUPS = (
 )
 
 AUTO_PREVIEW_DEBOUNCE_MS = 400
+LABEL_TOOLTIP_DELAY_MS = 500
+TIMELINE_PREVIEW_HEIGHT_PX = 250
+INPUT_GROUP_ROWS = ("metadata", "functional_params", "stimuli_params")
+
+FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
+    "metadata": {
+        "experiment_name": "Experiment label used in metadata and output naming.",
+        "experimenter": "Name or initials of the person running the session.",
+        "experiment_date": "Run timestamp; leave empty to auto-fill at preview/run time.",
+        "fish_ID": "Animal identifier written to run metadata.",
+        "fish_birth": "Birth date used to compute fish age (YYYY-MM-DD).",
+        "fish_age_dpf": "Age in days post fertilization; auto-computed from fish_birth.",
+        "genotype": "Genotype string stored with run metadata.",
+        "size": "Free-text size descriptor for the fish.",
+        "time_embedding": "Optional embedding timestamp or code.",
+        "fish_orientation": "Orientation of the fish in the field of view.",
+        "respond_to_omr": "Behavior note indicating OMR response.",
+        "respond_to_vibrations": "Behavior note indicating vibration response.",
+        "respond_to_bouts": "Behavior note indicating spontaneous bout response.",
+        "embedding_comments": "Optional notes about embedding quality or issues.",
+        "projector_LED_current": "Projector LED current setting used during acquisition.",
+        "projector_power": "Projector power setting used during acquisition.",
+        "general_comments": "Additional free-text notes for this run.",
+    },
+    "functional_params": {
+        "mode": "Microscope acquisition mode for this run.",
+        "n_frames": "Frames per volume acquisition cycle.",
+        "n_slices": "Slices per volume acquisition cycle.",
+        "n_volumes": "Target number of volumes to acquire.",
+        "step_size": "Z-step size between slices.",
+        "framerate": "Acquisition frame rate in Hz.",
+        "AOM_mW": "Laser power (mW) used for AOM.",
+        "ETL_start": "Initial ETL offset or focal setting.",
+        "pump_speed": "Perfusion pump speed setting.",
+        "volume_flyback": "Flyback setting applied between volumes.",
+        "frame_flyback": "Flyback setting applied between frames.",
+        "motion_correction": "Whether online motion correction is enabled.",
+    },
+    "stimuli_params": {
+        "pre_stim_resting_sec": "Initial resting period before the first stimulus.",
+        "pre_stim_pause_sec": "Pause before each stimulus trial.",
+        "post_stim_pause_sec": "Pause after each stimulus trial.",
+        "inter_block_pause_sec": "Pause inserted between blocks.",
+        "n_trials_per_block": "Number of trials included in each block.",
+        "n_rep_stim": "How many repetitions per stimulus entry.",
+        "max_n_dots": "Maximum number of dots allowed in selected stimuli.",
+        "dot_radius_cm": "Dot radius in centimeters when fixed radius mode is used.",
+    },
+}
 
 BASE_TIMELINE_COLORS = {
     "rest": "#dbeafe",
@@ -49,7 +98,7 @@ class DotsGuiApp:
         self.stimuli_dir_var = tk.StringVar()
         self.mock_mode_var = tk.BooleanVar(value=False)
         self.mock_output_root_var = tk.StringVar(value=str(MOCK_OUTPUT_ROOT))
-        self.summary_var = tk.StringVar(value="Load a stimulus folder, review parameters, then preview.")
+        self.summary_var = tk.StringVar(value="Load a stimulus folder and review parameters. Preview refreshes automatically.")
         self.status_var = tk.StringVar(value="Waiting for input.")
 
         self.field_vars: dict[str, dict[str, Any]] = {}
@@ -62,21 +111,41 @@ class DotsGuiApp:
         self._load_mode(initial_mode)
 
     def _build_layout(self) -> None:
-        self.root.columnconfigure(0, weight=0)
-        self.root.columnconfigure(1, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=0)
+        self.root.rowconfigure(1, weight=0)
+        self.root.rowconfigure(2, weight=1)
+        self.root.rowconfigure(3, weight=0)
 
-        left = ttk.Frame(self.root, padding=12)
-        left.grid(row=0, column=0, sticky="nsw")
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(1, weight=1)
-        right = ttk.Frame(self.root, padding=12)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(1, weight=1)
+        preview = ttk.Frame(self.root, padding=(12, 12, 12, 6))
+        preview.grid(row=0, column=0, sticky="ew")
+        preview.columnconfigure(0, weight=1)
+        preview.rowconfigure(1, weight=0)
 
-        controls = ttk.LabelFrame(left, text="Run Setup", padding=10)
-        controls.grid(row=0, column=0, sticky="new")
+        ttk.LabelFrame(preview, text="Summary", padding=10).grid(row=0, column=0, sticky="ew")
+        ttk.Label(preview, textvariable=self.summary_var, wraplength=1260, justify="left").grid(
+            row=0, column=0, sticky="ew", pady=(10, 12)
+        )
+
+        timeline_frame = ttk.LabelFrame(preview, text="Timeline Preview", padding=10)
+        timeline_frame.grid(row=1, column=0, sticky="ew")
+        timeline_frame.columnconfigure(0, weight=1)
+        timeline_frame.rowconfigure(0, weight=0)
+        self.timeline_canvas = tk.Canvas(
+            timeline_frame,
+            height=TIMELINE_PREVIEW_HEIGHT_PX,
+            background="white",
+            highlightthickness=0,
+        )
+        self.timeline_canvas.grid(row=0, column=0, sticky="ew")
+
+        legend = ttk.Frame(preview)
+        legend.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        self.legend_frame = legend
+        self._render_legend()
+
+        controls = ttk.LabelFrame(self.root, text="Run Setup", padding=10)
+        controls.grid(row=1, column=0, sticky="ew", padx=12, pady=(6, 0))
         controls.columnconfigure(1, weight=1)
 
         ttk.Label(controls, text="Protocol").grid(row=0, column=0, sticky="w")
@@ -120,8 +189,8 @@ class DotsGuiApp:
         self.mock_output_label.grid(row=3, column=0, sticky="w", pady=(10, 0))
         self.mock_output_row.grid(row=3, column=1, sticky="ew", padx=(8, 0), pady=(10, 0))
 
-        forms_frame = ttk.Frame(left)
-        forms_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        forms_frame = ttk.Frame(self.root, padding=(12, 10, 12, 0))
+        forms_frame.grid(row=2, column=0, sticky="nsew")
         forms_frame.columnconfigure(0, weight=1)
         forms_frame.rowconfigure(0, weight=1)
 
@@ -141,34 +210,20 @@ class DotsGuiApp:
         self.forms_canvas.bind("<Enter>", lambda _: self._bind_forms_mousewheel())
         self.forms_canvas.bind("<Leave>", lambda _: self._unbind_forms_mousewheel())
 
-        buttons = ttk.Frame(left)
-        buttons.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        buttons.columnconfigure((0, 1, 2), weight=1)
-        ttk.Button(buttons, text="Preview", command=self.preview_plan).grid(row=0, column=0, sticky="ew")
+        footer = ttk.Frame(self.root, padding=(12, 12, 12, 12))
+        footer.grid(row=3, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+
+        buttons = ttk.Frame(footer)
+        buttons.grid(row=0, column=0, sticky="ew")
+        buttons.columnconfigure((0, 1), weight=1)
         self.run_button = ttk.Button(buttons, text="Run", command=self.run_plan, state="disabled")
-        self.run_button.grid(row=0, column=1, sticky="ew", padx=8)
-        ttk.Button(buttons, text="Quit", command=self.root.destroy).grid(row=0, column=2, sticky="ew")
+        self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(buttons, text="Quit", command=self.root.destroy).grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(left, textvariable=self.status_var, wraplength=420, foreground="#374151").grid(
-            row=3, column=0, sticky="ew", pady=(12, 0)
+        ttk.Label(footer, textvariable=self.status_var, wraplength=1260, foreground="#374151").grid(
+            row=1, column=0, sticky="ew", pady=(12, 0)
         )
-
-        ttk.LabelFrame(right, text="Summary", padding=10).grid(row=0, column=0, sticky="ew")
-        ttk.Label(right, textvariable=self.summary_var, wraplength=860, justify="left").grid(
-            row=0, column=0, sticky="ew", pady=(10, 12)
-        )
-
-        timeline_frame = ttk.LabelFrame(right, text="Timeline Preview", padding=10)
-        timeline_frame.grid(row=1, column=0, sticky="nsew")
-        timeline_frame.columnconfigure(0, weight=1)
-        timeline_frame.rowconfigure(0, weight=1)
-        self.timeline_canvas = tk.Canvas(timeline_frame, height=420, background="white", highlightthickness=0)
-        self.timeline_canvas.grid(row=0, column=0, sticky="nsew")
-
-        legend = ttk.Frame(right)
-        legend.grid(row=2, column=0, sticky="ew", pady=(12, 0))
-        self.legend_frame = legend
-        self._render_legend()
 
         self.timeline_canvas.bind("<Configure>", lambda _: self._draw_timeline())
         self.stimuli_dir_var.trace_add("write", lambda *_: self._mark_dirty())
@@ -183,14 +238,18 @@ class DotsGuiApp:
             child.destroy()
         self.field_vars = {}
 
-        for row_index, (group_key, group_label) in enumerate(FIELD_GROUPS):
+        group_labels = dict(FIELD_GROUPS)
+        for row_index, group_key in enumerate(INPUT_GROUP_ROWS):
+            group_label = group_labels[group_key]
             frame = ttk.LabelFrame(self.forms_container, text=group_label, padding=10)
             frame.grid(row=row_index, column=0, sticky="new", pady=(0, 12))
             frame.columnconfigure(1, weight=1)
             self.field_vars[group_key] = {}
             values = defaults[group_key]
             for field_index, (field_name, field_value) in enumerate(values.items()):
-                ttk.Label(frame, text=field_name).grid(row=field_index, column=0, sticky="w")
+                label = ttk.Label(frame, text=field_name)
+                label.grid(row=field_index, column=0, sticky="w")
+                self._install_label_tooltip(label, group_key, field_name, group_label)
                 variable, widget = self._create_input(frame, field_name, field_value)
                 widget.grid(row=field_index, column=1, sticky="ew", padx=(8, 0), pady=2)
                 self.field_vars[group_key][field_name] = variable
@@ -217,6 +276,13 @@ class DotsGuiApp:
         else:
             variable.trace_add("write", lambda *_: self._mark_dirty())
         return variable, widget
+
+    def _install_label_tooltip(self, label: ttk.Label, group_key: str, field_name: str, group_label: str) -> None:
+        help_text = FIELD_HELP_TEXT.get(group_key, {}).get(
+            field_name,
+            f"{group_label} setting: {field_name.replace('_', ' ')}.",
+        )
+        DelayedTooltip(label, help_text, delay_ms=LABEL_TOOLTIP_DELAY_MS)
 
     def _sync_forms_scrollregion(self) -> None:
         self.forms_canvas.configure(scrollregion=self.forms_canvas.bbox("all"))
@@ -470,7 +536,7 @@ class DotsGuiApp:
 
     def run_plan(self) -> None:
         if self.dirty or not self.current_plan:
-            messagebox.showwarning("Preview required", "Preview the current settings before running.")
+            messagebox.showwarning("Preview pending", "Wait for auto-preview to refresh current settings before running.")
             return
         run_label = "mock run" if self.current_plan.runtime.get("mock_mode") else "experiment"
         if not messagebox.askyesno("Start experiment", f"Launch the {run_label} with the previewed schedule?"):
@@ -487,6 +553,56 @@ class DotsGuiApp:
 
         messagebox.showinfo("Run complete", f"Logs saved to:\n{meta_dir}")
         self.root.destroy()
+
+
+class DelayedTooltip:
+    def __init__(self, widget: ttk.Label, text: str, delay_ms: int = LABEL_TOOLTIP_DELAY_MS):
+        self.widget = widget
+        self.text = text
+        self.delay_ms = delay_ms
+        self._after_id: str | None = None
+        self._tooltip_window: tk.Toplevel | None = None
+
+        self.widget.bind("<Enter>", self._schedule_show, add="+")
+        self.widget.bind("<Leave>", self._hide, add="+")
+        self.widget.bind("<ButtonPress>", self._hide, add="+")
+        self.widget.bind("<Destroy>", self._hide, add="+")
+
+    def _schedule_show(self, _: Any) -> None:
+        self._cancel_pending()
+        self._after_id = self.widget.after(self.delay_ms, self._show)
+
+    def _show(self) -> None:
+        self._after_id = None
+        if self._tooltip_window is not None or not self.widget.winfo_exists():
+            return
+        x = self.widget.winfo_rootx() + 16
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 8
+        tooltip = tk.Toplevel(self.widget)
+        tooltip.wm_overrideredirect(True)
+        tooltip.wm_geometry(f"+{x}+{y}")
+        label = ttk.Label(
+            tooltip,
+            text=self.text,
+            justify="left",
+            padding=(8, 6),
+            relief="solid",
+            borderwidth=1,
+            wraplength=420,
+        )
+        label.grid(row=0, column=0, sticky="nsew")
+        self._tooltip_window = tooltip
+
+    def _cancel_pending(self) -> None:
+        if self._after_id is not None:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _hide(self, _: Any) -> None:
+        self._cancel_pending()
+        if self._tooltip_window is not None:
+            self._tooltip_window.destroy()
+            self._tooltip_window = None
 
 
 def launch_dots_gui(initial_mode: str) -> None:
