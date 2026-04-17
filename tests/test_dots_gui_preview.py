@@ -39,8 +39,28 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
             self.assertIn("Planned blocks: 2", summary_text)
             self.assertIn("B0: 0:04 (4.50 sec, 9 frames)", summary_text)
             self.assertIn("B1: 0:02 (2.00 sec, 4 frames)", summary_text)
+            self.assertIn("Inter-block pause contribution: 1 x 3.50 sec (3.50 sec total)", summary_text)
             self.assertIn("Total planned acquisition frames: 13", summary_text)
             self.assertNotIn("Manual frame list", summary_text)
+            self.assertIsNone(run_block_reason)
+
+    def test_block_mode_preview_explains_single_block_interblock_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_c.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_d.csv", frames=60)
+            plan = self._build_block_mode_plan(tmp_path, n_trials_per_block=4, inter_block_pause_sec=20)
+
+            base_summary = build_base_preview_summary(plan)
+            summary_text, run_block_reason = enrich_preview_summary_with_block_planning(plan, base_summary)
+
+            self.assertIn("Planned blocks: 1", summary_text)
+            self.assertIn(
+                "Inter-block pause: not applied (single block; reduce n_trials_per_block to create multiple blocks)",
+                summary_text,
+            )
             self.assertIsNone(run_block_reason)
 
     def test_loop_stimuli_mode_preview_summary_is_unchanged(self) -> None:
@@ -78,14 +98,18 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
         data.to_csv(path, index=False)
 
     @staticmethod
-    def _build_block_mode_plan(stimuli_dir: Path):
+    def _build_block_mode_plan(
+        stimuli_dir: Path,
+        n_trials_per_block: int = 2,
+        inter_block_pause_sec: float = 3.5,
+    ):
         defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
         defaults["stimuli_params"]["n_rep_stim"] = 1
-        defaults["stimuli_params"]["n_trials_per_block"] = 2
+        defaults["stimuli_params"]["n_trials_per_block"] = n_trials_per_block
         defaults["stimuli_params"]["pre_stim_resting_sec"] = 2.5
         defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
         defaults["stimuli_params"]["post_stim_pause_sec"] = 0
-        defaults["stimuli_params"]["inter_block_pause_sec"] = 3.5
+        defaults["stimuli_params"]["inter_block_pause_sec"] = inter_block_pause_sec
         metadata, functional, stimuli_params, runtime = prepare_run_config(
             MODE_LOOP_BLOCKS,
             defaults["metadata"],

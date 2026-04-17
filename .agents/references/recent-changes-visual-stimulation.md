@@ -12,6 +12,32 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-16 - dots single-block inter-block pause preview clarity
+- Date and label: 2026-04-16, dots GUI inter-block pause applicability messaging
+- Slice goal: Clarify why inter-block pause appears inactive when only one block is planned, so operators can distinguish expected behavior from a broken pause input.
+- Passes completed in this session: Owner/routing re-check -> protocol/preview path verification -> GUI summary update -> preview regression updates -> compile/unit test pass.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: block-mode preview summary now reports inter-block pause contribution (`count x seconds`) and explicitly states when a configured inter-block pause is not applied because only one block is planned.
+  - `tests/test_dots_gui_preview.py`: expanded summary assertions and added regression coverage for the single-block case where inter-block pause is configured but intentionally unused.
+  - `.agents/references/visual-stimulation-script-index.md`: updated `dots_gui.py` ownership note to include single-block inter-block pause applicability messaging.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: Optional manual GUI confirmation on operator workflows that keep `n_trials_per_block` equal to the total trial count.
+- Next likely breakpoint: If operators want inter-block pause to apply after the final block, that is a protocol-semantics change and should be handled in `dots_protocol.py` and `dots_runner.py`, not GUI-only.
+- Rerun implications: Preview text now distinguishes “configured but not applicable” inter-block pause in single-block plans; execution semantics and output files are unchanged.
+
+## 2026-04-16 - dots inter-block pause event restoration
+- Date and label: 2026-04-16, dots block-log inter-block pause restoration
+- Slice goal: Restore explicit inter-block pause visibility in run artifacts while preserving corrected block duration/frame calculations.
+- Passes completed in this session: Owner/routing re-check -> runner event logging update -> mock-run regression update -> docs/log update -> unit test pass.
+- What changed:
+  - `visual_stimulation/dots_runner.py`: block-based hardware and mock paths now log `B{block_num}_interblock_pause` through the shared event logger, so the inter-block pause is present in both `experiment_log.csv` and `block_log.csv`.
+  - `tests/test_dots_protocol.py`: updated mock block-run marker expectation to include `B0_interblock_pause`.
+  - `.agents/references/visual-stimulation-script-index.md`: updated `dots_runner.py` ownership note to reflect explicit inter-block pause event logging.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: Optional manual hardware confirmation if operators want to inspect live timing traces.
+- Next likely breakpoint: If downstream analysis expects pause start/end pairs instead of a single pause marker, add paired events consistently in both logs.
+- Rerun implications: Block-based runs now emit explicit inter-block pause markers in `block_log.csv`; downstream consumers parsing block events may need to account for the additional event.
+
 ## 2026-04-16 - dots automatic block planning
 - Date and label: 2026-04-16, dots automatic block planning and boundary correction
 - Slice goal: Replace manual block-frame entry with derived per-block acquisition planning and fix the empty pre-block rollover artifact so B0 is the first real acquisition block.

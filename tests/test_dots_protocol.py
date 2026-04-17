@@ -234,7 +234,7 @@ class DotsProtocolTests(unittest.TestCase):
                 for event in block_log["event"].tolist()
                 if event.endswith("_start") or event.endswith("_end") or "interblock" in event
             ]
-            self.assertEqual(marker_events, ["B0_start", "B0_end", "B1_start", "B1_end"])
+            self.assertEqual(marker_events, ["B0_start", "B0_end", "B0_interblock_pause", "B1_start", "B1_end"])
             planned_blocks_df = pd.read_csv(next(path for path in meta_dir.iterdir() if path.name.endswith("_planned_blocks.csv")))
             self.assertEqual(list(planned_blocks_df["block_num"]), [0, 1])
 

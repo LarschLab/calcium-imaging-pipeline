@@ -119,6 +119,21 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
     if plan.mode not in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
         return base_summary, None
     summary = summarize_plan(plan)
+    inter_block_pause_sec = float(plan.stimuli_params.get("inter_block_pause_sec", 0))
+    inter_block_pause_count = max(plan.planned_block_count - 1, 0)
+    inter_block_pause_total_sec = inter_block_pause_count * inter_block_pause_sec
+    if inter_block_pause_count > 0:
+        inter_block_pause_line = (
+            f"Inter-block pause contribution: "
+            f"{inter_block_pause_count} x {inter_block_pause_sec:.2f} sec "
+            f"({inter_block_pause_total_sec:.2f} sec total)"
+        )
+    elif inter_block_pause_sec > 0:
+        inter_block_pause_line = (
+            "Inter-block pause: not applied (single block; reduce n_trials_per_block to create multiple blocks)"
+        )
+    else:
+        inter_block_pause_line = "Inter-block pause: none configured"
     block_lines = ", ".join(
         f"B{block.block_num}: {format_duration(block.duration_sec)} ({block.duration_sec:.2f} sec, {block.acquisition_frame_count} frames)"
         for block in plan.planned_blocks
@@ -127,6 +142,7 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
         f"{base_summary}\n"
         f"Planned blocks: {summary['planned_block_count']}\n"
         f"Block durations and frames: {block_lines}\n"
+        f"{inter_block_pause_line}\n"
         f"Total planned acquisition frames: {summary['planned_total_acquisition_frames']}"
     )
     return summary_text, None

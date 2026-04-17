@@ -191,8 +191,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
                 log_event(f"B{block_num}_end")
                 if block_index < len(plan.planned_blocks) - 1:
-                    exp_event_log.append({"event": f"B{block_num}_interblock_pause", "timestamp": exp_clock.getTime()})
-                    print("inter_block_pause_sec")
+                    log_event(f"B{block_num}_interblock_pause")
                     _flip_for_duration(win, float(stimuli_params["inter_block_pause_sec"]))
     except KeyboardInterrupt:
         print("\nManual interruption detected. Finalizing and saving logs...")
@@ -284,7 +283,7 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
 
             state.log_event(exp_event_log, block_event_log, f"B{block_num}_end")
             if block_index < len(plan.planned_blocks) - 1:
-                exp_event_log.append({"event": f"B{block_num}_interblock_pause", "timestamp": state.exp_time})
+                state.log_event(exp_event_log, block_event_log, f"B{block_num}_interblock_pause")
                 state.advance(float(stimuli_params["inter_block_pause_sec"]))
                 state.reset_block()
 
