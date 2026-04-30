@@ -13,9 +13,11 @@ from dots_protocol import (
     MODE_CONTINUOUS_SESSION,
     MODE_LABELS,
     MODE_LOOP_BLOCKS,
+    MODE_LOOP_STIMULI,
     DotsRunPlan,
     MOCK_OUTPUT_ROOT,
     SAMPLE_STIMULI_DIR,
+    StimulusSpec,
     build_run_plan,
     format_duration,
     get_mode_defaults,
@@ -48,6 +50,8 @@ DEFAULT_INITIAL_MODE = MODE_LOOP_BLOCKS
 GUI_SETTINGS_PATH = Path.home() / ".calcium_imaging_pipeline" / "dots_gui_settings.json"
 GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY = "stimuli_params_by_mode"
 LEGEND_ENTRIES_PER_ROW = 4
+AUTO_BLOCK_FIELD_NAME = "n_trials_per_block"
+REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS = {AUTO_BLOCK_FIELD_NAME}
 REMEMBERED_METADATA_FIELDS = (
     "experiment_name",
     "experimenter",
@@ -125,6 +129,26 @@ def compute_legend_grid_positions(entry_count: int, entries_per_row: int) -> lis
     ]
 
 
+def count_unique_presented_stimuli(stimuli_catalog: list[StimulusSpec]) -> int:
+    return len({stimulus.runtime_key for stimulus in stimuli_catalog})
+
+
+def format_block_volume_count(plan: DotsRunPlan) -> str:
+    if not plan.planned_blocks:
+        return "none"
+    return f"{plan.planned_blocks[0].acquisition_frame_count} volumes"
+
+
+def build_pre_run_checklist_items(plan: DotsRunPlan) -> list[str]:
+    block_volume_count = format_block_volume_count(plan)
+    return [
+        f"Set microscope total volumes per block to {block_volume_count}.",
+        "Confirm light-path levers are set.",
+        "Confirm microscope acquisition is ready/armed.",
+        "Confirm fish, stimulus folder, and previewed schedule are correct.",
+    ]
+
+
 def load_gui_settings(settings_path: Path = GUI_SETTINGS_PATH) -> dict[str, Any]:
     try:
         with settings_path.open("r", encoding="utf-8") as settings_file:
@@ -161,7 +185,11 @@ def build_remembered_gui_settings(
             remembered_by_mode = {}
         else:
             remembered_by_mode = dict(remembered_by_mode)
-        remembered_by_mode[mode] = dict(stimuli_params)
+        remembered_by_mode[mode] = {
+            field_name: field_value
+            for field_name, field_value in stimuli_params.items()
+            if field_name not in REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS
+        }
         settings[GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY] = remembered_by_mode
     return settings
 
@@ -204,7 +232,7 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
     summary_text = (
         f"{base_summary}\n"
         f"Planned blocks: {summary['planned_block_count']}\n"
-        f"Block durations and frames: {block_lines}\n"
+        f"Block acquisition durations and frames: {block_lines}\n"
         f"{inter_block_pause_line}\n"
         f"Total planned acquisition frames: {summary['planned_total_acquisition_frames']}"
     )
@@ -233,6 +261,8 @@ class DotsGuiApp:
         self.dirty = True
         self.remembered_settings = load_gui_settings()
         self.stimulus_shuffle_seed = self._new_stimulus_shuffle_seed()
+        self.auto_n_trials_per_block = True
+        self._updating_dynamic_n_trials_per_block = False
 
         self._build_layout()
         self._load_mode(initial_mode)
@@ -375,6 +405,7 @@ class DotsGuiApp:
     def _load_mode(self, mode: str) -> None:
         self.mode_var.set(mode)
         self._refresh_stimulus_shuffle_seed()
+        self.auto_n_trials_per_block = True
         defaults = get_mode_defaults(mode)
         self.runtime_defaults = defaults["runtime"]
         for child in self.forms_container.winfo_children():
@@ -424,22 +455,25 @@ class DotsGuiApp:
             variable = tk.StringVar(value=text)
             widget = ttk.Entry(parent, textvariable=variable)
 
-        randomize_stimulus_order = group_key == "stimuli_params"
         if isinstance(variable, tk.BooleanVar):
             variable.trace_add(
                 "write",
-                lambda *_, randomize=randomize_stimulus_order: self._mark_dirty(
-                    randomize_stimulus_order=randomize
-                ),
+                lambda *_, group=group_key, field=field_name: self._on_field_change(group, field),
             )
         else:
             variable.trace_add(
                 "write",
-                lambda *_, randomize=randomize_stimulus_order: self._mark_dirty(
-                    randomize_stimulus_order=randomize
-                ),
+                lambda *_, group=group_key, field=field_name: self._on_field_change(group, field),
             )
         return variable, widget
+
+    def _on_field_change(self, group_key: str, field_name: str) -> None:
+        if self._updating_dynamic_n_trials_per_block:
+            return
+        randomize_stimulus_order = group_key == "stimuli_params"
+        if group_key == "stimuli_params" and field_name == AUTO_BLOCK_FIELD_NAME:
+            self.auto_n_trials_per_block = False
+        self._mark_dirty(randomize_stimulus_order=randomize_stimulus_order)
 
     def _install_label_tooltip(self, label: ttk.Label, group_key: str, field_name: str, group_label: str) -> None:
         help_text = FIELD_HELP_TEXT.get(group_key, {}).get(
@@ -515,7 +549,7 @@ class DotsGuiApp:
         if isinstance(stimuli_params_settings, dict):
             stimuli_vars = self.field_vars.get("stimuli_params", {})
             for field_name, remembered_value in stimuli_params_settings.items():
-                if field_name in stimuli_vars:
+                if field_name in stimuli_vars and field_name not in REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS:
                     stimuli_vars[field_name].set("" if remembered_value is None else str(remembered_value))
 
     def _update_mock_output_visibility(self) -> None:
@@ -569,6 +603,21 @@ class DotsGuiApp:
             result[field_name] = self._coerce_value(raw_value, default_value)
         return result
 
+    def _apply_dynamic_n_trials_per_block(self, stimuli_catalog: list[StimulusSpec]) -> None:
+        if self.mode_var.get() == MODE_LOOP_STIMULI or not self.auto_n_trials_per_block:
+            return
+        unique_stimulus_count = count_unique_presented_stimuli(stimuli_catalog)
+        if unique_stimulus_count <= 0:
+            return
+        n_trials_var = self.field_vars.get("stimuli_params", {}).get(AUTO_BLOCK_FIELD_NAME)
+        if n_trials_var is None:
+            return
+        self._updating_dynamic_n_trials_per_block = True
+        try:
+            n_trials_var.set(str(unique_stimulus_count))
+        finally:
+            self._updating_dynamic_n_trials_per_block = False
+
     def _coerce_value(self, raw_value: Any, default_value: Any) -> Any:
         if isinstance(default_value, bool):
             return bool(raw_value)
@@ -586,6 +635,8 @@ class DotsGuiApp:
                 raise ValueError("Select a stimulus folder before previewing.")
             metadata = self._collect_group_values("metadata")
             functional_params = self._collect_group_values("functional_params")
+            stimuli_catalog = load_stimuli_catalog(self.stimuli_dir_var.get(), self.mode_var.get())
+            self._apply_dynamic_n_trials_per_block(stimuli_catalog)
             stimuli_params = self._collect_group_values("stimuli_params")
             runtime_defaults = dict(self.runtime_defaults)
             runtime_defaults["mock_mode"] = bool(self.mock_mode_var.get())
@@ -599,7 +650,6 @@ class DotsGuiApp:
                 runtime_defaults,
                 self.stimuli_dir_var.get(),
             )
-            stimuli_catalog = load_stimuli_catalog(self.stimuli_dir_var.get(), self.mode_var.get())
             self.current_plan = build_run_plan(
                 self.mode_var.get(),
                 metadata,
@@ -767,8 +817,8 @@ class DotsGuiApp:
         if not self.current_plan:
             messagebox.showwarning("Preview pending", PREVIEW_PENDING_RUN_BLOCK_REASON)
             return
-        run_label = "mock run" if self.current_plan.runtime.get("mock_mode") else "experiment"
-        if not messagebox.askyesno("Start experiment", f"Launch the {run_label} with the previewed schedule?"):
+        checklist = PreRunChecklistDialog(self.root, build_pre_run_checklist_items(self.current_plan))
+        if not checklist.accepted:
             return
 
         self.root.withdraw()
@@ -782,6 +832,59 @@ class DotsGuiApp:
 
         messagebox.showinfo("Run complete", f"Logs saved to:\n{meta_dir}")
         self.root.destroy()
+
+
+class PreRunChecklistDialog:
+    def __init__(self, parent: tk.Tk, checklist_items: list[str]):
+        self.accepted = False
+        self.window = tk.Toplevel(parent)
+        self.window.title("Pre-run checklist")
+        self.window.transient(parent)
+        self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        frame = ttk.Frame(self.window, padding=16)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            frame,
+            text="Confirm each item before starting the experiment.",
+            justify="left",
+            wraplength=520,
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 12))
+
+        self.item_vars: list[tk.BooleanVar] = []
+        for item_index, item_text in enumerate(checklist_items, start=1):
+            var = tk.BooleanVar(value=False)
+            self.item_vars.append(var)
+            ttk.Checkbutton(
+                frame,
+                text=item_text,
+                variable=var,
+                command=self._update_start_state,
+            ).grid(row=item_index, column=0, sticky="w", pady=3)
+
+        button_row = ttk.Frame(frame)
+        button_row.grid(row=len(checklist_items) + 1, column=0, sticky="ew", pady=(16, 0))
+        button_row.columnconfigure((0, 1), weight=1)
+        ttk.Button(button_row, text="Cancel", command=self._cancel).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.start_button = ttk.Button(button_row, text="Start", command=self._start, state="disabled")
+        self.start_button.grid(row=0, column=1, sticky="ew")
+
+        parent.wait_window(self.window)
+
+    def _update_start_state(self) -> None:
+        all_checked = all(item_var.get() for item_var in self.item_vars)
+        self.start_button.configure(state="normal" if all_checked else "disabled")
+
+    def _start(self) -> None:
+        self.accepted = True
+        self.window.destroy()
+
+    def _cancel(self) -> None:
+        self.accepted = False
+        self.window.destroy()
 
 
 class DelayedTooltip:

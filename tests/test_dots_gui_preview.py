@@ -37,10 +37,10 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
 
             self.assertTrue(summary_text.startswith(base_summary))
             self.assertIn("Planned blocks: 2", summary_text)
-            self.assertIn("B0: 0:04 (4.50 sec, 9 frames)", summary_text)
+            self.assertIn("B0: 0:02 (2.00 sec, 4 frames)", summary_text)
             self.assertIn("B1: 0:02 (2.00 sec, 4 frames)", summary_text)
             self.assertIn("Inter-block pause contribution: 1 x 3.50 sec (3.50 sec total)", summary_text)
-            self.assertIn("Total planned acquisition frames: 13", summary_text)
+            self.assertIn("Total planned acquisition frames: 8", summary_text)
             self.assertNotIn("Manual frame list", summary_text)
             self.assertIsNone(run_block_reason)
 

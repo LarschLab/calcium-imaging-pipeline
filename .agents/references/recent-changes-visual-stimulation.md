@@ -12,6 +12,59 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots GUI string fish IDs
+- Date and label: 2026-04-30, dots GUI string fish IDs
+- Slice goal: Allow tank/fish composite IDs such as `L395_f01` in all dots GUI modes.
+- Passes completed in this session: Default metadata type update -> regression test -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: Loop Blocks and Continuous Session metadata defaults now use string `fish_ID` values so GUI coercion does not force integer parsing.
+  - `tests/test_dots_gui_layout.py`: added coverage that block-mode `fish_ID` defaults are string typed.
+- What remains broken: No known breakage.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If additional metadata fields need mixed numeric/string input, handle them by field name rather than relying only on default value type.
+- Rerun implications: Output paths and filenames will use the string fish ID exactly as entered.
+
+## 2026-04-30 - dots GUI checklist single block volume
+- Date and label: 2026-04-30, dots GUI checklist single block volume
+- Slice goal: Simplify the pre-run checklist volume reminder to one total volume count because planned blocks should share the same count.
+- Passes completed in this session: Checklist helper update -> regression/docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: checklist now shows one `total volumes per block` value from the first planned block instead of listing every block.
+  - `tests/test_dots_gui_layout.py`: updated checklist helper expectations for the single count.
+  - `scientific-policy.md` and `.agents/references/visual-stimulation-script-index.md`: updated checklist wording.
+- What remains broken: Manual GUI confirmation remains useful for modal layout on the operator display.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If a future protocol intentionally allows unequal block counts, add warning text rather than silently showing one value.
+- Rerun implications: Run behavior and outputs are unchanged; only the pre-run checklist instruction changed.
+
+## 2026-04-30 - dots GUI dynamic block size and pre-run checklist
+- Date and label: 2026-04-30, dots GUI dynamic block size and pre-run checklist
+- Slice goal: Default block size from the current stimulus set, exclude initial rest from planned acquisition counts, and gate Run behind operator reminders.
+- Passes completed in this session: Protocol acquisition-window timing -> GUI dynamic block size/checklist -> helper/protocol regression tests -> policy/reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: planned block start/duration/frame counts now exclude the first pre-stimulus rest while total timeline duration still includes it.
+  - `visual_stimulation/dots_gui.py`: `n_trials_per_block` auto-fills from unique presented stimulus keys for block modes until the user manually edits it; remembered stimulus settings no longer restore that field.
+  - `visual_stimulation/dots_gui.py`: Run now opens a checkable pre-run checklist with microscope volume-rate and light-path lever reminders before launching.
+  - `tests/test_dots_protocol.py`, `tests/test_dots_gui_preview.py`, and `tests/test_dots_gui_layout.py`: updated timing expectations and added helper coverage for unique stimulus counts, microscope volume rate, and checklist text.
+  - `scientific-policy.md`, `.agents/references/visual-stimulation-stage-map.md`, and `.agents/references/visual-stimulation-script-index.md`: updated the timing/default/checklist contract.
+- What remains broken: Manual GUI confirmation on the operator machine is still needed for modal checklist layout and actual run flow with hardware.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators need custom checklist text, keep the checklist item builder GUI-local and update its reminders without changing protocol timing.
+- Rerun implications: Planned block CSV durations/frame counts will be lower by the initial rest duration for the first block; total planned run duration remains unchanged.
+
+## 2026-04-30 - dots GUI checklist block volumes
+- Date and label: 2026-04-30, dots GUI checklist block volumes
+- Slice goal: Correct the pre-run checklist to show total planned volumes per block instead of microscope volume rate.
+- Passes completed in this session: Checklist helper update -> regression tests/docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: pre-run checklist now lists planned block volume counts from `planned_blocks[*].acquisition_frame_count`.
+  - `tests/test_dots_gui_layout.py`: replaced volume-rate helper coverage with block-volume checklist coverage.
+  - `scientific-policy.md` and `.agents/references/visual-stimulation-script-index.md`: updated checklist wording to describe per-block total volumes.
+- What remains broken: Manual GUI confirmation remains useful for modal layout with multi-block volume text.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If the microscope UI needs one value per run rather than per block, derive a shared value only when all planned blocks match and otherwise show the per-block list.
+- Rerun implications: Run behavior and planned outputs are unchanged; only the pre-run checklist instruction changed.
+
 ## 2026-04-30 - dots GUI stable shuffle and stimulus defaults
 - Date and label: 2026-04-30, dots GUI stable shuffle and stimulus defaults
 - Slice goal: Prevent non-stimulus GUI edits from reshuffling random block-mode orders, keep large stimulus-type legends visible, and remember stimulus parameters for successive runs.

@@ -140,12 +140,13 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertEqual([block.block_num for block in plan.planned_blocks], [0, 1])
             self.assertEqual(plan.timeline[0].label, "B0_start")
             self.assertEqual(plan.timeline[1].kind, "rest")
-            self.assertAlmostEqual(plan.planned_blocks[0].start_sec, 0.0, places=6)
-            self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 4.5, places=6)
-            self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 9)
+            self.assertAlmostEqual(plan.planned_blocks[0].start_sec, 2.5, places=6)
+            self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 2.0, places=6)
+            self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 4)
             self.assertAlmostEqual(plan.planned_blocks[1].start_sec, plan.planned_blocks[0].end_sec + 3.5, places=6)
             self.assertAlmostEqual(plan.planned_blocks[1].duration_sec, 2.0, places=6)
             self.assertEqual(plan.planned_blocks[1].acquisition_frame_count, 4)
+            self.assertAlmostEqual(plan.total_duration_sec, 10.0, places=6)
 
     def test_block_mode_acquisition_frames_use_duration_ceiling(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,9 +172,10 @@ class DotsProtocolTests(unittest.TestCase):
             catalog = load_stimuli_catalog(tmp_path, MODE_CONTINUOUS_SESSION)
             plan = build_run_plan(MODE_CONTINUOUS_SESSION, metadata, functional, stimuli_params, runtime, catalog)
 
-            self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 3)
-            self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 1.25, places=6)
-            self.assertEqual(summarize_plan(plan)["planned_total_acquisition_frames"], 3)
+            self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 1)
+            self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 0.25, places=6)
+            self.assertAlmostEqual(plan.total_duration_sec, 1.25, places=6)
+            self.assertEqual(summarize_plan(plan)["planned_total_acquisition_frames"], 1)
 
     def test_mock_run_writes_canonical_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

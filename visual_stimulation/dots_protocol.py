@@ -194,7 +194,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "experiment_name": "groupsize_thalamus_exp02",
             "experimenter": "Matilde",
             "experiment_date": None,
-            "fish_ID": 3,
+            "fish_ID": "L395_f01",
             "fish_birth": "2025-06-23",
             "fish_age_dpf": None,
             "genotype": "huc:H2B-GCamp6s",
@@ -257,7 +257,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "experiment_name": "groupsize_thalamus_exp02",
             "experimenter": "Matilde",
             "experiment_date": None,
-            "fish_ID": 3,
+            "fish_ID": "L395_f01",
             "fish_birth": "2025-06-23",
             "fish_age_dpf": None,
             "genotype": "huc:H2B-GCamp6s",
@@ -418,7 +418,6 @@ def build_run_plan(
     trial_index = 0
 
     for block_num, block_trial_keys in enumerate(block_groups):
-        block_start = current_time
         current_time, order_index = _append_marker(
             timeline, order_index, current_time, "trigger", f"B{block_num}_start", block_num=block_num
         )
@@ -432,6 +431,7 @@ def build_run_plan(
                 "Pre-stimulus rest",
                 block_num=block_num,
             )
+        acquisition_start = current_time
 
         block_trial_indices: list[int] = []
         for stimulus_key in block_trial_keys:
@@ -535,10 +535,10 @@ def build_run_plan(
             PlannedBlock(
                 block_num=block_num,
                 trial_indices=block_trial_indices,
-                start_sec=block_start,
+                start_sec=acquisition_start,
                 end_sec=current_time,
-                duration_sec=current_time - block_start,
-                acquisition_frame_count=math.ceil((current_time - block_start) * framerate),
+                duration_sec=current_time - acquisition_start,
+                acquisition_frame_count=math.ceil((current_time - acquisition_start) * framerate),
             )
         )
 
