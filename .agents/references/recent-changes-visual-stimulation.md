@@ -12,6 +12,18 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots GUI direct-launch import fix
+- Date and label: 2026-04-30, dots runner repo-root import bootstrap
+- Slice goal: Make documented direct GUI launches resolve repo-root `utils.py` reliably, even when a third-party `utils` package is installed.
+- Passes completed in this session: Runner import-path update -> direct-script import regression -> lightweight compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_runner.py`: now places the repository root at the front of `sys.path` before importing `init_experiment_tree` from root-level `utils.py`.
+  - `tests/test_dots_imports.py`: added subprocess coverage for the direct-script path shape with a fake competing `utils` package.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: Manual GUI launch on the operator machine remains the final UI/hardware confirmation.
+- Next likely breakpoint: If the visual stimulation scripts are converted to package/module execution later, revisit all sibling imports together.
+- Rerun implications: Direct GUI and dots wrapper launches should no longer fail at startup with `ModuleNotFoundError: No module named 'utils'`; runtime protocol/output semantics are unchanged.
+
 ## 2026-04-16 - dots single-block inter-block pause preview clarity
 - Date and label: 2026-04-16, dots GUI inter-block pause applicability messaging
 - Slice goal: Clarify why inter-block pause appears inactive when only one block is planned, so operators can distinguish expected behavior from a broken pause input.

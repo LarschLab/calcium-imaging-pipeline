@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,15 @@ from dots_protocol import (
     plan_to_planned_block_rows,
     plan_to_schedule_rows,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_repo_root_str = str(_REPO_ROOT)
+try:
+    sys.path.remove(_repo_root_str)
+except ValueError:
+    pass
+sys.path.insert(0, _repo_root_str)
+
 from utils import init_experiment_tree
 
 
