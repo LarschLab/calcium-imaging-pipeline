@@ -12,6 +12,21 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots detectable trigger pulse width
+- Date and label: 2026-04-30, dots GUI 50 ms trigger pulses
+- Slice goal: Make dots acquisition trigger outputs detectable by the microscope external-trigger input after COM3 access was confirmed working.
+- Passes completed in this session: Runtime pulse default -> runner pulse helper -> pin-11 Arduino diagnostic -> regression tests/docs -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: added hidden runtime default `trigger_pulse_sec=0.05` for all dots modes.
+  - `visual_stimulation/dots_runner.py`: acquisition trigger pulses and short aux markers now hold high for the configured pulse duration instead of immediate high-low writes; block-mode aux stimulus-on/stimulus-off level behavior remains unchanged.
+  - `visual_stimulation/test_arduino.py`: now pulses COM3 digital pin 11 five times with the same 50 ms pulse width for pre-run microscope trigger testing.
+  - `tests/test_dots_runner_hardware.py`: added coverage for the pulse-width default and pulse helper write/wait/write contract.
+  - `.gitignore`: added local ignores for Python caches, common local test/tool caches, `tmp/`, and `.DS_Store`; tracked `.pyc` cache files were removed from the git index.
+- What remains broken: Manual microscope confirmation is still required to verify that 50 ms is sufficient for the external-trigger input.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If the microscope still does not start, confirm wiring to Arduino pin 11 and increase `trigger_pulse_sec` or expose it in the GUI.
+- Rerun implications: Hardware dots runs are intentionally delayed by 50 ms per acquisition/short aux pulse; output event names and CSV artifacts are unchanged.
+
 ## 2026-04-30 - dots GUI Arduino trigger preflight
 - Date and label: 2026-04-30, dots GUI COM3 startup failure handling
 - Slice goal: Prevent the GUI hardware path from starting projection when the Arduino trigger port cannot be opened, and release partially opened serial resources on setup failures.

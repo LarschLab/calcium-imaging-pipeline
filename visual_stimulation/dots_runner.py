@@ -100,6 +100,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
     flip_coordinates = str(metadata.get("fish_orientation", "")).lower() == "bottom-left"
     stimulus_frames = {stimulus.runtime_key: stimulus.data_frame for stimulus in plan.stimuli_catalog}
+    trigger_pulse_sec = float(runtime.get("trigger_pulse_sec", 0.05))
 
     exp_event_log: list[dict[str, Any]] = []
     block_event_log: list[dict[str, Any]] = []
@@ -114,8 +115,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
     try:
         if plan.mode == MODE_LOOP_STIMULI:
-            pin_acq.write(1)
-            pin_acq.write(0)
+            _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
             log_event("B0_start")
             _flip_for_duration(win, float(stimuli_params.get("pre_stim_resting_sec", 0)))
             for trial in plan.trials:
@@ -124,12 +124,10 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                 log_event(f"B{block_num}_prestim{trial.trial_index}_pause")
                 _flip_for_duration(win, float(stimuli_params["pre_stim_pause_sec"]))
 
-                pin_acq.write(1)
-                pin_acq.write(0)
+                _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
                 log_event(f"B{block_num}_acq_start_stim{trial.trial_index}")
 
-                pin_aux.write(1)
-                pin_aux.write(0)
+                _pulse_pin(pin_aux, trigger_pulse_sec, core.wait)
                 print(trial.stimulus_key, "started")
                 log_event(f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_key}")
 
@@ -147,13 +145,14 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                     block_event_log=block_event_log,
                     exp_clock=exp_clock,
                     block_clock=block_clock,
+                    trigger_pulse_sec=trigger_pulse_sec,
+                    wait=core.wait,
                     block_num=block_num,
                     trial_index=trial.trial_index,
                     stimulus_key=trial.stimulus_key,
                     use_loom_markers=bool(runtime.get("use_loom_markers")),
                 )
-                pin_aux.write(1)
-                pin_aux.write(0)
+                _pulse_pin(pin_aux, trigger_pulse_sec, core.wait)
 
                 log_event(f"B{block_num}_poststim{trial.trial_index}_pause")
                 _flip_for_duration(win, float(stimuli_params["post_stim_pause_sec"]))
@@ -163,8 +162,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
             post_pause_key = "pre_stim_pause_sec" if plan.mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec"
             for block_index, planned_block in enumerate(plan.planned_blocks):
                 block_num = planned_block.block_num
-                pin_acq.write(1)
-                pin_acq.write(0)
+                _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
                 block_clock = core.Clock()
                 log_event(f"B{block_num}_start")
                 if block_index == 0:
@@ -194,6 +192,8 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                         block_event_log=block_event_log,
                         exp_clock=exp_clock,
                         block_clock=block_clock,
+                        trigger_pulse_sec=trigger_pulse_sec,
+                        wait=core.wait,
                         block_num=block_num,
                         trial_index=trial.trial_index,
                         stimulus_key=trial.stimulus_name,
@@ -259,6 +259,12 @@ def _setup_trigger_pins(runtime: dict[str, Any]) -> tuple[Any, Any, Any]:
             "and that this user has permission to access the port."
         ) from exc
     return board, pin_acq, pin_aux
+
+
+def _pulse_pin(pin: Any, duration_sec: float, wait: Any) -> None:
+    pin.write(1)
+    wait(float(duration_sec))
+    pin.write(0)
 
 
 def _run_mock_experiment(plan: DotsRunPlan) -> Path:
@@ -395,6 +401,8 @@ def _draw_stimulus(
     block_event_log: list[dict[str, Any]],
     exp_clock: Any,
     block_clock: Any,
+    trigger_pulse_sec: float,
+    wait: Any,
     block_num: int,
     trial_index: int,
     stimulus_key: str,
@@ -407,7 +415,6 @@ def _draw_stimulus(
             radius_column = f"dot{dot_idx}_radius"
             radius = data_frame[radius_column][frame] if radius_column in data_frame.columns else fixed_radius
             if use_loom_markers and radius == 0.1:
-                pin_aux.write(1)
                 exp_event_log.append(
                     {
                         "event": f"B{block_num}_stim{trial_index}_{stimulus_key}_loom_start",
@@ -420,7 +427,7 @@ def _draw_stimulus(
                         "timestamp": block_clock.getTime(),
                     }
                 )
-                pin_aux.write(0)
+                _pulse_pin(pin_aux, trigger_pulse_sec, wait)
                 print(f"loom presentation, frame: {frame}")
             if flip_coordinates:
                 x, y = -x, -y

@@ -11,8 +11,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "visual_stimulation"))
 
-from dots_protocol import DotsRunPlan, MODE_LOOP_STIMULI  # noqa: E402
-from dots_runner import _run_hardware_experiment, _setup_trigger_pins  # noqa: E402
+from dots_protocol import DotsRunPlan, MODE_LOOP_STIMULI, get_mode_defaults  # noqa: E402
+from dots_runner import _pulse_pin, _run_hardware_experiment, _setup_trigger_pins  # noqa: E402
 
 
 class DotsRunnerHardwareTests(unittest.TestCase):
@@ -75,6 +75,25 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         self.assertEqual(state["writes"], 1)
         self.assertEqual(state["exits"], 1)
 
+    def test_mode_defaults_include_detectable_trigger_pulse_width(self) -> None:
+        defaults = get_mode_defaults(MODE_LOOP_STIMULI)
+
+        self.assertEqual(defaults["runtime"]["trigger_pulse_sec"], 0.05)
+
+    def test_pulse_pin_writes_high_waits_then_writes_low(self) -> None:
+        events: list[tuple[str, float | int]] = []
+
+        class Pin:
+            def write(self, value: int) -> None:
+                events.append(("write", value))
+
+        def wait(duration_sec: float) -> None:
+            events.append(("wait", duration_sec))
+
+        _pulse_pin(Pin(), 0.05, wait)
+
+        self.assertEqual(events, [("write", 1), ("wait", 0.05), ("write", 0)])
+
     def _minimal_plan(self, output_root: str) -> DotsRunPlan:
         return DotsRunPlan(
             mode=MODE_LOOP_STIMULI,
@@ -98,6 +117,7 @@ class DotsRunnerHardwareTests(unittest.TestCase):
             "arduino_port": "COM3",
             "acq_trigger_pin": 11,
             "aux_trigger_pin": 13,
+            "trigger_pulse_sec": 0.05,
             "monitor_name": "DLC_Projector",
             "monitor_width_cm": 15.2,
             "monitor_distance_cm": 1,

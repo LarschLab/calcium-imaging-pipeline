@@ -1,36 +1,36 @@
 # -*- coding: utf-8 -*-
 """
-Description: This script to test communication with an Arduino Board
+Description: Test the Arduino acquisition trigger line used by the dots GUI.
 
 @author: Matilde Perrino
 Created on 2024-11-11
 """
 
 import time
-from pyfirmata import Arduino, util
+from pyfirmata import Arduino
 
-PIN = 13
-# Specify the COM port where your Arduino is connected (COM3 in this case)
-board = Arduino('COM3')
+PORT = "COM3"
+PIN = 11
+PULSE_SEC = 0.05
+PULSE_COUNT = 5
+INTER_PULSE_SEC = 1.0
 
-# Give the board some time to initialize
-time.sleep(2)
+board = Arduino(PORT)
 
-# Set pin 12 as an OUTPUT
-pin = board.get_pin(f'd:{PIN}:o')
+try:
+    time.sleep(2)
+    pin = board.get_pin(f"d:{PIN}:o")
+    pin.write(0)
 
-pin.write(0)
+    print(f"Pulsing Arduino pin {PIN} on {PORT} {PULSE_COUNT} times ({PULSE_SEC:.3f} sec high).")
+    for pulse_index in range(PULSE_COUNT):
+        print(f"Pulse {pulse_index + 1}/{PULSE_COUNT}")
+        pin.write(1)
+        time.sleep(PULSE_SEC)
+        pin.write(0)
+        if pulse_index < PULSE_COUNT - 1:
+            time.sleep(INTER_PULSE_SEC)
+finally:
+    board.exit()
 
-# Turn the pin ON (HIGH)
-pin.write(1)
-print(f"Pin {PIN} is ON for 15 seconds")
-
-# Wait for 5 seconds
-time.sleep(3)
-
-# Turn the pin OFF (LOW)
-pin.write(0)
-print(f"Pin {PIN} is OFF")
-
-# Close the connection to the board
-board.exit()
+print("Arduino trigger test complete.")

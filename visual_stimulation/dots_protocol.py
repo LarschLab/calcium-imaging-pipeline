@@ -20,6 +20,7 @@ MONITOR_DISTANCE_CM = 1
 ARDUINO_PORT = "COM3"
 ACQ_TRIGGER_PIN = 11
 AUX_TRIGGER_PIN = 13
+TRIGGER_PULSE_SEC = 0.05
 DATA_PATH = Path(r"Z:\FAC\FBM\CIG\jlarsch\default\D2c\07_Data")
 VISUAL_STIMULATION_DIR = Path(__file__).resolve().parent
 SAMPLE_STIMULI_DIR = VISUAL_STIMULATION_DIR / "sample_stimuli" / "dots_mock"
@@ -184,6 +185,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "trigger_pulse_sec": TRIGGER_PULSE_SEC,
             "mock_mode": False,
             "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }
@@ -246,6 +248,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "trigger_pulse_sec": TRIGGER_PULSE_SEC,
             "mock_mode": False,
             "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }
@@ -309,6 +312,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "arduino_port": ARDUINO_PORT,
             "acq_trigger_pin": ACQ_TRIGGER_PIN,
             "aux_trigger_pin": AUX_TRIGGER_PIN,
+            "trigger_pulse_sec": TRIGGER_PULSE_SEC,
             "mock_mode": False,
             "mock_output_root": str(MOCK_OUTPUT_ROOT),
         }

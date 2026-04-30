@@ -7,7 +7,7 @@ Map common visual-stimulation tasks to the smallest owning script.
 ## Acquisition owners
 - `visual_stimulation/dots_gui.py`: primary operator entrypoint for the dots-family GUI, parameter editing with a fixed three-column Metadata/Functional/Stimulus form row, high-contrast delayed hover-help on field labels, automatic block-duration/frame preview for block-based modes, explicit summary messaging when inter-block pause is configured but inactive because only one block is planned, auto-refresh-only timeline preview (path + field changes, no manual preview button), per-stimulus-type timeline coloring, sample-stimulus selection, mock-run toggle, and run launch.
 - `visual_stimulation/dots_protocol.py`: shared dots-family owner for stimulus loading, exact trial-order generation, planned block derivation, and planned schedule construction.
-- `visual_stimulation/dots_runner.py`: shared dots-family owner for PsychoPy execution, Arduino trigger preflight/cleanup, mock execution, and metadata/log CSV writes (including explicit inter-block pause events in both experiment and block logs for block-based modes).
+- `visual_stimulation/dots_runner.py`: shared dots-family owner for PsychoPy execution, Arduino trigger preflight/cleanup and 50 ms pulse emission, mock execution, and metadata/log CSV writes (including explicit inter-block pause events in both experiment and block logs for block-based modes).
 - `visual_stimulation/dots_loop_stimuli.py`: thin wrapper that opens the GUI with sequential per-stimulus acquisition mode preselected.
 - `visual_stimulation/dots_loop_blocks.py`: thin wrapper that opens the GUI with block-based mode preselected.
 - `visual_stimulation/dots_continous_session.py`: thin wrapper that opens the GUI with continuous-session mode preselected.
@@ -18,7 +18,7 @@ Map common visual-stimulation tasks to the smallest owning script.
 - `visual_stimulation/grid.py`: projector focus and coarse alignment display.
 - `visual_stimulation/line_fish_alignment.py`: fish orientation/alignment helper display.
 - `visual_stimulation/visual_test_bouts.py`: quick pre-experiment response check using a subset of stimuli.
-- `visual_stimulation/test_arduino.py`: Arduino communication sanity check.
+- `visual_stimulation/test_arduino.py`: Arduino acquisition-trigger sanity check that pulses COM3 pin 11 before full dots runs.
 
 ## Offline/support analysis owners
 - `visual_stimulation/metadata_sync_analysis.py`: parse ScanImage TIFF metadata and compare aux trigger timestamps.
