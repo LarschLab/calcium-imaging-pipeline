@@ -78,6 +78,38 @@ class DotsProtocolTests(unittest.TestCase):
             second_order = [row["stimulus_name"] for row in plan_to_schedule_rows(plan) if row["kind"] == "stimulus"]
             self.assertEqual(first_order, second_order)
 
+    def test_seeded_random_order_is_stable_across_plan_builds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "alpha.csv", frames=30)
+            self._write_stimulus(tmp_path / "beta.csv", frames=30)
+            self._write_stimulus(tmp_path / "gamma.csv", frames=30)
+
+            defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
+            defaults["stimuli_params"]["n_rep_stim"] = 2
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["inter_block_pause_sec"] = 0
+            defaults["runtime"]["stimulus_shuffle_seed"] = 12345
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_BLOCKS,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                tmp_path,
+            )
+            catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_BLOCKS)
+
+            first_plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
+            second_plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
+
+            self.assertEqual(
+                [trial.stimulus_name for trial in first_plan.trials],
+                [trial.stimulus_name for trial in second_plan.trials],
+            )
+
     def test_block_mode_uses_zero_based_real_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import colorsys
+import json
+import random
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -42,6 +44,17 @@ WINDOW_SAFETY_MARGIN_PX = 80
 TOOLTIP_BG_COLOR = "#111827"
 TOOLTIP_FG_COLOR = "#f9fafb"
 PREVIEW_PENDING_RUN_BLOCK_REASON = "Wait for auto-preview to refresh current settings before running."
+DEFAULT_INITIAL_MODE = MODE_LOOP_BLOCKS
+GUI_SETTINGS_PATH = Path.home() / ".calcium_imaging_pipeline" / "dots_gui_settings.json"
+GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY = "stimuli_params_by_mode"
+LEGEND_ENTRIES_PER_ROW = 4
+REMEMBERED_METADATA_FIELDS = (
+    "experiment_name",
+    "experimenter",
+    "fish_ID",
+    "fish_birth",
+    "genotype",
+)
 
 FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
     "metadata": {
@@ -101,6 +114,56 @@ def compute_group_grid_positions(group_keys: tuple[str, ...], columns: int) -> d
     if columns <= 0:
         raise ValueError("columns must be a positive integer")
     return {group_key: (index // columns, index % columns) for index, group_key in enumerate(group_keys)}
+
+
+def compute_legend_grid_positions(entry_count: int, entries_per_row: int) -> list[tuple[int, int]]:
+    if entries_per_row <= 0:
+        raise ValueError("entries_per_row must be a positive integer")
+    return [
+        (entry_index // entries_per_row, (entry_index % entries_per_row) * 2)
+        for entry_index in range(entry_count)
+    ]
+
+
+def load_gui_settings(settings_path: Path = GUI_SETTINGS_PATH) -> dict[str, Any]:
+    try:
+        with settings_path.open("r", encoding="utf-8") as settings_file:
+            settings = json.load(settings_file)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def save_gui_settings(settings: dict[str, Any], settings_path: Path = GUI_SETTINGS_PATH) -> None:
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    with settings_path.open("w", encoding="utf-8") as settings_file:
+        json.dump(settings, settings_file, indent=2, sort_keys=True)
+
+
+def build_remembered_gui_settings(
+    metadata: dict[str, Any],
+    stimuli_dir: str,
+    mode: str | None = None,
+    stimuli_params: dict[str, Any] | None = None,
+    existing_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    settings = dict(existing_settings) if isinstance(existing_settings, dict) else {}
+    remembered_metadata = {
+        field_name: metadata[field_name]
+        for field_name in REMEMBERED_METADATA_FIELDS
+        if field_name in metadata
+    }
+    settings["metadata"] = remembered_metadata
+    settings["stimuli_dir"] = stimuli_dir
+    if mode is not None and stimuli_params is not None:
+        remembered_by_mode = settings.get(GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY, {})
+        if not isinstance(remembered_by_mode, dict):
+            remembered_by_mode = {}
+        else:
+            remembered_by_mode = dict(remembered_by_mode)
+        remembered_by_mode[mode] = dict(stimuli_params)
+        settings[GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY] = remembered_by_mode
+    return settings
 
 
 def build_base_preview_summary(plan: DotsRunPlan) -> str:
@@ -168,6 +231,8 @@ class DotsGuiApp:
         self.preview_is_current = False
         self.run_block_reason = PREVIEW_PENDING_RUN_BLOCK_REASON
         self.dirty = True
+        self.remembered_settings = load_gui_settings()
+        self.stimulus_shuffle_seed = self._new_stimulus_shuffle_seed()
 
         self._build_layout()
         self._load_mode(initial_mode)
@@ -292,7 +357,7 @@ class DotsGuiApp:
         )
 
         self.timeline_canvas.bind("<Configure>", lambda _: self._draw_timeline())
-        self.stimuli_dir_var.trace_add("write", lambda *_: self._mark_dirty())
+        self.stimuli_dir_var.trace_add("write", lambda *_: self._mark_dirty(randomize_stimulus_order=True))
         self.mock_output_root_var.trace_add("write", lambda *_: self._mark_dirty())
         self._update_mock_output_visibility()
 
@@ -309,6 +374,7 @@ class DotsGuiApp:
 
     def _load_mode(self, mode: str) -> None:
         self.mode_var.set(mode)
+        self._refresh_stimulus_shuffle_seed()
         defaults = get_mode_defaults(mode)
         self.runtime_defaults = defaults["runtime"]
         for child in self.forms_container.winfo_children():
@@ -330,16 +396,23 @@ class DotsGuiApp:
                 label = ttk.Label(frame, text=field_name)
                 label.grid(row=field_index, column=0, sticky="w")
                 self._install_label_tooltip(label, group_key, field_name, group_label)
-                variable, widget = self._create_input(frame, field_name, field_value)
+                variable, widget = self._create_input(frame, group_key, field_name, field_value)
                 widget.grid(row=field_index, column=1, sticky="ew", padx=(8, 0), pady=2)
                 self.field_vars[group_key][field_name] = variable
 
         self._sync_forms_scrollregion()
         self.forms_canvas.yview_moveto(0)
+        self._apply_remembered_settings()
         self.current_plan = None
         self._mark_dirty("Protocol changed. Preview will refresh automatically.")
 
-    def _create_input(self, parent: ttk.LabelFrame, field_name: str, field_value: Any) -> tuple[Any, ttk.Widget]:
+    def _create_input(
+        self,
+        parent: ttk.LabelFrame,
+        group_key: str,
+        field_name: str,
+        field_value: Any,
+    ) -> tuple[Any, ttk.Widget]:
         if field_name == "fish_orientation":
             variable = tk.StringVar(value=str(field_value))
             widget = ttk.Combobox(parent, textvariable=variable, state="readonly", values=["bottom-left", "top-right"])
@@ -351,10 +424,21 @@ class DotsGuiApp:
             variable = tk.StringVar(value=text)
             widget = ttk.Entry(parent, textvariable=variable)
 
+        randomize_stimulus_order = group_key == "stimuli_params"
         if isinstance(variable, tk.BooleanVar):
-            variable.trace_add("write", lambda *_: self._mark_dirty())
+            variable.trace_add(
+                "write",
+                lambda *_, randomize=randomize_stimulus_order: self._mark_dirty(
+                    randomize_stimulus_order=randomize
+                ),
+            )
         else:
-            variable.trace_add("write", lambda *_: self._mark_dirty())
+            variable.trace_add(
+                "write",
+                lambda *_, randomize=randomize_stimulus_order: self._mark_dirty(
+                    randomize_stimulus_order=randomize
+                ),
+            )
         return variable, widget
 
     def _install_label_tooltip(self, label: ttk.Label, group_key: str, field_name: str, group_label: str) -> None:
@@ -413,6 +497,27 @@ class DotsGuiApp:
         mode_label = "enabled" if self.mock_mode_var.get() else "disabled"
         self._mark_dirty(f"Mock run {mode_label}. Refreshing preview.")
 
+    def _apply_remembered_settings(self) -> None:
+        metadata_settings = self.remembered_settings.get("metadata", {})
+        if isinstance(metadata_settings, dict):
+            metadata_vars = self.field_vars.get("metadata", {})
+            for field_name in REMEMBERED_METADATA_FIELDS:
+                if field_name in metadata_settings and field_name in metadata_vars:
+                    remembered_value = metadata_settings[field_name]
+                    metadata_vars[field_name].set("" if remembered_value is None else str(remembered_value))
+        stimuli_dir = self.remembered_settings.get("stimuli_dir")
+        if isinstance(stimuli_dir, str) and stimuli_dir:
+            self.stimuli_dir_var.set(stimuli_dir)
+        stimuli_params_by_mode = self.remembered_settings.get(GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY, {})
+        if not isinstance(stimuli_params_by_mode, dict):
+            return
+        stimuli_params_settings = stimuli_params_by_mode.get(self.mode_var.get(), {})
+        if isinstance(stimuli_params_settings, dict):
+            stimuli_vars = self.field_vars.get("stimuli_params", {})
+            for field_name, remembered_value in stimuli_params_settings.items():
+                if field_name in stimuli_vars:
+                    stimuli_vars[field_name].set("" if remembered_value is None else str(remembered_value))
+
     def _update_mock_output_visibility(self) -> None:
         if self.mock_mode_var.get():
             self.mock_output_label.grid()
@@ -421,7 +526,16 @@ class DotsGuiApp:
             self.mock_output_label.grid_remove()
             self.mock_output_row.grid_remove()
 
-    def _mark_dirty(self, status: str | None = None) -> None:
+    @staticmethod
+    def _new_stimulus_shuffle_seed() -> int:
+        return random.randrange(2**32)
+
+    def _refresh_stimulus_shuffle_seed(self) -> None:
+        self.stimulus_shuffle_seed = self._new_stimulus_shuffle_seed()
+
+    def _mark_dirty(self, status: str | None = None, randomize_stimulus_order: bool = False) -> None:
+        if randomize_stimulus_order:
+            self._refresh_stimulus_shuffle_seed()
         self.dirty = True
         self.preview_is_current = False
         self._set_run_block_reason(PREVIEW_PENDING_RUN_BLOCK_REASON)
@@ -476,6 +590,7 @@ class DotsGuiApp:
             runtime_defaults = dict(self.runtime_defaults)
             runtime_defaults["mock_mode"] = bool(self.mock_mode_var.get())
             runtime_defaults["mock_output_root"] = self.mock_output_root_var.get() or str(MOCK_OUTPUT_ROOT)
+            runtime_defaults["stimulus_shuffle_seed"] = self.stimulus_shuffle_seed
             metadata, functional_params, stimuli_params, runtime = prepare_run_config(
                 self.mode_var.get(),
                 metadata,
@@ -512,8 +627,25 @@ class DotsGuiApp:
         self.preview_is_current = True
         self.dirty = False
         self._set_run_block_reason(run_block_reason)
+        self._remember_current_settings()
         self._render_legend()
         self._draw_timeline()
+
+    def _remember_current_settings(self) -> None:
+        if not self.current_plan:
+            return
+        settings = build_remembered_gui_settings(
+            self.current_plan.metadata,
+            self.current_plan.runtime.get("stimuli_dir", self.stimuli_dir_var.get()),
+            self.current_plan.mode,
+            self.current_plan.stimuli_params,
+            self.remembered_settings,
+        )
+        try:
+            save_gui_settings(settings)
+            self.remembered_settings = settings
+        except OSError as exc:
+            self.status_var.set(f"Preview is current, but GUI settings were not saved: {exc}")
 
     def _stimulus_type_color_map(self) -> dict[str, str]:
         if not self.current_plan:
@@ -551,11 +683,19 @@ class DotsGuiApp:
         entries.extend(
             (f"stimulus: {stim_type}", color) for stim_type, color in self._stimulus_type_color_map().items()
         )
+        positions = compute_legend_grid_positions(len(entries), LEGEND_ENTRIES_PER_ROW)
         for idx, (label, color) in enumerate(entries):
+            row_index, column_index = positions[idx]
             swatch = tk.Canvas(self.legend_frame, width=18, height=18, highlightthickness=0, background=legend_bg)
-            swatch.grid(row=0, column=idx * 2, padx=(0, 4))
+            swatch.grid(row=row_index, column=column_index, padx=(0, 4), pady=(0, 4))
             swatch.create_rectangle(1, 1, 17, 17, fill=color, outline="")
-            ttk.Label(self.legend_frame, text=label).grid(row=0, column=idx * 2 + 1, padx=(0, 16))
+            ttk.Label(self.legend_frame, text=label).grid(
+                row=row_index,
+                column=column_index + 1,
+                padx=(0, 16),
+                pady=(0, 4),
+                sticky="w",
+            )
 
     def _draw_timeline(self) -> None:
         canvas = self.timeline_canvas
@@ -707,4 +847,4 @@ def launch_dots_gui(initial_mode: str) -> None:
 
 
 if __name__ == "__main__":
-    launch_dots_gui(initial_mode="loop_stimuli")
+    launch_dots_gui(initial_mode=DEFAULT_INITIAL_MODE)

@@ -12,6 +12,35 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots GUI stable shuffle and stimulus defaults
+- Date and label: 2026-04-30, dots GUI stable shuffle and stimulus defaults
+- Slice goal: Prevent non-stimulus GUI edits from reshuffling random block-mode orders, keep large stimulus-type legends visible, and remember stimulus parameters for successive runs.
+- Passes completed in this session: Seeded protocol order -> GUI dirty-source tracking/settings update -> wrapped legend helper -> regression tests/docs -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: random stimulus order can now use `runtime["stimulus_shuffle_seed"]`, and CSV catalog loading is deterministic before ordering.
+  - `visual_stimulation/dots_gui.py`: maintains a GUI shuffle seed that refreshes only for stimulus parameter, stimulus folder, or protocol changes; metadata/functional/mock-output edits keep the existing randomized order.
+  - `visual_stimulation/dots_gui.py`: remembered GUI settings now include per-protocol stimulus parameters, and the timeline legend wraps across rows when many stimulus types are present.
+  - `tests/test_dots_protocol.py` and `tests/test_dots_gui_layout.py`: added coverage for seeded order stability, remembered per-mode stimulus parameters, and wrapped legend positions.
+  - `.agents/references/visual-stimulation-script-index.md`: updated GUI/protocol ownership notes for stable shuffle, wrapped legend, and remembered stimulus parameters.
+- What remains broken: Manual GUI confirmation on the operator display is still useful to inspect wrapped legend spacing with real large stimulus catalogs.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want a visible "reshuffle" button, keep it GUI-local by refreshing the same shuffle seed used for stimulus-affecting edits.
+- Rerun implications: Random block-mode orders remain stable across non-stimulus preview refreshes; valid previews update saved stimulus parameters for the active protocol mode.
+
+## 2026-04-30 - dots GUI remembered setup defaults
+- Date and label: 2026-04-30, dots GUI remembered setup defaults
+- Slice goal: Remember common operator metadata and stimulus folder across successive GUI sessions, and make Loop Blocks the standalone GUI default.
+- Passes completed in this session: GUI settings helper -> standalone default update -> helper regression tests -> docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: now loads/saves remembered `experiment_name`, `experimenter`, `fish_ID`, `fish_birth`, `genotype`, and stimulus folder through a small JSON settings file after valid previews.
+  - `visual_stimulation/dots_gui.py`: direct script launch now starts in Loop Blocks; mode-specific wrapper scripts still launch their named modes.
+  - `tests/test_dots_gui_layout.py`: added coverage for remembered settings filtering, settings JSON round-trip/error handling, and the standalone default mode constant.
+  - `.agents/references/visual-stimulation-script-index.md`: updated the GUI ownership summary for remembered defaults and direct-launch mode.
+- What remains broken: Manual GUI confirmation on the operator machine is still useful to confirm the saved settings path and startup auto-preview behavior.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want per-mode remembered values or a visible reset button, keep it GUI-local unless protocol defaults intentionally change.
+- Rerun implications: A valid preview writes operator convenience state under the user home directory; experiment metadata/output semantics are unchanged until the operator previews/runs with those values.
+
 ## 2026-04-30 - dots detectable trigger pulse width
 - Date and label: 2026-04-30, dots GUI 50 ms trigger pulses
 - Slice goal: Make dots acquisition trigger outputs detectable by the microscope external-trigger input after COM3 access was confirmed working.

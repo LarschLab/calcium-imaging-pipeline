@@ -331,7 +331,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
 
 def load_stimuli_catalog(stimuli_dir: str | Path, mode: str) -> list[StimulusSpec]:
     stimuli_path = Path(stimuli_dir)
-    file_paths = list(stimuli_path.glob("*.csv"))
+    file_paths = sorted(stimuli_path.glob("*.csv"), key=lambda path: path.name)
     if mode == MODE_LOOP_STIMULI:
         file_paths.sort(key=_numeric_sort_key)
     if not file_paths:
@@ -668,7 +668,7 @@ def _build_trial_order(
             order.extend(base_order)
         return order
 
-    rng = random.Random()
+    rng = random.Random(runtime.get("stimulus_shuffle_seed"))
     for _ in range(n_reps):
         chunk = list(base_order)
         rng.shuffle(chunk)
