@@ -12,6 +12,19 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots GUI Arduino trigger preflight
+- Date and label: 2026-04-30, dots GUI COM3 startup failure handling
+- Slice goal: Prevent the GUI hardware path from starting projection when the Arduino trigger port cannot be opened, and release partially opened serial resources on setup failures.
+- Passes completed in this session: Runner trigger setup refactor -> serial failure regression tests -> reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_runner.py`: now opens/configures Arduino trigger pins before creating the PsychoPy window, reports a clear port-access failure naming the configured port, and exits a partially opened board when pin setup or initial writes fail.
+  - `tests/test_dots_runner_hardware.py`: added fake-hardware regressions for COM3 open failure, pin setup failure, and initial pin write failure.
+  - `.agents/references/visual-stimulation-script-index.md`: updated `dots_runner.py` ownership to include Arduino trigger preflight/cleanup.
+- What remains broken: Manual microscope confirmation is still required for real COM3 permissions and trigger pulses.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators need a projection-only fallback, add an explicit operator choice in the GUI instead of silently continuing without triggers.
+- Rerun implications: Failed COM3 access should now abort before projection starts and should not leave the GUI process holding a partially opened Arduino handle.
+
 ## 2026-04-30 - dots GUI direct-launch import fix
 - Date and label: 2026-04-30, dots runner repo-root import bootstrap
 - Slice goal: Make documented direct GUI launches resolve repo-root `utils.py` reliably, even when a third-party `utils` package is installed.

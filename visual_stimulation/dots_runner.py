@@ -58,7 +58,6 @@ def run_planned_experiment(plan: DotsRunPlan) -> Path:
 
 def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
     from psychopy import core, monitors, tools, visual
-    from pyfirmata import Arduino
 
     metadata = dict(plan.metadata)
     functional_params = dict(plan.functional_params)
@@ -67,31 +66,37 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
     meta_dir = _resolve_metadata_dir(metadata, runtime)
 
-    monitor = monitors.Monitor(runtime["monitor_name"], width=float(runtime["monitor_width_cm"]))
-    monitor.setSizePix(runtime["pixels_monitor"])
-    monitor.setDistance(float(runtime["monitor_distance_cm"]))
-    tools.monitorunittools.cm2pix(1, monitor)
+    win = None
+    board, pin_acq, pin_aux = _setup_trigger_pins(runtime)
 
-    win = visual.Window(
-        size=runtime["pixels_monitor"],
-        color=runtime["window_color"],
-        units="pix",
-        monitor=monitor,
-        screen=int(runtime["screen"]),
-        fullscr=bool(runtime["fullscr"]),
-    )
+    try:
+        monitor = monitors.Monitor(runtime["monitor_name"], width=float(runtime["monitor_width_cm"]))
+        monitor.setSizePix(runtime["pixels_monitor"])
+        monitor.setDistance(float(runtime["monitor_distance_cm"]))
+        tools.monitorunittools.cm2pix(1, monitor)
 
-    dot_radius = float(runtime.get("dot_radius_cm") or stimuli_params.get("dot_radius_cm", 0.2))
-    dots = [
-        visual.Circle(win=win, radius=dot_radius, fillColor="black", pos=[0, 0], units="cm")
-        for _ in range(int(stimuli_params["max_n_dots"]))
-    ]
+        win = visual.Window(
+            size=runtime["pixels_monitor"],
+            color=runtime["window_color"],
+            units="pix",
+            monitor=monitor,
+            screen=int(runtime["screen"]),
+            fullscr=bool(runtime["fullscr"]),
+        )
 
-    board = Arduino(runtime["arduino_port"])
-    pin_acq = board.get_pin(f'd:{int(runtime["acq_trigger_pin"])}:o')
-    pin_aux = board.get_pin(f'd:{int(runtime["aux_trigger_pin"])}:o')
-    pin_acq.write(0)
-    pin_aux.write(0)
+        dot_radius = float(runtime.get("dot_radius_cm") or stimuli_params.get("dot_radius_cm", 0.2))
+        dots = [
+            visual.Circle(win=win, radius=dot_radius, fillColor="black", pos=[0, 0], units="cm")
+            for _ in range(int(stimuli_params["max_n_dots"]))
+        ]
+    except Exception:
+        if win is not None:
+            win.close()
+        try:
+            board.exit()
+        except Exception:
+            pass
+        raise
 
     flip_coordinates = str(metadata.get("fish_orientation", "")).lower() == "bottom-left"
     stimulus_frames = {stimulus.runtime_key: stimulus.data_frame for stimulus in plan.stimuli_catalog}
@@ -207,7 +212,8 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
         print("\nManual interruption detected. Finalizing and saving logs...")
     finally:
         print("Experiment ended")
-        win.close()
+        if win is not None:
+            win.close()
         try:
             board.exit()
         except Exception:
@@ -228,6 +234,31 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
     )
     _append_post_run_metadata(meta_dir, current_date, metadata, stimuli_params, functional_params, runtime, plan)
     return meta_dir
+
+
+def _setup_trigger_pins(runtime: dict[str, Any]) -> tuple[Any, Any, Any]:
+    from pyfirmata import Arduino
+
+    port = str(runtime["arduino_port"])
+    board = None
+    try:
+        board = Arduino(port)
+        pin_acq = board.get_pin(f'd:{int(runtime["acq_trigger_pin"])}:o')
+        pin_aux = board.get_pin(f'd:{int(runtime["aux_trigger_pin"])}:o')
+        pin_acq.write(0)
+        pin_aux.write(0)
+    except Exception as exc:
+        if board is not None:
+            try:
+                board.exit()
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"Could not open Arduino trigger port {port}. The experiment was not started; "
+            "check that the device is connected, not already open in another program, "
+            "and that this user has permission to access the port."
+        ) from exc
+    return board, pin_acq, pin_aux
 
 
 def _run_mock_experiment(plan: DotsRunPlan) -> Path:
