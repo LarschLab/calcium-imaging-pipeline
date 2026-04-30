@@ -36,6 +36,8 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
             summary_text, run_block_reason = enrich_preview_summary_with_block_planning(plan, base_summary)
 
             self.assertTrue(summary_text.startswith(base_summary))
+            self.assertIn("Derived framerate: 2 Hz", summary_text)
+            self.assertIn("Derived n_volumes: 8", summary_text)
             self.assertIn("Planned blocks: 2", summary_text)
             self.assertIn("B0: 0:02 (2.00 sec, 4 frames)", summary_text)
             self.assertIn("B1: 0:02 (2.00 sec, 4 frames)", summary_text)

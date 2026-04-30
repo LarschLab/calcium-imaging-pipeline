@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "visual_stimulation"))
 from dots_gui import (  # noqa: E402
     DEFAULT_INITIAL_MODE,
     FORM_GROUP_COLUMNS,
+    GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY,
     GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY,
     INPUT_GROUP_ROWS,
     build_pre_run_checklist_items,
@@ -19,6 +20,7 @@ from dots_gui import (  # noqa: E402
     compute_legend_grid_positions,
     compute_group_grid_positions,
     count_unique_presented_stimuli,
+    format_field_label,
     format_block_volume_count,
     load_gui_settings,
     save_gui_settings,
@@ -141,6 +143,52 @@ class DotsGuiLayoutTests(unittest.TestCase):
                 MODE_LOOP_BLOCKS: {"n_rep_stim": 4},
             },
         )
+
+    def test_remembered_gui_settings_store_functional_params_per_mode_without_derived_fields(self) -> None:
+        settings = build_remembered_gui_settings(
+            {"experiment_name": "exp"},
+            "/stimuli",
+            MODE_LOOP_BLOCKS,
+            {"n_rep_stim": 4},
+            None,
+            {
+                "n_frames": 3,
+                "n_slices": 5,
+                "n_volumes": 8,
+                "framerate": 2.0,
+                "AOM_mW": 32,
+            },
+        )
+
+        self.assertEqual(
+            settings[GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY],
+            {MODE_LOOP_BLOCKS: {"n_frames": 3, "n_slices": 5, "AOM_mW": 32}},
+        )
+
+    def test_max_n_dots_defaults_remain_mode_specific(self) -> None:
+        self.assertEqual(get_mode_defaults(MODE_LOOP_STIMULI)["stimuli_params"]["max_n_dots"], 5)
+        self.assertEqual(get_mode_defaults(MODE_LOOP_BLOCKS)["stimuli_params"]["max_n_dots"], 6)
+        self.assertEqual(get_mode_defaults(MODE_CONTINUOUS_SESSION)["stimuli_params"]["max_n_dots"], 6)
+
+    def test_stimulus_field_labels_use_operator_friendly_text(self) -> None:
+        self.assertEqual(format_field_label("stimuli_params", "pre_stim_resting_sec"), "Pre-stim rest (s)")
+        self.assertEqual(format_field_label("stimuli_params", "pre_stim_pause_sec"), "Pre-stim pause (s)")
+        self.assertEqual(format_field_label("stimuli_params", "post_stim_pause_sec"), "Post-stim pause (s)")
+        self.assertEqual(format_field_label("stimuli_params", "inter_block_pause_sec"), "Inter-block pause (s)")
+        self.assertEqual(format_field_label("stimuli_params", "n_trials_per_block"), "Stimuli / block")
+        self.assertEqual(format_field_label("stimuli_params", "n_rep_stim"), "Stimuli repetitions")
+        self.assertEqual(format_field_label("stimuli_params", "max_n_dots"), "Max number of dots")
+
+    def test_metadata_and_functional_field_labels_use_operator_friendly_text(self) -> None:
+        self.assertEqual(format_field_label("metadata", "fish_ID"), "Fish ID")
+        self.assertEqual(format_field_label("metadata", "fish_age_dpf"), "Fish age (dpf)")
+        self.assertEqual(format_field_label("metadata", "respond_to_omr"), "Responds to OMR")
+        self.assertEqual(format_field_label("functional_params", "n_frames"), "Frames / plane")
+        self.assertEqual(format_field_label("functional_params", "n_slices"), "Number of planes")
+        self.assertEqual(format_field_label("functional_params", "AOM_mW"), "AOM power (mW)")
+
+    def test_field_label_fallback_does_not_change_parameter_key(self) -> None:
+        self.assertEqual(format_field_label("metadata", "future_field_name"), "future field name")
 
     def test_legend_positions_wrap_after_entries_per_row(self) -> None:
         self.assertEqual(

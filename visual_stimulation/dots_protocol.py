@@ -13,6 +13,7 @@ import pandas as pd
 
 
 FPS = 60
+MICROSCOPE_BASE_FRAME_RATE_HZ = 30
 PIXELS_MONITOR = [1280, 800]
 MONITOR_NAME = "DLC_Projector"
 MONITOR_WIDTH_CM = 15.2
@@ -122,6 +123,14 @@ class DotsRunPlan:
     @property
     def planned_total_acquisition_frames(self) -> int:
         return sum(self.planned_block_frame_counts)
+
+
+def derive_functional_framerate(functional_params: dict[str, Any]) -> float:
+    n_frames = float(functional_params.get("n_frames", 0))
+    n_slices = float(functional_params.get("n_slices", 0))
+    if n_frames <= 0 or n_slices <= 0:
+        raise ValueError("n_frames and n_slices must be greater than 0 to derive framerate")
+    return MICROSCOPE_BASE_FRAME_RATE_HZ / n_frames / n_slices
 
 
 def get_mode_defaults(mode: str) -> dict[str, Any]:
@@ -386,6 +395,7 @@ def prepare_run_config(
     prepared_runtime["mode"] = mode
     prepared_runtime["mock_mode"] = bool(prepared_runtime.get("mock_mode", False))
     prepared_runtime["mock_output_root"] = str(Path(prepared_runtime.get("mock_output_root", MOCK_OUTPUT_ROOT)))
+    prepared_functional["framerate"] = derive_functional_framerate(prepared_functional)
     return prepared_metadata, prepared_functional, prepared_stimuli, prepared_runtime
 
 
@@ -397,6 +407,8 @@ def build_run_plan(
     runtime: dict[str, Any],
     stimuli_catalog: list[StimulusSpec],
 ) -> DotsRunPlan:
+    functional_params = copy.deepcopy(functional_params)
+    functional_params["framerate"] = derive_functional_framerate(functional_params)
     stimulus_by_key = {stimulus.runtime_key: stimulus for stimulus in stimuli_catalog}
     order = _build_trial_order(mode, runtime, stimuli_params, stimuli_catalog)
     block_size = int(stimuli_params.get("n_trials_per_block", 1))
@@ -414,7 +426,7 @@ def build_run_plan(
     pre_stim_pause = float(stimuli_params.get("pre_stim_pause_sec", 0))
     post_stim_pause = float(stimuli_params.get("post_stim_pause_sec", 0))
     inter_block_pause = float(stimuli_params.get("inter_block_pause_sec", 0))
-    framerate = float(functional_params.get("framerate", 0))
+    framerate = float(functional_params["framerate"])
     trial_index = 0
 
     for block_num, block_trial_keys in enumerate(block_groups):
@@ -553,10 +565,12 @@ def build_run_plan(
                 block_num=block_num,
             )
 
+    functional_params["n_volumes"] = sum(block.acquisition_frame_count for block in planned_blocks)
+
     return DotsRunPlan(
         mode=mode,
         metadata=copy.deepcopy(metadata),
-        functional_params=copy.deepcopy(functional_params),
+        functional_params=functional_params,
         stimuli_params=copy.deepcopy(stimuli_params),
         runtime=copy.deepcopy(runtime),
         stimuli_catalog=list(stimuli_catalog),

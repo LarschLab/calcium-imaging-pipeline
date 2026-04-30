@@ -12,6 +12,32 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-04-30 - dots GUI friendly field labels
+- Date and label: 2026-04-30, dots GUI friendly field labels
+- Slice goal: Replace raw parameter-key form labels with easier operator-facing labels without changing output keys.
+- Passes completed in this session: GUI label mapping -> regression/reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: form labels now render through a GUI-only display mapping while `field_vars`, settings, protocol inputs, and metadata outputs keep existing parameter keys.
+  - Stimulus labels now use plain language such as `Pre-stim rest (s)`, `Stimuli / block`, `Stimuli repetitions`, and `Max number of dots`; functional labels include `Frames / plane` and `Number of planes`.
+  - `tests/test_dots_gui_layout.py`: added coverage for label mapping and fallback behavior.
+- What remains broken: The interpretation of `Stimuli repetitions` versus block count still needs lab clarification before any semantic change.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If `Stimuli repetitions` semantics change, update protocol behavior and downstream docs together rather than only relabeling the GUI.
+- Rerun implications: Existing outputs and saved setting keys are unchanged; only visible form labels changed.
+
+## 2026-04-30 - dots GUI derived functional settings
+- Date and label: 2026-04-30, dots GUI derived functional settings
+- Slice goal: Remove manual `n_volumes`/`framerate` GUI entry and remember editable functional microscope settings.
+- Passes completed in this session: Protocol derivation -> GUI settings update -> regression/docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: derives `framerate` as `30 / n_frames / n_slices` and writes `n_volumes` from planned total acquisition frames into run functional metadata.
+  - `visual_stimulation/dots_gui.py`: hides derived functional fields from the form and remembers editable functional params per mode after valid previews.
+  - Tests and visual-stimulation references now cover the derived functional contract.
+- What remains broken: Manual GUI confirmation on the operator display remains useful for field layout.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If microscope rate derivation needs flyback terms, update the protocol helper and docs together.
+- Rerun implications: Existing saved GUI settings keep loading; derived fields in old settings are ignored.
+
 ## 2026-04-30 - dots GUI string fish IDs
 - Date and label: 2026-04-30, dots GUI string fish IDs
 - Slice goal: Allow tank/fish composite IDs such as `L395_f01` in all dots GUI modes.

@@ -49,9 +49,12 @@ PREVIEW_PENDING_RUN_BLOCK_REASON = "Wait for auto-preview to refresh current set
 DEFAULT_INITIAL_MODE = MODE_LOOP_BLOCKS
 GUI_SETTINGS_PATH = Path.home() / ".calcium_imaging_pipeline" / "dots_gui_settings.json"
 GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY = "stimuli_params_by_mode"
+GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY = "functional_params_by_mode"
 LEGEND_ENTRIES_PER_ROW = 4
 AUTO_BLOCK_FIELD_NAME = "n_trials_per_block"
 REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS = {AUTO_BLOCK_FIELD_NAME}
+DERIVED_FUNCTIONAL_FIELDS = {"n_volumes", "framerate"}
+REMEMBERED_FUNCTIONAL_PARAM_EXCLUDED_FIELDS = DERIVED_FUNCTIONAL_FIELDS
 REMEMBERED_METADATA_FIELDS = (
     "experiment_name",
     "experimenter",
@@ -84,9 +87,9 @@ FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
         "mode": "Microscope acquisition mode for this run.",
         "n_frames": "Frames per volume acquisition cycle.",
         "n_slices": "Slices per volume acquisition cycle.",
-        "n_volumes": "Target number of volumes to acquire.",
+        "n_volumes": "Derived total acquisition volumes for the planned run.",
         "step_size": "Z-step size between slices.",
-        "framerate": "Acquisition frame rate in Hz.",
+        "framerate": "Derived acquisition volume rate in Hz.",
         "AOM_mW": "Laser power (mW) used for AOM.",
         "ETL_start": "Initial ETL offset or focal setting.",
         "pump_speed": "Perfusion pump speed setting.",
@@ -103,6 +106,52 @@ FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
         "n_rep_stim": "How many repetitions per stimulus entry.",
         "max_n_dots": "Maximum number of dots allowed in selected stimuli.",
         "dot_radius_cm": "Dot radius in centimeters when fixed radius mode is used.",
+    },
+}
+
+FIELD_DISPLAY_LABELS: dict[str, dict[str, str]] = {
+    "metadata": {
+        "experiment_name": "Experiment name",
+        "experimenter": "Experimenter",
+        "experiment_date": "Experiment date",
+        "fish_ID": "Fish ID",
+        "fish_birth": "Fish birth date",
+        "fish_age_dpf": "Fish age (dpf)",
+        "genotype": "Genotype",
+        "size": "Fish size",
+        "time_embedding": "Embedding time",
+        "fish_orientation": "Fish orientation",
+        "respond_to_omr": "Responds to OMR",
+        "respond_to_vibrations": "Responds to vibrations",
+        "respond_to_bouts": "Responds to bouts",
+        "embedding_comments": "Embedding comments",
+        "projector_LED_current": "Projector LED current",
+        "projector_power": "Projector power",
+        "general_comments": "General comments",
+    },
+    "functional_params": {
+        "mode": "Acquisition mode",
+        "n_frames": "Frames / plane",
+        "n_slices": "Number of planes",
+        "n_volumes": "Volume count",
+        "step_size": "Step size (um)",
+        "framerate": "Volume rate (Hz)",
+        "AOM_mW": "AOM power (mW)",
+        "ETL_start": "ETL start",
+        "pump_speed": "Pump speed",
+        "volume_flyback": "Volume flyback",
+        "frame_flyback": "Frame flyback",
+        "motion_correction": "Motion correction",
+    },
+    "stimuli_params": {
+        "pre_stim_resting_sec": "Pre-stim rest (s)",
+        "pre_stim_pause_sec": "Pre-stim pause (s)",
+        "post_stim_pause_sec": "Post-stim pause (s)",
+        "inter_block_pause_sec": "Inter-block pause (s)",
+        "n_trials_per_block": "Stimuli / block",
+        "n_rep_stim": "Stimuli repetitions",
+        "max_n_dots": "Max number of dots",
+        "dot_radius_cm": "Dot radius (cm)",
     },
 }
 
@@ -131,6 +180,10 @@ def compute_legend_grid_positions(entry_count: int, entries_per_row: int) -> lis
 
 def count_unique_presented_stimuli(stimuli_catalog: list[StimulusSpec]) -> int:
     return len({stimulus.runtime_key for stimulus in stimuli_catalog})
+
+
+def format_field_label(group_key: str, field_name: str) -> str:
+    return FIELD_DISPLAY_LABELS.get(group_key, {}).get(field_name, field_name.replace("_", " "))
 
 
 def format_block_volume_count(plan: DotsRunPlan) -> str:
@@ -170,6 +223,7 @@ def build_remembered_gui_settings(
     mode: str | None = None,
     stimuli_params: dict[str, Any] | None = None,
     existing_settings: dict[str, Any] | None = None,
+    functional_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = dict(existing_settings) if isinstance(existing_settings, dict) else {}
     remembered_metadata = {
@@ -191,16 +245,32 @@ def build_remembered_gui_settings(
             if field_name not in REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS
         }
         settings[GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY] = remembered_by_mode
+    if mode is not None and functional_params is not None:
+        remembered_functional_by_mode = settings.get(GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY, {})
+        if not isinstance(remembered_functional_by_mode, dict):
+            remembered_functional_by_mode = {}
+        else:
+            remembered_functional_by_mode = dict(remembered_functional_by_mode)
+        remembered_functional_by_mode[mode] = {
+            field_name: field_value
+            for field_name, field_value in functional_params.items()
+            if field_name not in REMEMBERED_FUNCTIONAL_PARAM_EXCLUDED_FIELDS
+        }
+        settings[GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY] = remembered_functional_by_mode
     return settings
 
 
 def build_base_preview_summary(plan: DotsRunPlan) -> str:
     first_trials = ", ".join(trial.stimulus_name for trial in plan.trials[:6]) or "none"
+    framerate = float(plan.functional_params.get("framerate", 0))
+    n_volumes = plan.functional_params.get("n_volumes", plan.planned_total_acquisition_frames)
     return (
         f"Mode: {MODE_LABELS[plan.mode]}\n"
         f"Stimuli: {len(plan.stimuli_catalog)} files\n"
         f"Trials: {plan.total_trials}\n"
         f"Total duration: {format_duration(plan.total_duration_sec)} ({plan.total_duration_sec:.2f} sec)\n"
+        f"Derived framerate: {framerate:.6g} Hz\n"
+        f"Derived n_volumes: {n_volumes}\n"
         f"Mock run: {'yes' if plan.runtime.get('mock_mode') else 'no'}\n"
         f"First trials: {first_trials}"
     )
@@ -424,7 +494,9 @@ class DotsGuiApp:
             self.field_vars[group_key] = {}
             values = defaults[group_key]
             for field_index, (field_name, field_value) in enumerate(values.items()):
-                label = ttk.Label(frame, text=field_name)
+                if group_key == "functional_params" and field_name in DERIVED_FUNCTIONAL_FIELDS:
+                    continue
+                label = ttk.Label(frame, text=format_field_label(group_key, field_name))
                 label.grid(row=field_index, column=0, sticky="w")
                 self._install_label_tooltip(label, group_key, field_name, group_label)
                 variable, widget = self._create_input(frame, group_key, field_name, field_value)
@@ -551,6 +623,15 @@ class DotsGuiApp:
             for field_name, remembered_value in stimuli_params_settings.items():
                 if field_name in stimuli_vars and field_name not in REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS:
                     stimuli_vars[field_name].set("" if remembered_value is None else str(remembered_value))
+        functional_params_by_mode = self.remembered_settings.get(GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY, {})
+        if not isinstance(functional_params_by_mode, dict):
+            return
+        functional_params_settings = functional_params_by_mode.get(self.mode_var.get(), {})
+        if isinstance(functional_params_settings, dict):
+            functional_vars = self.field_vars.get("functional_params", {})
+            for field_name, remembered_value in functional_params_settings.items():
+                if field_name in functional_vars and field_name not in REMEMBERED_FUNCTIONAL_PARAM_EXCLUDED_FIELDS:
+                    functional_vars[field_name].set("" if remembered_value is None else str(remembered_value))
 
     def _update_mock_output_visibility(self) -> None:
         if self.mock_mode_var.get():
@@ -690,6 +771,7 @@ class DotsGuiApp:
             self.current_plan.mode,
             self.current_plan.stimuli_params,
             self.remembered_settings,
+            self.current_plan.functional_params,
         )
         try:
             save_gui_settings(settings)

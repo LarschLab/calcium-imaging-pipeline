@@ -23,10 +23,13 @@ Microscope acquisition frames are the recorded 2P frames captured during the blo
 The frame count for a block is derived from the planned block duration:
 `ceil(block_duration_sec * framerate)`
 
+The dots GUI derives the acquisition volume rate from editable microscope shape fields:
+`framerate = 30 / n_frames / n_slices`
+
 The GUI pre-run checklist also reminds operators of the total volume count to enter for each planned block.
 It shows a single count because planned blocks are expected to use the same acquisition frame count.
 
-That derived frame count is a microscope-side planning value. It is not entered manually.
+The GUI derives `n_volumes` from the planned total acquisition frame count. Neither derived value is entered manually.
 
 ## Metadata ownership
 Operator-entered fields include the run metadata, stimulus parameters, and microscope settings shown in the GUI.
@@ -37,5 +40,7 @@ Derived fields include:
 - planned block acquisition frame counts
 - planned total acquisition frames
 - planned total duration
+- functional framerate
+- functional n_volumes
 
 The planned block CSV is the authoritative block-level artifact for block-based dots runs.

@@ -15,6 +15,7 @@ from dots_protocol import (  # noqa: E402
     FPS,
     SAMPLE_STIMULI_DIR,
     build_run_plan,
+    derive_functional_framerate,
     get_mode_defaults,
     infer_stimulus_type,
     load_stimuli_catalog,
@@ -176,6 +177,46 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 0.25, places=6)
             self.assertAlmostEqual(plan.total_duration_sec, 1.25, places=6)
             self.assertEqual(summarize_plan(plan)["planned_total_acquisition_frames"], 1)
+
+    def test_functional_framerate_is_derived_from_frames_and_slices(self) -> None:
+        self.assertAlmostEqual(
+            derive_functional_framerate({"n_frames": 3, "n_slices": 5, "framerate": 999}),
+            2.0,
+            places=6,
+        )
+
+    def test_plan_functional_params_include_derived_framerate_and_n_volumes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+
+            defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
+            defaults["stimuli_params"]["n_rep_stim"] = 1
+            defaults["stimuli_params"]["n_trials_per_block"] = 2
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["inter_block_pause_sec"] = 0
+            defaults["functional_params"]["n_frames"] = 3
+            defaults["functional_params"]["n_slices"] = 5
+            defaults["functional_params"]["framerate"] = 999
+            defaults["functional_params"]["n_volumes"] = 999
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_BLOCKS,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                tmp_path,
+            )
+            catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_BLOCKS)
+            plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
+
+            self.assertAlmostEqual(functional["framerate"], 2.0, places=6)
+            self.assertAlmostEqual(plan.functional_params["framerate"], 2.0, places=6)
+            self.assertEqual(plan.functional_params["n_volumes"], plan.planned_total_acquisition_frames)
+            self.assertEqual(plan.functional_params["n_volumes"], 4)
 
     def test_mock_run_writes_canonical_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
