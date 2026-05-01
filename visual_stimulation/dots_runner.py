@@ -165,8 +165,8 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                 _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
                 block_clock = core.Clock()
                 log_event(f"B{block_num}_start")
-                if block_index == 0:
-                    _flip_for_duration(win, float(stimuli_params["pre_stim_resting_sec"]))
+                if planned_block.block_kind == "baseline_rest":
+                    _flip_for_duration(win, planned_block.duration_sec)
 
                 for trial_index in planned_block.trial_indices:
                     trial = plan.trials[trial_index]
@@ -205,7 +205,12 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                     _flip_for_duration(win, float(stimuli_params[post_pause_key]))
 
                 log_event(f"B{block_num}_end")
-                if block_index < len(plan.planned_blocks) - 1:
+                next_block = plan.planned_blocks[block_index + 1] if block_index < len(plan.planned_blocks) - 1 else None
+                if (
+                    next_block is not None
+                    and planned_block.block_kind in {"baseline_rest", "stimulus_block"}
+                    and next_block.block_kind == "stimulus_block"
+                ):
                     log_event(f"B{block_num}_interblock_pause")
                     _flip_for_duration(win, float(stimuli_params["inter_block_pause_sec"]))
     except KeyboardInterrupt:
@@ -305,9 +310,10 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
         post_pause_key = "pre_stim_pause_sec" if plan.mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec"
         for block_index, planned_block in enumerate(plan.planned_blocks):
             block_num = planned_block.block_num
+            state.reset_block()
             state.log_event(exp_event_log, block_event_log, f"B{block_num}_start")
-            if block_index == 0:
-                state.advance(float(stimuli_params["pre_stim_resting_sec"]))
+            if planned_block.block_kind == "baseline_rest":
+                state.advance(planned_block.duration_sec)
 
             for trial_index in planned_block.trial_indices:
                 trial = plan.trials[trial_index]
@@ -329,7 +335,12 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
                 state.advance(float(stimuli_params[post_pause_key]))
 
             state.log_event(exp_event_log, block_event_log, f"B{block_num}_end")
-            if block_index < len(plan.planned_blocks) - 1:
+            next_block = plan.planned_blocks[block_index + 1] if block_index < len(plan.planned_blocks) - 1 else None
+            if (
+                next_block is not None
+                and planned_block.block_kind in {"baseline_rest", "stimulus_block"}
+                and next_block.block_kind == "stimulus_block"
+            ):
                 state.log_event(exp_event_log, block_event_log, f"B{block_num}_interblock_pause")
                 state.advance(float(stimuli_params["inter_block_pause_sec"]))
                 state.reset_block()

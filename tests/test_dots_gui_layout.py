@@ -20,10 +20,12 @@ from dots_gui import (  # noqa: E402
     compute_legend_grid_positions,
     compute_group_grid_positions,
     count_unique_presented_stimuli,
+    derive_standard_trials_per_block,
     format_field_label,
     format_block_volume_count,
     load_gui_settings,
     save_gui_settings,
+    should_show_fish_alignment,
 )
 from dots_protocol import (  # noqa: E402
     DotsRunPlan,
@@ -209,6 +211,15 @@ class DotsGuiLayoutTests(unittest.TestCase):
 
         self.assertEqual(count_unique_presented_stimuli(catalog), 2)
 
+    def test_standard_trials_per_block_is_twice_unique_presented_stimuli(self) -> None:
+        catalog = [
+            self._stimulus("stim_a", "stim"),
+            self._stimulus("stim_b", "stim"),
+            self._stimulus("control", "control"),
+        ]
+
+        self.assertEqual(derive_standard_trials_per_block(catalog), 4)
+
     def test_block_volume_count_formats_single_planned_block_volume(self) -> None:
         plan = DotsRunPlan(
             mode=MODE_LOOP_BLOCKS,
@@ -231,7 +242,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
     def test_pre_run_checklist_items_include_block_volumes_and_light_path(self) -> None:
         plan = DotsRunPlan(
             mode=MODE_LOOP_BLOCKS,
-            metadata={},
+            metadata={"fish_orientation": "top-right"},
             functional_params={},
             stimuli_params={},
             runtime={},
@@ -246,8 +257,38 @@ class DotsGuiLayoutTests(unittest.TestCase):
 
         checklist_items = build_pre_run_checklist_items(plan)
 
+        self.assertTrue(any("top-right alignment marker" in item for item in checklist_items))
         self.assertTrue(any("4 volumes" in item for item in checklist_items))
         self.assertTrue(any("light-path levers" in item for item in checklist_items))
+
+    def test_fish_alignment_is_skipped_for_mock_runs_only(self) -> None:
+        hardware_plan = DotsRunPlan(
+            mode=MODE_LOOP_BLOCKS,
+            metadata={},
+            functional_params={},
+            stimuli_params={},
+            runtime={"mock_mode": False},
+            stimuli_catalog=[],
+            trials=[],
+            planned_blocks=[],
+            timeline=[],
+            total_duration_sec=0,
+        )
+        mock_plan = DotsRunPlan(
+            mode=MODE_LOOP_BLOCKS,
+            metadata={},
+            functional_params={},
+            stimuli_params={},
+            runtime={"mock_mode": True},
+            stimuli_catalog=[],
+            trials=[],
+            planned_blocks=[],
+            timeline=[],
+            total_duration_sec=0,
+        )
+
+        self.assertTrue(should_show_fish_alignment(hardware_plan))
+        self.assertFalse(should_show_fish_alignment(mock_plan))
 
     @staticmethod
     def _stimulus(display_name: str, runtime_key: str) -> StimulusSpec:

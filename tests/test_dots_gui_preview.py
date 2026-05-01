@@ -37,12 +37,13 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
 
             self.assertTrue(summary_text.startswith(base_summary))
             self.assertIn("Derived framerate: 2 Hz", summary_text)
-            self.assertIn("Derived n_volumes: 8", summary_text)
-            self.assertIn("Planned blocks: 2", summary_text)
-            self.assertIn("B0: 0:02 (2.00 sec, 4 frames)", summary_text)
-            self.assertIn("B1: 0:02 (2.00 sec, 4 frames)", summary_text)
-            self.assertIn("Inter-block pause contribution: 1 x 3.50 sec (3.50 sec total)", summary_text)
-            self.assertIn("Total planned acquisition frames: 8", summary_text)
+            self.assertIn("Derived n_volumes: 12", summary_text)
+            self.assertIn("Planned blocks: 3", summary_text)
+            self.assertIn("B0 baseline rest: 0:02 (2.00 sec, 4 frames)", summary_text)
+            self.assertIn("B1 stimulus block: 0:02 (2.00 sec, 4 frames)", summary_text)
+            self.assertIn("B2 stimulus block: 0:02 (2.00 sec, 4 frames)", summary_text)
+            self.assertIn("Inter-block pause contribution: 2 x 3.50 sec (7.00 sec total)", summary_text)
+            self.assertIn("Total planned acquisition frames: 12", summary_text)
             self.assertNotIn("Manual frame list", summary_text)
             self.assertIsNone(run_block_reason)
 
@@ -58,12 +59,25 @@ class DotsGuiPreviewSummaryTests(unittest.TestCase):
             base_summary = build_base_preview_summary(plan)
             summary_text, run_block_reason = enrich_preview_summary_with_block_planning(plan, base_summary)
 
-            self.assertIn("Planned blocks: 1", summary_text)
-            self.assertIn(
-                "Inter-block pause: not applied (single block; reduce n_trials_per_block to create multiple blocks)",
-                summary_text,
-            )
+            self.assertIn("Planned blocks: 2", summary_text)
+            self.assertIn("B0 baseline rest: 0:04 (4.00 sec, 8 frames)", summary_text)
+            self.assertIn("B1 stimulus block: 0:04 (4.00 sec, 8 frames)", summary_text)
+            self.assertIn("Inter-block pause contribution: 1 x 20.00 sec (20.00 sec total)", summary_text)
             self.assertIsNone(run_block_reason)
+
+    def test_block_mode_preview_blocks_run_when_acquisition_block_counts_differ(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+            self._write_stimulus(tmp_path / "stim_c.csv", frames=60)
+            plan = self._build_block_mode_plan(tmp_path, n_trials_per_block=2, inter_block_pause_sec=0)
+
+            base_summary = build_base_preview_summary(plan)
+            _, run_block_reason = enrich_preview_summary_with_block_planning(plan, base_summary)
+
+            self.assertEqual(plan.planned_block_frame_counts, [4, 4, 2])
+            self.assertIn("unequal volume counts", run_block_reason)
 
     def test_loop_stimuli_mode_preview_summary_is_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1,79 +1,123 @@
 # -*- coding: utf-8 -*-
 """
-Description:
-    Draws a 1 cm line from the center of the screen, pointing at -45°
-    (with 0° defined as up), and adds a shorter perpendicular line crossing it
-    at the center. A dot is added to either the top-right or bottom-left of the line,
-    as selected via GUI.
+Draw a fish-orientation alignment marker on the projector.
 
-@author: Matilde Perrino
-Created on: 2025-02-17
+The module is import-safe for GUI integration. Running it directly keeps the
+original standalone behavior: prompt for the dot position, show the projector
+window, and close after a keypress.
 """
 
-from psychopy import visual, core, event, monitors, tools, gui
+from __future__ import annotations
+
 import math
+from typing import Any
 
-#Set projector screen properties
-#Monitor and window setup
+
 PIXELS_MONITOR = [1280, 800]
-monitor = monitors.Monitor('DLC_Projector', width=15.2)
-monitor.setSizePix(PIXELS_MONITOR)
-PIXEL_CM_RATIO = tools.monitorunittools.cm2pix(1, monitor)
-FPS = 60
-monitor.setDistance(1)
-
-# GUI
-dlg = gui.Dlg(title="Dot Position Selector")
-dlg.addField("Dot position:", choices=["bottom-left", "top-right"])
-if not dlg.show():
-    core.quit()
-dot_position = dlg.data[0]  # "top-right" or "bottom-left"
-
-# Initialize window (units in pixels)
-win = visual.Window(size=PIXELS_MONITOR,units="pix", fullscr=True, color="red", monitor=monitor, screen=1)
-
-# Define line parameters
-line_length_cm = 0.6
-line_length_pix = line_length_cm * PIXEL_CM_RATIO
-angle_deg = -45  # -45° from the top (0°)
-
-# Line vector
-dx = line_length_pix * math.sin(math.radians(angle_deg))
-dy = line_length_pix * math.cos(math.radians(angle_deg))
-
-# Draw main line (centered)
-line = visual.Line(win, start=(dx, dy), end=(-dx, -dy), lineColor="white", lineWidth=3)
-line.draw()
-
-# Define and draw the perpendicular line
-perpendicular_length_cm = 0.2  # shorter perpendicular line
-perpendicular_length_pix = perpendicular_length_cm * PIXEL_CM_RATIO
-
-# Calculate perpendicular direction (90° from the original line)
-dx_perp = perpendicular_length_pix * math.cos(math.radians(angle_deg - 90))
-dy_perp = perpendicular_length_pix * math.sin(math.radians(angle_deg - 90))
-
-# Draw the perpendicular line (centered at (0, 0))
-perpendicular_line = visual.Line(win, start=(dx_perp,dy_perp), end=(-dx_perp, -dy_perp),
-                                 lineColor="white", lineWidth=3)
-perpendicular_line.draw()
-
-# Define and draw dot for orientation
-distance_point = 0.1 * PIXEL_CM_RATIO
-dot_size = 0.1 * PIXEL_CM_RATIO
-# Determine dot position based on user choice
-if dot_position == "top-right":
-    dot_pos = [dx - distance_point, dy + distance_point]
-else:  # bottom-left
-    dot_pos = [-dx + distance_point, -dy - distance_point]
-
-dot = visual.Circle(win=win, size=dot_size, fillColor="white", pos=dot_pos)
-dot.draw()
+MONITOR_NAME = "DLC_Projector"
+MONITOR_WIDTH_CM = 15.2
+MONITOR_DISTANCE_CM = 1
+SCREEN = 1
+WINDOW_COLOR = "red"
+LINE_LENGTH_CM = 0.6
+PERPENDICULAR_LENGTH_CM = 0.2
+DOT_DISTANCE_CM = 0.1
+DOT_SIZE_CM = 0.1
+ANGLE_DEG = -45
+DOT_POSITION_CHOICES = ("bottom-left", "top-right")
 
 
-# Show both lines
-win.flip()
+def compute_alignment_geometry(dot_position: str, pixel_cm_ratio: float) -> dict[str, Any]:
+    if dot_position not in DOT_POSITION_CHOICES:
+        raise ValueError(f"Unsupported dot position: {dot_position}")
 
-# Wait for a keypress before closing
-event.waitKeys()
-win.close()
+    line_length_pix = LINE_LENGTH_CM * pixel_cm_ratio
+    dx = line_length_pix * math.sin(math.radians(ANGLE_DEG))
+    dy = line_length_pix * math.cos(math.radians(ANGLE_DEG))
+
+    perpendicular_length_pix = PERPENDICULAR_LENGTH_CM * pixel_cm_ratio
+    dx_perp = perpendicular_length_pix * math.cos(math.radians(ANGLE_DEG - 90))
+    dy_perp = perpendicular_length_pix * math.sin(math.radians(ANGLE_DEG - 90))
+
+    distance_point = DOT_DISTANCE_CM * pixel_cm_ratio
+    dot_size = DOT_SIZE_CM * pixel_cm_ratio
+    if dot_position == "top-right":
+        dot_pos = [dx - distance_point, dy + distance_point]
+    else:
+        dot_pos = [-dx + distance_point, -dy - distance_point]
+
+    return {
+        "line_start": (dx, dy),
+        "line_end": (-dx, -dy),
+        "perpendicular_start": (dx_perp, dy_perp),
+        "perpendicular_end": (-dx_perp, -dy_perp),
+        "dot_pos": dot_pos,
+        "dot_size": dot_size,
+    }
+
+
+def show_fish_alignment(dot_position: str, runtime: dict[str, Any] | None = None) -> None:
+    from psychopy import event, monitors, tools, visual
+
+    runtime = dict(runtime or {})
+    pixels_monitor = runtime.get("pixels_monitor", PIXELS_MONITOR)
+    monitor = monitors.Monitor(
+        runtime.get("monitor_name", MONITOR_NAME),
+        width=float(runtime.get("monitor_width_cm", MONITOR_WIDTH_CM)),
+    )
+    monitor.setSizePix(pixels_monitor)
+    monitor.setDistance(float(runtime.get("monitor_distance_cm", MONITOR_DISTANCE_CM)))
+    pixel_cm_ratio = tools.monitorunittools.cm2pix(1, monitor)
+
+    win = visual.Window(
+        size=pixels_monitor,
+        units="pix",
+        fullscr=bool(runtime.get("fullscr", True)),
+        color=runtime.get("window_color", WINDOW_COLOR),
+        monitor=monitor,
+        screen=int(runtime.get("screen", SCREEN)),
+    )
+    try:
+        geometry = compute_alignment_geometry(dot_position, pixel_cm_ratio)
+        visual.Line(
+            win,
+            start=geometry["line_start"],
+            end=geometry["line_end"],
+            lineColor="white",
+            lineWidth=3,
+        ).draw()
+        visual.Line(
+            win,
+            start=geometry["perpendicular_start"],
+            end=geometry["perpendicular_end"],
+            lineColor="white",
+            lineWidth=3,
+        ).draw()
+        visual.Circle(
+            win=win,
+            size=geometry["dot_size"],
+            fillColor="white",
+            pos=geometry["dot_pos"],
+        ).draw()
+        win.flip()
+        event.waitKeys()
+    finally:
+        win.close()
+
+
+def prompt_dot_position() -> str:
+    from psychopy import core, gui
+
+    dlg = gui.Dlg(title="Dot Position Selector")
+    dlg.addField("Dot position:", choices=list(DOT_POSITION_CHOICES))
+    if not dlg.show():
+        core.quit()
+    return dlg.data[0]
+
+
+def main() -> None:
+    show_fish_alignment(prompt_dot_position())
+
+
+if __name__ == "__main__":
+    main()

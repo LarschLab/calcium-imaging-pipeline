@@ -111,7 +111,7 @@ class DotsProtocolTests(unittest.TestCase):
                 [trial.stimulus_name for trial in second_plan.trials],
             )
 
-    def test_block_mode_uses_zero_based_real_blocks(self) -> None:
+    def test_block_mode_plans_baseline_rest_before_stimulus_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             self._write_stimulus(tmp_path / "stim_a.csv", frames=60)
@@ -137,17 +137,22 @@ class DotsProtocolTests(unittest.TestCase):
             catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_BLOCKS)
             plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
 
-            self.assertEqual([trial.block_num for trial in plan.trials], [0, 0, 1, 1])
-            self.assertEqual([block.block_num for block in plan.planned_blocks], [0, 1])
+            self.assertEqual([trial.block_num for trial in plan.trials], [1, 1, 2, 2])
+            self.assertEqual([block.block_num for block in plan.planned_blocks], [0, 1, 2])
+            self.assertEqual([block.block_kind for block in plan.planned_blocks], ["baseline_rest", "stimulus_block", "stimulus_block"])
             self.assertEqual(plan.timeline[0].label, "B0_start")
             self.assertEqual(plan.timeline[1].kind, "rest")
-            self.assertAlmostEqual(plan.planned_blocks[0].start_sec, 2.5, places=6)
+            self.assertAlmostEqual(plan.stimuli_params["pre_stim_resting_sec"], 2.0, places=6)
+            self.assertAlmostEqual(plan.planned_blocks[0].start_sec, 0.0, places=6)
             self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 2.0, places=6)
             self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 4)
             self.assertAlmostEqual(plan.planned_blocks[1].start_sec, plan.planned_blocks[0].end_sec + 3.5, places=6)
             self.assertAlmostEqual(plan.planned_blocks[1].duration_sec, 2.0, places=6)
             self.assertEqual(plan.planned_blocks[1].acquisition_frame_count, 4)
-            self.assertAlmostEqual(plan.total_duration_sec, 10.0, places=6)
+            self.assertAlmostEqual(plan.planned_blocks[2].start_sec, plan.planned_blocks[1].end_sec + 3.5, places=6)
+            self.assertAlmostEqual(plan.planned_blocks[2].duration_sec, 2.0, places=6)
+            self.assertEqual(plan.planned_blocks[2].acquisition_frame_count, 4)
+            self.assertAlmostEqual(plan.total_duration_sec, 13.0, places=6)
 
     def test_block_mode_acquisition_frames_use_duration_ceiling(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -173,10 +178,13 @@ class DotsProtocolTests(unittest.TestCase):
             catalog = load_stimuli_catalog(tmp_path, MODE_CONTINUOUS_SESSION)
             plan = build_run_plan(MODE_CONTINUOUS_SESSION, metadata, functional, stimuli_params, runtime, catalog)
 
+            self.assertEqual([block.block_kind for block in plan.planned_blocks], ["baseline_rest", "stimulus_block"])
             self.assertEqual(plan.planned_blocks[0].acquisition_frame_count, 1)
             self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 0.25, places=6)
-            self.assertAlmostEqual(plan.total_duration_sec, 1.25, places=6)
-            self.assertEqual(summarize_plan(plan)["planned_total_acquisition_frames"], 1)
+            self.assertEqual(plan.planned_blocks[1].acquisition_frame_count, 1)
+            self.assertAlmostEqual(plan.planned_blocks[1].duration_sec, 0.25, places=6)
+            self.assertAlmostEqual(plan.total_duration_sec, 0.5, places=6)
+            self.assertEqual(summarize_plan(plan)["planned_total_acquisition_frames"], 2)
 
     def test_functional_framerate_is_derived_from_frames_and_slices(self) -> None:
         self.assertAlmostEqual(
@@ -216,7 +224,7 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertAlmostEqual(functional["framerate"], 2.0, places=6)
             self.assertAlmostEqual(plan.functional_params["framerate"], 2.0, places=6)
             self.assertEqual(plan.functional_params["n_volumes"], plan.planned_total_acquisition_frames)
-            self.assertEqual(plan.functional_params["n_volumes"], 4)
+            self.assertEqual(plan.functional_params["n_volumes"], 8)
 
     def test_mock_run_writes_canonical_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -309,9 +317,22 @@ class DotsProtocolTests(unittest.TestCase):
                 for event in block_log["event"].tolist()
                 if event.endswith("_start") or event.endswith("_end") or "interblock" in event
             ]
-            self.assertEqual(marker_events, ["B0_start", "B0_end", "B0_interblock_pause", "B1_start", "B1_end"])
+            self.assertEqual(
+                marker_events,
+                [
+                    "B0_start",
+                    "B0_end",
+                    "B0_interblock_pause",
+                    "B1_start",
+                    "B1_end",
+                    "B1_interblock_pause",
+                    "B2_start",
+                    "B2_end",
+                ],
+            )
             planned_blocks_df = pd.read_csv(next(path for path in meta_dir.iterdir() if path.name.endswith("_planned_blocks.csv")))
-            self.assertEqual(list(planned_blocks_df["block_num"]), [0, 1])
+            self.assertEqual(list(planned_blocks_df["block_num"]), [0, 1, 2])
+            self.assertEqual(list(planned_blocks_df["block_kind"]), ["baseline_rest", "stimulus_block", "stimulus_block"])
 
     def test_sample_fixture_catalog_loads(self) -> None:
         catalog = load_stimuli_catalog(SAMPLE_STIMULI_DIR, MODE_LOOP_STIMULI)

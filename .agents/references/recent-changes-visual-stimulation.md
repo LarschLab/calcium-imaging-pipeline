@@ -12,6 +12,45 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-01 - dots baseline inter-block pause parity
+- Date and label: 2026-05-01, dots baseline inter-block pause parity
+- Slice goal: Match legacy block scripts by inserting the inter-block pause between baseline `B0` and first stimulus block `B1`.
+- Passes completed in this session: Legacy comparison -> protocol/runner pause update -> regression/docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: planned schedules now include `B0` inter-block pause before `B1`.
+  - `visual_stimulation/dots_runner.py`: hardware and mock execution now log and wait through `B0_interblock_pause`.
+  - `visual_stimulation/dots_gui.py`: inter-block pause summary now counts all planned inter-block pauses, including baseline-to-first-stimulus.
+- What remains broken: Hardware timing still needs manual confirmation against microscope acquisition.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators decide baseline should transition immediately into `B1`, remove this pause consistently from protocol, runner, tests, and policy.
+- Rerun implications: Total planned duration increases by one inter-block pause for block-based runs; acquisition frame counts are unchanged.
+
+## 2026-05-01 - dots block protocol baseline standard
+- Date and label: 2026-05-01, dots block protocol baseline standard
+- Slice goal: Update block-based dots timing to baseline `B0` plus stimulus blocks with standard two-times-unique block size.
+- Passes completed in this session: Protocol planning update -> runner/mock alignment -> GUI default/rest derivation -> regression/docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: block-based plans now create baseline-rest planned block `B0`, start stimulus blocks at `B1`, derive baseline rest duration from the first stimulus block, and add `block_kind` to planned block rows.
+  - `visual_stimulation/dots_runner.py`: hardware and mock block runs now execute rest-only baseline blocks and trigger acquisition at baseline and each stimulus block start.
+  - `visual_stimulation/dots_gui.py`: auto `Stimuli / block` now uses two times the unique presented stimulus count; derived rest is reflected in the form after preview; unequal block volume counts block Run.
+- What remains broken: Manual validation on hardware remains needed for trigger timing and microscope acquisition settings.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If downstream analysis assumes stimulus blocks start at `B0`, update those consumers to use `block_kind` or skip baseline rows explicitly.
+- Rerun implications: Planned block CSVs now include baseline `B0`; planned total acquisition frames and derived `n_volumes` include baseline rest.
+
+## 2026-04-30 - dots GUI fish orientation integration
+- Date and label: 2026-04-30, dots GUI fish orientation integration
+- Slice goal: Integrate fish-orientation projector alignment into the dots GUI and document post-run metadata dialogs.
+- Passes completed in this session: Alignment refactor -> GUI integration -> post-run dialog coverage -> docs/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/line_fish_alignment.py`: refactored into import-safe helpers while preserving standalone prompt-and-display behavior.
+  - `visual_stimulation/dots_gui.py`: added an `Orient fish` button, pre-run checklist orientation reminder, and automatic hardware-run alignment display before acquisition; mock runs skip alignment.
+  - `tests/test_line_fish_alignment.py`, `tests/test_dots_gui_layout.py`, and `tests/test_dots_runner_hardware.py`: added coverage for alignment geometry/import safety, mock skipping, and post-run Metadata/Anatomy dialogs.
+- What remains broken: Manual validation on the projector/hardware display is still needed for the actual full-screen alignment experience.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want alignment after rather than before the checklist, keep the alignment call GUI-local and preserve runner output behavior.
+- Rerun implications: Hardware runs now show an alignment window before acquisition starts; output files and metadata keys are unchanged.
+
 ## 2026-04-30 - dots GUI friendly field labels
 - Date and label: 2026-04-30, dots GUI friendly field labels
 - Slice goal: Replace raw parameter-key form labels with easier operator-facing labels without changing output keys.

@@ -7,12 +7,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "visual_stimulation"))
 
 from dots_protocol import DotsRunPlan, MODE_LOOP_STIMULI, get_mode_defaults  # noqa: E402
-from dots_runner import _pulse_pin, _run_hardware_experiment, _setup_trigger_pins  # noqa: E402
+from dots_runner import _append_post_run_metadata, _pulse_pin, _run_hardware_experiment, _setup_trigger_pins  # noqa: E402
 
 
 class DotsRunnerHardwareTests(unittest.TestCase):
@@ -93,6 +95,46 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         _pulse_pin(Pin(), 0.05, wait)
 
         self.assertEqual(events, [("write", 1), ("wait", 0.05), ("write", 0)])
+
+    def test_post_run_metadata_opens_metadata_and_anatomy_dialogs(self) -> None:
+        dialog_titles: list[str] = []
+        psychopy = types.ModuleType("psychopy")
+        core = types.ModuleType("psychopy.core")
+        gui = types.ModuleType("psychopy.gui")
+
+        class Dialog:
+            def __init__(self, _: dict[str, object], title: str, sortKeys: bool = False) -> None:
+                dialog_titles.append(title)
+                self.OK = True
+
+        def quit_() -> None:
+            raise AssertionError("core.quit should not be called when dialogs are accepted")
+
+        gui.DlgFromDict = Dialog
+        core.quit = quit_
+        psychopy.core = core
+        psychopy.gui = gui
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir)
+            plan = self._minimal_plan(tmpdir)
+            with patch.dict(sys.modules, {"psychopy": psychopy, "psychopy.core": core, "psychopy.gui": gui}):
+                _append_post_run_metadata(
+                    meta_dir,
+                    "2026-04-30-1200",
+                    dict(plan.metadata),
+                    {},
+                    {},
+                    plan.runtime,
+                    plan,
+                )
+
+            metadata_file = meta_dir / "2026-04-30-1200_fF001_metadata.csv"
+            metadata_map = dict(zip(pd.read_csv(metadata_file)["parameter"], pd.read_csv(metadata_file)["value"]))
+
+        self.assertEqual(dialog_titles, ["Metadata", "Anatomy"])
+        self.assertEqual(str(metadata_map["fish_died"]).lower(), "false")
+        self.assertEqual(int(metadata_map["frames_per_slice_anatomy"]), 90)
 
     def _minimal_plan(self, output_root: str) -> DotsRunPlan:
         return DotsRunPlan(

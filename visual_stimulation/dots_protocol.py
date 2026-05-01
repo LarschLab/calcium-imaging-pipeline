@@ -75,6 +75,7 @@ class PlannedBlock:
     end_sec: float
     duration_sec: float
     acquisition_frame_count: int
+    block_kind: str = "stimulus_block"
 
 
 @dataclass(frozen=True)
@@ -409,6 +410,7 @@ def build_run_plan(
 ) -> DotsRunPlan:
     functional_params = copy.deepcopy(functional_params)
     functional_params["framerate"] = derive_functional_framerate(functional_params)
+    stimuli_params = copy.deepcopy(stimuli_params)
     stimulus_by_key = {stimulus.runtime_key: stimulus for stimulus in stimuli_catalog}
     order = _build_trial_order(mode, runtime, stimuli_params, stimuli_catalog)
     block_size = int(stimuli_params.get("n_trials_per_block", 1))
@@ -429,22 +431,16 @@ def build_run_plan(
     framerate = float(functional_params["framerate"])
     trial_index = 0
 
-    for block_num, block_trial_keys in enumerate(block_groups):
-        current_time, order_index = _append_marker(
-            timeline, order_index, current_time, "trigger", f"B{block_num}_start", block_num=block_num
-        )
-        if block_num == 0:
-            current_time, order_index = _append_timed_segment(
-                timeline,
-                order_index,
-                current_time,
-                "rest",
-                pre_stim_rest,
-                "Pre-stimulus rest",
-                block_num=block_num,
-            )
-        acquisition_start = current_time
+    post_pause_duration = post_stim_pause if mode != MODE_LOOP_BLOCKS else pre_stim_pause
 
+    def block_group_duration(block_trial_keys: list[str]) -> float:
+        return sum(
+            pre_stim_pause + stimulus_by_key[stimulus_key].duration_sec + post_pause_duration
+            for stimulus_key in block_trial_keys
+        )
+
+    def append_trial_segments(block_num: int, block_trial_keys: list[str]) -> list[int]:
+        nonlocal current_time, order_index, trial_index
         block_trial_indices: list[int] = []
         for stimulus_key in block_trial_keys:
             stimulus = stimulus_by_key[stimulus_key]
@@ -528,9 +524,7 @@ def build_run_plan(
                 order_index,
                 current_time,
                 "poststim_pause",
-                post_stim_pause if mode == MODE_LOOP_STIMULI else (
-                    pre_stim_pause if mode == MODE_LOOP_BLOCKS else post_stim_pause
-                ),
+                post_pause_duration,
                 f"Trial {trial_index + 1} post-pause",
                 trial_index=trial_index,
                 block_num=block_num,
@@ -539,6 +533,66 @@ def build_run_plan(
                 stimulus_path=str(stimulus.path),
             )
             trial_index += 1
+        return block_trial_indices
+
+    if mode != MODE_LOOP_STIMULI and block_groups:
+        pre_stim_rest = block_group_duration(block_groups[0])
+        stimuli_params["pre_stim_resting_sec"] = pre_stim_rest
+        current_time, order_index = _append_marker(
+            timeline, order_index, current_time, "trigger", "B0_start", block_num=0
+        )
+        acquisition_start = current_time
+        current_time, order_index = _append_timed_segment(
+            timeline,
+            order_index,
+            current_time,
+            "rest",
+            pre_stim_rest,
+            "Baseline rest",
+            block_num=0,
+        )
+        current_time, order_index = _append_marker(
+            timeline, order_index, current_time, "trigger", "B0_end", block_num=0
+        )
+        planned_blocks.append(
+            PlannedBlock(
+                block_num=0,
+                trial_indices=[],
+                start_sec=acquisition_start,
+                end_sec=current_time,
+                duration_sec=current_time - acquisition_start,
+                acquisition_frame_count=math.ceil((current_time - acquisition_start) * framerate),
+                block_kind="baseline_rest",
+            )
+        )
+        current_time, order_index = _append_timed_segment(
+            timeline,
+            order_index,
+            current_time,
+            "interblock_pause",
+            inter_block_pause,
+            "Block 0 pause",
+            block_num=0,
+        )
+
+    for block_index, block_trial_keys in enumerate(block_groups):
+        block_num = block_index if mode == MODE_LOOP_STIMULI else block_index + 1
+        current_time, order_index = _append_marker(
+            timeline, order_index, current_time, "trigger", f"B{block_num}_start", block_num=block_num
+        )
+        if mode == MODE_LOOP_STIMULI and block_num == 0:
+            current_time, order_index = _append_timed_segment(
+                timeline,
+                order_index,
+                current_time,
+                "rest",
+                pre_stim_rest,
+                "Pre-stimulus rest",
+                block_num=block_num,
+            )
+        acquisition_start = current_time
+
+        block_trial_indices = append_trial_segments(block_num, block_trial_keys)
 
         current_time, order_index = _append_marker(
             timeline, order_index, current_time, "trigger", f"B{block_num}_end", block_num=block_num
@@ -554,7 +608,7 @@ def build_run_plan(
             )
         )
 
-        if block_num < len(block_groups) - 1:
+        if block_index < len(block_groups) - 1:
             current_time, order_index = _append_timed_segment(
                 timeline,
                 order_index,
@@ -610,6 +664,7 @@ def plan_to_planned_block_rows(plan: DotsRunPlan) -> list[dict[str, Any]]:
             {
                 "mode": plan.mode,
                 "block_num": block.block_num,
+                "block_kind": block.block_kind,
                 "trial_indices": ", ".join(str(trial_index) for trial_index in block.trial_indices),
                 "start_sec": round(block.start_sec, 6),
                 "end_sec": round(block.end_sec, 6),

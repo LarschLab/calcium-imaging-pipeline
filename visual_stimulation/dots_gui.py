@@ -27,6 +27,7 @@ from dots_protocol import (
     summarize_plan,
 )
 from dots_runner import run_planned_experiment
+from line_fish_alignment import show_fish_alignment
 
 
 FIELD_GROUPS = (
@@ -52,7 +53,8 @@ GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY = "stimuli_params_by_mode"
 GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY = "functional_params_by_mode"
 LEGEND_ENTRIES_PER_ROW = 4
 AUTO_BLOCK_FIELD_NAME = "n_trials_per_block"
-REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS = {AUTO_BLOCK_FIELD_NAME}
+AUTO_REST_FIELD_NAME = "pre_stim_resting_sec"
+REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS = {AUTO_BLOCK_FIELD_NAME, AUTO_REST_FIELD_NAME}
 DERIVED_FUNCTIONAL_FIELDS = {"n_volumes", "framerate"}
 REMEMBERED_FUNCTIONAL_PARAM_EXCLUDED_FIELDS = DERIVED_FUNCTIONAL_FIELDS
 REMEMBERED_METADATA_FIELDS = (
@@ -182,6 +184,10 @@ def count_unique_presented_stimuli(stimuli_catalog: list[StimulusSpec]) -> int:
     return len({stimulus.runtime_key for stimulus in stimuli_catalog})
 
 
+def derive_standard_trials_per_block(stimuli_catalog: list[StimulusSpec]) -> int:
+    return count_unique_presented_stimuli(stimuli_catalog) * 2
+
+
 def format_field_label(group_key: str, field_name: str) -> str:
     return FIELD_DISPLAY_LABELS.get(group_key, {}).get(field_name, field_name.replace("_", " "))
 
@@ -195,11 +201,16 @@ def format_block_volume_count(plan: DotsRunPlan) -> str:
 def build_pre_run_checklist_items(plan: DotsRunPlan) -> list[str]:
     block_volume_count = format_block_volume_count(plan)
     return [
+        f"Orient fish using the {plan.metadata.get('fish_orientation', 'bottom-left')} alignment marker.",
         f"Set microscope total volumes per block to {block_volume_count}.",
         "Confirm light-path levers are set.",
         "Confirm microscope acquisition is ready/armed.",
         "Confirm fish, stimulus folder, and previewed schedule are correct.",
     ]
+
+
+def should_show_fish_alignment(plan: DotsRunPlan) -> bool:
+    return not bool(plan.runtime.get("mock_mode"))
 
 
 def load_gui_settings(settings_path: Path = GUI_SETTINGS_PATH) -> dict[str, Any]:
@@ -280,8 +291,15 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
     if plan.mode not in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
         return base_summary, None
     summary = summarize_plan(plan)
+    block_frame_counts = plan.planned_block_frame_counts
+    run_block_reason = None
+    if len(set(block_frame_counts)) > 1:
+        run_block_reason = (
+            "Planned acquisition blocks have unequal volume counts; adjust stimuli/block or stimuli so "
+            "baseline and stimulus blocks match."
+        )
     inter_block_pause_sec = float(plan.stimuli_params.get("inter_block_pause_sec", 0))
-    inter_block_pause_count = max(plan.planned_block_count - 1, 0)
+    inter_block_pause_count = sum(1 for segment in plan.timeline if segment.kind == "interblock_pause")
     inter_block_pause_total_sec = inter_block_pause_count * inter_block_pause_sec
     if inter_block_pause_count > 0:
         inter_block_pause_line = (
@@ -296,7 +314,8 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
     else:
         inter_block_pause_line = "Inter-block pause: none configured"
     block_lines = ", ".join(
-        f"B{block.block_num}: {format_duration(block.duration_sec)} ({block.duration_sec:.2f} sec, {block.acquisition_frame_count} frames)"
+        f"B{block.block_num} {block.block_kind.replace('_', ' ')}: "
+        f"{format_duration(block.duration_sec)} ({block.duration_sec:.2f} sec, {block.acquisition_frame_count} frames)"
         for block in plan.planned_blocks
     )
     summary_text = (
@@ -306,7 +325,7 @@ def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: 
         f"{inter_block_pause_line}\n"
         f"Total planned acquisition frames: {summary['planned_total_acquisition_frames']}"
     )
-    return summary_text, None
+    return summary_text, run_block_reason
 
 
 class DotsGuiApp:
@@ -407,6 +426,9 @@ class DotsGuiApp:
             command=self._on_mock_mode_toggle,
         )
         self.mock_mode_button.grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Button(controls, text="Orient fish", command=self._show_fish_alignment_from_current_inputs).grid(
+            row=2, column=1, sticky="ew", padx=(8, 0), pady=(10, 0)
+        )
 
         self.mock_output_row = ttk.Frame(controls)
         self.mock_output_row.columnconfigure(0, weight=1)
@@ -603,6 +625,25 @@ class DotsGuiApp:
         mode_label = "enabled" if self.mock_mode_var.get() else "disabled"
         self._mark_dirty(f"Mock run {mode_label}. Refreshing preview.")
 
+    def _selected_fish_orientation(self) -> str:
+        orientation_var = self.field_vars.get("metadata", {}).get("fish_orientation")
+        if orientation_var is None:
+            return "bottom-left"
+        return str(orientation_var.get() or "bottom-left")
+
+    def _show_fish_alignment_from_current_inputs(self) -> None:
+        runtime = self.current_plan.runtime if self.current_plan else self.runtime_defaults
+        try:
+            show_fish_alignment(self._selected_fish_orientation(), runtime)
+        except Exception as exc:
+            messagebox.showerror("Fish orientation failed", str(exc))
+            self.status_var.set(f"Fish orientation failed: {exc}")
+            return
+        self.status_var.set("Fish orientation display closed.")
+
+    def _show_fish_alignment_for_plan(self, plan: DotsRunPlan) -> None:
+        show_fish_alignment(str(plan.metadata.get("fish_orientation") or "bottom-left"), plan.runtime)
+
     def _apply_remembered_settings(self) -> None:
         metadata_settings = self.remembered_settings.get("metadata", {})
         if isinstance(metadata_settings, dict):
@@ -687,15 +728,30 @@ class DotsGuiApp:
     def _apply_dynamic_n_trials_per_block(self, stimuli_catalog: list[StimulusSpec]) -> None:
         if self.mode_var.get() == MODE_LOOP_STIMULI or not self.auto_n_trials_per_block:
             return
-        unique_stimulus_count = count_unique_presented_stimuli(stimuli_catalog)
-        if unique_stimulus_count <= 0:
+        standard_trial_count = derive_standard_trials_per_block(stimuli_catalog)
+        if standard_trial_count <= 0:
             return
         n_trials_var = self.field_vars.get("stimuli_params", {}).get(AUTO_BLOCK_FIELD_NAME)
         if n_trials_var is None:
             return
         self._updating_dynamic_n_trials_per_block = True
         try:
-            n_trials_var.set(str(unique_stimulus_count))
+            n_trials_var.set(str(standard_trial_count))
+        finally:
+            self._updating_dynamic_n_trials_per_block = False
+
+    def _apply_derived_rest_to_field(self) -> None:
+        if not self.current_plan or self.current_plan.mode == MODE_LOOP_STIMULI:
+            return
+        rest_var = self.field_vars.get("stimuli_params", {}).get(AUTO_REST_FIELD_NAME)
+        if rest_var is None:
+            return
+        derived_rest = self.current_plan.stimuli_params.get(AUTO_REST_FIELD_NAME)
+        if derived_rest is None:
+            return
+        self._updating_dynamic_n_trials_per_block = True
+        try:
+            rest_var.set(f"{float(derived_rest):.6g}")
         finally:
             self._updating_dynamic_n_trials_per_block = False
 
@@ -739,6 +795,7 @@ class DotsGuiApp:
                 runtime,
                 stimuli_catalog,
             )
+            self._apply_derived_rest_to_field()
         except Exception as exc:
             if show_dialog:
                 messagebox.showerror("Preview failed", str(exc))
@@ -904,6 +961,14 @@ class DotsGuiApp:
             return
 
         self.root.withdraw()
+        if should_show_fish_alignment(self.current_plan):
+            try:
+                self._show_fish_alignment_for_plan(self.current_plan)
+            except Exception as exc:
+                self.root.deiconify()
+                messagebox.showerror("Fish orientation failed", str(exc))
+                self.status_var.set(f"Fish orientation failed: {exc}")
+                return
         try:
             meta_dir = run_planned_experiment(self.current_plan)
         except Exception as exc:
