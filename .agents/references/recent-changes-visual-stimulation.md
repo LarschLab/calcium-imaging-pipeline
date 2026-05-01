@@ -12,6 +12,43 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-01 - dots GUI timeline block guide lane
+- Date and label: 2026-05-01, dots GUI timeline block guide lane
+- Slice goal: Keep planned block context visible while operators zoom and pan the timeline preview.
+- Passes completed in this session: Block-span helper -> timeline lane drawing -> helper regression tests -> reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: timeline preview now draws a bottom block guide lane from `planned_blocks`, clipped to the current zoom/pan viewport.
+  - `tests/test_dots_gui_layout.py`: added coverage for visible/clipped planned-block spans and omitted out-of-view blocks.
+  - `.agents/references/visual-stimulation-script-index.md`: updated dots GUI ownership to include the planned-block guide lane.
+- What remains broken: Manual GUI confirmation remains useful for visual spacing with real long protocols.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want block labels in the hover popup or a minimap-style overview, keep that GUI-local and based on `planned_blocks`.
+- Rerun implications: Preview interaction only; experiment outputs, trigger timing, and metadata are unchanged.
+
+## 2026-05-01 - dots GUI timeline right-click pan binding
+- Date and label: 2026-05-01, dots GUI timeline right-click pan binding
+- Slice goal: Move timeline panning off the observed scroll-wheel-click binding and onto the right-click binding used by the operator GUI.
+- Passes completed in this session: Binding correction -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: timeline pan bindings now use Tk button 2 drag, with control-left-drag fallback retained.
+- What remains broken: Manual GUI confirmation is still needed because Tk mouse button numbering can vary by platform/input device.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If another operator platform maps secondary click differently, support both platform mappings intentionally.
+- Rerun implications: Preview interaction only; experiment outputs, trigger timing, and metadata are unchanged.
+
+## 2026-05-01 - dots GUI interactive timeline preview
+- Date and label: 2026-05-01, dots GUI interactive timeline preview
+- Slice goal: Make the dots GUI timeline preview navigable and inspectable without changing protocol/run semantics.
+- Passes completed in this session: GUI preview interaction update -> helper regression tests -> reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: timeline preview now supports mouse-wheel zoom, right-click drag panning, hover highlighting, and segment description popups for rests, pauses, and stimuli.
+  - `tests/test_dots_gui_layout.py`: added pure-helper coverage for timeline viewport clamping, zoom, pan, and segment description text.
+  - `.agents/references/visual-stimulation-script-index.md`: updated dots GUI ownership to include interactive timeline preview behavior.
+- What remains broken: Manual GUI confirmation on the operator machine remains useful for trackpad/mouse gesture feel and popup placement.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want keyboard reset/fit controls, keep them GUI-local and preserve run-plan semantics.
+- Rerun implications: Preview interaction only; experiment outputs, trigger timing, and metadata are unchanged.
+
 ## 2026-05-01 - dots baseline inter-block pause parity
 - Date and label: 2026-05-01, dots baseline inter-block pause parity
 - Slice goal: Match legacy block scripts by inserting the inter-block pause between baseline `B0` and first stimulus block `B1`.

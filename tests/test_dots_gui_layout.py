@@ -17,6 +17,8 @@ from dots_gui import (  # noqa: E402
     INPUT_GROUP_ROWS,
     build_pre_run_checklist_items,
     build_remembered_gui_settings,
+    build_timeline_segment_description,
+    clamp_timeline_view,
     compute_legend_grid_positions,
     compute_group_grid_positions,
     count_unique_presented_stimuli,
@@ -24,8 +26,11 @@ from dots_gui import (  # noqa: E402
     format_field_label,
     format_block_volume_count,
     load_gui_settings,
+    pan_timeline_view,
     save_gui_settings,
     should_show_fish_alignment,
+    visible_timeline_block_spans,
+    zoom_timeline_view,
 )
 from dots_protocol import (  # noqa: E402
     DotsRunPlan,
@@ -33,7 +38,9 @@ from dots_protocol import (  # noqa: E402
     MODE_LOOP_BLOCKS,
     MODE_LOOP_STIMULI,
     PlannedBlock,
+    PlannedTrial,
     StimulusSpec,
+    TimelineSegment,
     get_mode_defaults,
 )
 
@@ -202,6 +209,112 @@ class DotsGuiLayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_legend_grid_positions(1, 0)
 
+    def test_timeline_view_clamps_to_total_duration(self) -> None:
+        self.assertEqual(clamp_timeline_view(-5, 20, 10), (0.0, 10.0))
+        self.assertEqual(clamp_timeline_view(8, 14, 10), (4.0, 10.0))
+
+    def test_timeline_zoom_preserves_anchor_and_clamps(self) -> None:
+        start, end = zoom_timeline_view(0, 100, 100, 25, 0.5)
+        self.assertEqual((start, end), (12.5, 62.5))
+
+        start, end = zoom_timeline_view(start, end, 100, 25, 10)
+        self.assertEqual((start, end), (0.0, 100.0))
+
+    def test_timeline_pan_clamps_at_bounds(self) -> None:
+        self.assertEqual(pan_timeline_view(10, 30, 100, -15), (0.0, 20.0))
+        self.assertEqual(pan_timeline_view(70, 90, 100, 20), (80.0, 100.0))
+
+    def test_visible_timeline_block_spans_clip_to_viewport(self) -> None:
+        blocks = [
+            PlannedBlock(
+                block_num=0,
+                trial_indices=[],
+                start_sec=0,
+                end_sec=10,
+                duration_sec=10,
+                acquisition_frame_count=20,
+                block_kind="baseline_rest",
+            ),
+            PlannedBlock(
+                block_num=1,
+                trial_indices=[0],
+                start_sec=15,
+                end_sec=30,
+                duration_sec=15,
+                acquisition_frame_count=30,
+            ),
+            PlannedBlock(
+                block_num=2,
+                trial_indices=[1],
+                start_sec=40,
+                end_sec=50,
+                duration_sec=10,
+                acquisition_frame_count=20,
+            ),
+        ]
+
+        spans = visible_timeline_block_spans(blocks, 5, 35)
+
+        self.assertEqual(
+            [(block.block_num, block.block_kind, start, end) for block, start, end in spans],
+            [(0, "baseline_rest", 5, 10), (1, "stimulus_block", 15, 30)],
+        )
+
+    def test_visible_timeline_block_spans_omit_outside_and_zero_width_blocks(self) -> None:
+        blocks = [
+            PlannedBlock(block_num=0, trial_indices=[], start_sec=0, end_sec=5, duration_sec=5, acquisition_frame_count=10),
+            PlannedBlock(block_num=1, trial_indices=[], start_sec=6, end_sec=6, duration_sec=0, acquisition_frame_count=0),
+            PlannedBlock(block_num=2, trial_indices=[], start_sec=8, end_sec=12, duration_sec=4, acquisition_frame_count=8),
+        ]
+
+        spans = visible_timeline_block_spans(blocks, 6, 7)
+
+        self.assertEqual(spans, [])
+
+    def test_timeline_segment_description_includes_stimulus_details(self) -> None:
+        plan = self._plan_for_timeline_description()
+        segment = TimelineSegment(
+            order=1,
+            kind="stimulus",
+            start_sec=2.0,
+            duration_sec=0.5,
+            label="stim_a",
+            trial_index=0,
+            block_num=1,
+            stimulus_key="stim",
+            stimulus_name="stim_a",
+            stimulus_path="stim_a.csv",
+        )
+
+        description = build_timeline_segment_description(plan, segment)
+
+        self.assertIn("stim_a", description)
+        self.assertIn("Duration: 30 frames / 0.50 sec", description)
+        self.assertIn("Block: B1", description)
+        self.assertIn("Trial: 1", description)
+        self.assertIn("Dots: 3", description)
+        self.assertIn("Path: stim_a.csv", description)
+
+    def test_timeline_segment_description_includes_pause_duration_frames(self) -> None:
+        plan = self._plan_for_timeline_description()
+        segment = TimelineSegment(
+            order=2,
+            kind="poststim_pause",
+            start_sec=2.5,
+            duration_sec=1.25,
+            label="Trial 1 post-pause",
+            trial_index=0,
+            block_num=1,
+            stimulus_key="stim",
+            stimulus_name="stim_a",
+        )
+
+        description = build_timeline_segment_description(plan, segment)
+
+        self.assertIn("Type: poststim pause", description)
+        self.assertIn("Duration: 75 frames / 1.25 sec", description)
+        self.assertIn("Stimulus: stim_a", description)
+
     def test_unique_presented_stimuli_counts_runtime_keys(self) -> None:
         catalog = [
             self._stimulus("stim_a", "stim"),
@@ -300,6 +413,32 @@ class DotsGuiLayoutTests(unittest.TestCase):
             n_dots=1,
             duration_sec=1 / 60,
             data_frame=None,
+        )
+
+    @staticmethod
+    def _plan_for_timeline_description() -> DotsRunPlan:
+        return DotsRunPlan(
+            mode=MODE_LOOP_BLOCKS,
+            metadata={},
+            functional_params={},
+            stimuli_params={},
+            runtime={},
+            stimuli_catalog=[],
+            trials=[
+                PlannedTrial(
+                    trial_index=0,
+                    block_num=1,
+                    stimulus_key="stim",
+                    stimulus_name="stim_a",
+                    stimulus_path=Path("stim_a.csv"),
+                    frame_count=30,
+                    n_dots=3,
+                    duration_sec=0.5,
+                )
+            ],
+            planned_blocks=[],
+            timeline=[],
+            total_duration_sec=4,
         )
 
 

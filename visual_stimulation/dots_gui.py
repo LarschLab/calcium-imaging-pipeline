@@ -9,6 +9,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 from dots_protocol import (
+    FPS,
     MODE_CHOICES,
     MODE_CONTINUOUS_SESSION,
     MODE_LABELS,
@@ -16,8 +17,10 @@ from dots_protocol import (
     MODE_LOOP_STIMULI,
     DotsRunPlan,
     MOCK_OUTPUT_ROOT,
+    PlannedBlock,
     SAMPLE_STIMULI_DIR,
     StimulusSpec,
+    TimelineSegment,
     build_run_plan,
     format_duration,
     get_mode_defaults,
@@ -38,7 +41,11 @@ FIELD_GROUPS = (
 
 AUTO_PREVIEW_DEBOUNCE_MS = 400
 LABEL_TOOLTIP_DELAY_MS = 500
-TIMELINE_PREVIEW_HEIGHT_PX = 250
+TIMELINE_PREVIEW_HEIGHT_PX = 290
+TIMELINE_MIN_VISIBLE_SEC = 1.0
+TIMELINE_ZOOM_IN_FACTOR = 0.8
+TIMELINE_ZOOM_OUT_FACTOR = 1.25
+TIMELINE_BLOCK_GUIDE_LABEL = "Blocks"
 INPUT_GROUP_ROWS = ("metadata", "functional_params", "stimuli_params")
 FORM_GROUP_COLUMNS = 3
 DEFAULT_WINDOW_GEOMETRY = "1800x1250"
@@ -180,6 +187,59 @@ def compute_legend_grid_positions(entry_count: int, entries_per_row: int) -> lis
     ]
 
 
+def clamp_timeline_view(start_sec: float, end_sec: float, total_duration_sec: float) -> tuple[float, float]:
+    total_duration_sec = max(float(total_duration_sec), TIMELINE_MIN_VISIBLE_SEC)
+    visible_duration = max(float(end_sec) - float(start_sec), TIMELINE_MIN_VISIBLE_SEC)
+    visible_duration = min(visible_duration, total_duration_sec)
+    start_sec = max(0.0, min(float(start_sec), total_duration_sec - visible_duration))
+    return start_sec, start_sec + visible_duration
+
+
+def zoom_timeline_view(
+    start_sec: float,
+    end_sec: float,
+    total_duration_sec: float,
+    anchor_sec: float,
+    zoom_factor: float,
+) -> tuple[float, float]:
+    if zoom_factor <= 0:
+        raise ValueError("zoom_factor must be positive")
+    current_duration = max(float(end_sec) - float(start_sec), TIMELINE_MIN_VISIBLE_SEC)
+    total_duration_sec = max(float(total_duration_sec), TIMELINE_MIN_VISIBLE_SEC)
+    next_duration = max(TIMELINE_MIN_VISIBLE_SEC, min(total_duration_sec, current_duration * zoom_factor))
+    anchor_sec = max(0.0, min(float(anchor_sec), total_duration_sec))
+    anchor_fraction = 0.0 if current_duration <= 0 else (anchor_sec - float(start_sec)) / current_duration
+    anchor_fraction = max(0.0, min(anchor_fraction, 1.0))
+    next_start = anchor_sec - anchor_fraction * next_duration
+    return clamp_timeline_view(next_start, next_start + next_duration, total_duration_sec)
+
+
+def pan_timeline_view(
+    start_sec: float,
+    end_sec: float,
+    total_duration_sec: float,
+    delta_sec: float,
+) -> tuple[float, float]:
+    return clamp_timeline_view(float(start_sec) + float(delta_sec), float(end_sec) + float(delta_sec), total_duration_sec)
+
+
+def visible_timeline_block_spans(
+    planned_blocks: list[PlannedBlock],
+    visible_start_sec: float,
+    visible_end_sec: float,
+) -> list[tuple[PlannedBlock, float, float]]:
+    visible_spans: list[tuple[PlannedBlock, float, float]] = []
+    for block in planned_blocks:
+        if block.end_sec < visible_start_sec or block.start_sec > visible_end_sec:
+            continue
+        clipped_start = max(block.start_sec, visible_start_sec)
+        clipped_end = min(block.end_sec, visible_end_sec)
+        if clipped_end <= clipped_start:
+            continue
+        visible_spans.append((block, clipped_start, clipped_end))
+    return visible_spans
+
+
 def count_unique_presented_stimuli(stimuli_catalog: list[StimulusSpec]) -> int:
     return len({stimulus.runtime_key for stimulus in stimuli_catalog})
 
@@ -211,6 +271,40 @@ def build_pre_run_checklist_items(plan: DotsRunPlan) -> list[str]:
 
 def should_show_fish_alignment(plan: DotsRunPlan) -> bool:
     return not bool(plan.runtime.get("mock_mode"))
+
+
+def _visual_frame_count_for_segment(plan: DotsRunPlan, segment: TimelineSegment) -> int:
+    if segment.kind == "stimulus" and segment.trial_index is not None:
+        for trial in plan.trials:
+            if trial.trial_index == segment.trial_index:
+                return trial.frame_count
+    return round(segment.duration_sec * FPS)
+
+
+def build_timeline_segment_description(plan: DotsRunPlan, segment: TimelineSegment) -> str:
+    title = segment.stimulus_name or segment.label or segment.kind.replace("_", " ")
+    lines = [
+        title,
+        f"Type: {segment.kind.replace('_', ' ')}",
+        f"Start: {format_duration(segment.start_sec)} ({segment.start_sec:.2f} sec)",
+        f"End: {format_duration(segment.end_sec)} ({segment.end_sec:.2f} sec)",
+        f"Duration: {_visual_frame_count_for_segment(plan, segment)} frames / {segment.duration_sec:.2f} sec",
+    ]
+    if segment.block_num is not None:
+        lines.append(f"Block: B{segment.block_num}")
+    if segment.trial_index is not None:
+        lines.append(f"Trial: {segment.trial_index + 1}")
+    if segment.stimulus_key:
+        lines.append(f"Stimulus key: {segment.stimulus_key}")
+    if segment.kind == "stimulus":
+        for trial in plan.trials:
+            if trial.trial_index == segment.trial_index:
+                lines.append(f"Dots: {trial.n_dots}")
+                lines.append(f"Path: {trial.stimulus_path}")
+                break
+    elif segment.stimulus_name:
+        lines.append(f"Stimulus: {segment.stimulus_name}")
+    return "\n".join(lines)
 
 
 def load_gui_settings(settings_path: Path = GUI_SETTINGS_PATH) -> dict[str, Any]:
@@ -352,6 +446,13 @@ class DotsGuiApp:
         self.stimulus_shuffle_seed = self._new_stimulus_shuffle_seed()
         self.auto_n_trials_per_block = True
         self._updating_dynamic_n_trials_per_block = False
+        self.timeline_view_start_sec = 0.0
+        self.timeline_view_end_sec = 1.0
+        self.timeline_segment_items: dict[int, TimelineSegment] = {}
+        self.hovered_timeline_segment_order: int | None = None
+        self.timeline_hover_popup: tk.Toplevel | None = None
+        self.timeline_hover_label: tk.Label | None = None
+        self._timeline_pan_last_x: int | None = None
 
         self._build_layout()
         self._load_mode(initial_mode)
@@ -479,6 +580,17 @@ class DotsGuiApp:
         )
 
         self.timeline_canvas.bind("<Configure>", lambda _: self._draw_timeline())
+        self.timeline_canvas.bind("<MouseWheel>", self._on_timeline_mousewheel)
+        self.timeline_canvas.bind("<Button-4>", self._on_timeline_mousewheel)
+        self.timeline_canvas.bind("<Button-5>", self._on_timeline_mousewheel)
+        self.timeline_canvas.bind("<ButtonPress-2>", self._on_timeline_pan_start)
+        self.timeline_canvas.bind("<Control-ButtonPress-1>", self._on_timeline_pan_start)
+        self.timeline_canvas.bind("<B2-Motion>", self._on_timeline_pan_drag)
+        self.timeline_canvas.bind("<Control-B1-Motion>", self._on_timeline_pan_drag)
+        self.timeline_canvas.bind("<ButtonRelease-2>", self._on_timeline_pan_end)
+        self.timeline_canvas.bind("<Control-ButtonRelease-1>", self._on_timeline_pan_end)
+        self.timeline_canvas.bind("<Motion>", self._on_timeline_motion)
+        self.timeline_canvas.bind("<Leave>", self._on_timeline_leave)
         self.stimuli_dir_var.trace_add("write", lambda *_: self._mark_dirty(randomize_stimulus_order=True))
         self.mock_output_root_var.trace_add("write", lambda *_: self._mark_dirty())
         self._update_mock_output_visibility()
@@ -816,6 +928,7 @@ class DotsGuiApp:
         self.dirty = False
         self._set_run_block_reason(run_block_reason)
         self._remember_current_settings()
+        self._reset_timeline_view()
         self._render_legend()
         self._draw_timeline()
 
@@ -886,24 +999,165 @@ class DotsGuiApp:
                 sticky="w",
             )
 
+    def _reset_timeline_view(self) -> None:
+        total_duration = max(self.current_plan.total_duration_sec if self.current_plan else 1.0, TIMELINE_MIN_VISIBLE_SEC)
+        self.timeline_view_start_sec = 0.0
+        self.timeline_view_end_sec = total_duration
+        self.hovered_timeline_segment_order = None
+        self._hide_timeline_hover_popup()
+
+    def _timeline_geometry(self) -> tuple[int, int, int, int]:
+        width = max(self.timeline_canvas.winfo_width(), 640)
+        label_width = 160
+        right_margin = 30
+        timeline_width = max(width - label_width - right_margin, 200)
+        return width, label_width, right_margin, timeline_width
+
+    def _timeline_x_to_sec(self, x: float) -> float:
+        _, label_width, _, timeline_width = self._timeline_geometry()
+        visible_duration = max(self.timeline_view_end_sec - self.timeline_view_start_sec, TIMELINE_MIN_VISIBLE_SEC)
+        x_fraction = (float(x) - label_width) / timeline_width
+        x_fraction = max(0.0, min(x_fraction, 1.0))
+        return self.timeline_view_start_sec + x_fraction * visible_duration
+
+    def _on_timeline_mousewheel(self, event: Any) -> str:
+        if not self.current_plan:
+            return "break"
+        if getattr(event, "num", None) == 4:
+            zoom_factor = TIMELINE_ZOOM_IN_FACTOR
+        elif getattr(event, "num", None) == 5:
+            zoom_factor = TIMELINE_ZOOM_OUT_FACTOR
+        else:
+            event_delta = int(getattr(event, "delta", 0))
+            if event_delta == 0:
+                return "break"
+            zoom_factor = TIMELINE_ZOOM_IN_FACTOR if event_delta > 0 else TIMELINE_ZOOM_OUT_FACTOR
+        anchor_sec = self._timeline_x_to_sec(getattr(event, "x", 0))
+        self.timeline_view_start_sec, self.timeline_view_end_sec = zoom_timeline_view(
+            self.timeline_view_start_sec,
+            self.timeline_view_end_sec,
+            self.current_plan.total_duration_sec,
+            anchor_sec,
+            zoom_factor,
+        )
+        self._draw_timeline()
+        self._refresh_timeline_hover(getattr(event, "x", 0), getattr(event, "y", 0))
+        return "break"
+
+    def _on_timeline_pan_start(self, event: Any) -> str:
+        if self.current_plan:
+            self._timeline_pan_last_x = int(getattr(event, "x", 0))
+        return "break"
+
+    def _on_timeline_pan_drag(self, event: Any) -> str:
+        if not self.current_plan or self._timeline_pan_last_x is None:
+            return "break"
+        x = int(getattr(event, "x", 0))
+        _, _, _, timeline_width = self._timeline_geometry()
+        visible_duration = max(self.timeline_view_end_sec - self.timeline_view_start_sec, TIMELINE_MIN_VISIBLE_SEC)
+        delta_sec = ((self._timeline_pan_last_x - x) / timeline_width) * visible_duration
+        self.timeline_view_start_sec, self.timeline_view_end_sec = pan_timeline_view(
+            self.timeline_view_start_sec,
+            self.timeline_view_end_sec,
+            self.current_plan.total_duration_sec,
+            delta_sec,
+        )
+        self._timeline_pan_last_x = x
+        self._draw_timeline()
+        self._refresh_timeline_hover(x, int(getattr(event, "y", 0)))
+        return "break"
+
+    def _on_timeline_pan_end(self, _: Any) -> str:
+        self._timeline_pan_last_x = None
+        return "break"
+
+    def _on_timeline_motion(self, event: Any) -> None:
+        self._refresh_timeline_hover(int(getattr(event, "x", 0)), int(getattr(event, "y", 0)))
+
+    def _on_timeline_leave(self, _: Any) -> None:
+        self.hovered_timeline_segment_order = None
+        self._timeline_pan_last_x = None
+        self._hide_timeline_hover_popup()
+        self._draw_timeline()
+
+    def _refresh_timeline_hover(self, x: int, y: int) -> None:
+        if not self.current_plan:
+            self._hide_timeline_hover_popup()
+            return
+        segment = self._timeline_segment_at_pointer()
+        next_order = segment.order if segment else None
+        if next_order != self.hovered_timeline_segment_order:
+            self.hovered_timeline_segment_order = next_order
+            self._draw_timeline()
+        if segment:
+            self._show_timeline_hover_popup(build_timeline_segment_description(self.current_plan, segment), x, y)
+        else:
+            self._hide_timeline_hover_popup()
+
+    def _timeline_segment_at_pointer(self) -> TimelineSegment | None:
+        for item_id in self.timeline_canvas.find_withtag("current"):
+            segment = self.timeline_segment_items.get(item_id)
+            if segment is not None:
+                return segment
+        return None
+
+    def _show_timeline_hover_popup(self, text: str, x: int, y: int) -> None:
+        if self.timeline_hover_popup is None or not self.timeline_hover_popup.winfo_exists():
+            self.timeline_hover_popup = tk.Toplevel(self.timeline_canvas)
+            self.timeline_hover_popup.wm_overrideredirect(True)
+            self.timeline_hover_label = tk.Label(
+                self.timeline_hover_popup,
+                text=text,
+                justify="left",
+                background=TOOLTIP_BG_COLOR,
+                foreground=TOOLTIP_FG_COLOR,
+                relief="solid",
+                borderwidth=1,
+                padx=8,
+                pady=6,
+                wraplength=420,
+            )
+            self.timeline_hover_label.pack()
+        elif self.timeline_hover_label is not None:
+            self.timeline_hover_label.configure(text=text)
+        root_x = self.timeline_canvas.winfo_rootx() + x + 16
+        root_y = self.timeline_canvas.winfo_rooty() + y + 18
+        self.timeline_hover_popup.wm_geometry(f"+{root_x}+{root_y}")
+
+    def _hide_timeline_hover_popup(self) -> None:
+        if self.timeline_hover_popup is not None:
+            try:
+                self.timeline_hover_popup.destroy()
+            except tk.TclError:
+                pass
+        self.timeline_hover_popup = None
+        self.timeline_hover_label = None
+
     def _draw_timeline(self) -> None:
         canvas = self.timeline_canvas
         canvas.delete("all")
+        self.timeline_segment_items = {}
         if not self.current_plan:
             canvas.create_text(24, 24, anchor="nw", text="No preview yet.", fill="#6b7280")
             return
 
-        width = max(canvas.winfo_width(), 640)
+        width, label_width, right_margin, timeline_width = self._timeline_geometry()
         height = max(canvas.winfo_height(), 320)
         top = 40
         row_height = 36
-        label_width = 160
-        right_margin = 30
-        timeline_width = max(width - label_width - right_margin, 200)
         total_duration = max(self.current_plan.total_duration_sec, 1e-6)
+        self.timeline_view_start_sec, self.timeline_view_end_sec = clamp_timeline_view(
+            self.timeline_view_start_sec,
+            self.timeline_view_end_sec,
+            total_duration,
+        )
+        visible_start = self.timeline_view_start_sec
+        visible_end = self.timeline_view_end_sec
+        visible_duration = max(visible_end - visible_start, TIMELINE_MIN_VISIBLE_SEC)
 
-        canvas.create_text(16, 16, anchor="nw", text=f"0 sec", fill="#374151")
-        canvas.create_text(width - 16, 16, anchor="ne", text=format_duration(total_duration), fill="#374151")
+        canvas.create_text(16, 16, anchor="nw", text=format_duration(visible_start), fill="#374151")
+        canvas.create_text(width / 2, 16, text=f"Visible: {format_duration(visible_duration)}", fill="#374151")
+        canvas.create_text(width - 16, 16, anchor="ne", text=format_duration(visible_end), fill="#374151")
 
         tracks = [
             ("rest", "Rest"),
@@ -914,6 +1168,7 @@ class DotsGuiApp:
         ]
         stimulus_type_colors = self._stimulus_type_color_map()
         track_y = {kind: top + idx * row_height for idx, (kind, _) in enumerate(tracks)}
+        block_guide_y = top + len(tracks) * row_height + 24
 
         for kind, label in tracks:
             y = track_y[kind]
@@ -923,30 +1178,62 @@ class DotsGuiApp:
         for segment in self.current_plan.timeline:
             if segment.duration_sec <= 0 or segment.kind not in track_y:
                 continue
-            x0 = label_width + (segment.start_sec / total_duration) * timeline_width
-            x1 = label_width + (segment.end_sec / total_duration) * timeline_width
+            if segment.end_sec < visible_start or segment.start_sec > visible_end:
+                continue
+            clipped_start = max(segment.start_sec, visible_start)
+            clipped_end = min(segment.end_sec, visible_end)
+            x0 = label_width + ((clipped_start - visible_start) / visible_duration) * timeline_width
+            x1 = label_width + ((clipped_end - visible_start) / visible_duration) * timeline_width
             if x1 - x0 < 2:
                 x1 = x0 + 2
             y = track_y[segment.kind]
             color = BASE_TIMELINE_COLORS.get(segment.kind, "#e5e7eb")
             if segment.kind == "stimulus":
                 color = stimulus_type_colors.get(infer_stimulus_type(segment.stimulus_name), "#fca5a5")
-            canvas.create_rectangle(
+            outline = "#111827" if segment.order == self.hovered_timeline_segment_order else ""
+            width_px = 2 if segment.order == self.hovered_timeline_segment_order else 1
+            item_id = canvas.create_rectangle(
                 x0,
                 y + 6,
                 x1,
                 y + 22,
                 fill=color,
-                outline="",
+                outline=outline,
+                width=width_px,
             )
+            self.timeline_segment_items[item_id] = segment
             if segment.kind == "stimulus" and (x1 - x0) > 40:
                 canvas.create_text((x0 + x1) / 2, y + 14, text=segment.stimulus_name or segment.label, font=("TkDefaultFont", 8))
 
         for segment in self.current_plan.timeline:
             if segment.kind != "trigger":
                 continue
-            x = label_width + (segment.start_sec / total_duration) * timeline_width
+            if segment.start_sec < visible_start or segment.start_sec > visible_end:
+                continue
+            x = label_width + ((segment.start_sec - visible_start) / visible_duration) * timeline_width
             canvas.create_line(x, top - 6, x, top + len(tracks) * row_height, fill="#111827", dash=(3, 3))
+
+        canvas.create_text(12, block_guide_y, anchor="w", text=TIMELINE_BLOCK_GUIDE_LABEL, fill="#111827")
+        canvas.create_line(label_width, block_guide_y, width - right_margin, block_guide_y, fill="#e5e7eb")
+        for block, clipped_start, clipped_end in visible_timeline_block_spans(
+            self.current_plan.planned_blocks,
+            visible_start,
+            visible_end,
+        ):
+            x0 = label_width + ((clipped_start - visible_start) / visible_duration) * timeline_width
+            x1 = label_width + ((clipped_end - visible_start) / visible_duration) * timeline_width
+            if x1 - x0 < 2:
+                x1 = x0 + 2
+            color = "#2563eb" if block.block_kind == "baseline_rest" else "#111827"
+            canvas.create_line(x0, block_guide_y, x1, block_guide_y, fill=color, width=4)
+            label_x = min(max((x0 + x1) / 2, label_width + 12), width - right_margin - 12)
+            canvas.create_text(
+                label_x,
+                block_guide_y + 12,
+                text=f"B{block.block_num}",
+                fill=color,
+                font=("TkDefaultFont", 8),
+            )
 
     def run_plan(self) -> None:
         if self.run_block_reason:
