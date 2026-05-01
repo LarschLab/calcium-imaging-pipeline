@@ -51,8 +51,6 @@ FORM_GROUP_COLUMNS = 3
 DEFAULT_WINDOW_GEOMETRY = "1800x1250"
 MIN_WINDOW_WIDTH = 1600
 WINDOW_SAFETY_MARGIN_PX = 80
-TOOLTIP_BG_COLOR = "#111827"
-TOOLTIP_FG_COLOR = "#f9fafb"
 PREVIEW_PENDING_RUN_BLOCK_REASON = "Wait for auto-preview to refresh current settings before running."
 DEFAULT_INITIAL_MODE = MODE_LOOP_BLOCKS
 GUI_SETTINGS_PATH = Path.home() / ".calcium_imaging_pipeline" / "dots_gui_settings.json"
@@ -164,11 +162,34 @@ FIELD_DISPLAY_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
+DARK_CONSOLE_THEME = {
+    "root_bg": "#0b1120",
+    "panel_bg": "#111827",
+    "panel_alt_bg": "#0f172a",
+    "field_bg": "#182235",
+    "field_fg": "#e5edf7",
+    "muted_fg": "#94a3b8",
+    "text_fg": "#e5edf7",
+    "border": "#263244",
+    "grid": "#263244",
+    "primary": "#22d3ee",
+    "primary_hover": "#67e8f9",
+    "accent": "#f59e0b",
+    "danger": "#f97316",
+    "canvas_bg": "#0f172a",
+    "hover_outline": "#f8fafc",
+    "trigger": "#e5edf7",
+    "baseline_block": "#38bdf8",
+    "stimulus_block": "#f8fafc",
+}
+TOOLTIP_BG_COLOR = "#020617"
+TOOLTIP_FG_COLOR = DARK_CONSOLE_THEME["text_fg"]
+
 BASE_TIMELINE_COLORS = {
-    "rest": "#dbeafe",
-    "prestim_pause": "#fef3c7",
-    "poststim_pause": "#fde68a",
-    "interblock_pause": "#c4b5fd",
+    "rest": "#1d4ed8",
+    "prestim_pause": "#d97706",
+    "poststim_pause": "#92400e",
+    "interblock_pause": "#7c3aed",
 }
 
 
@@ -454,8 +475,116 @@ class DotsGuiApp:
         self.timeline_hover_label: tk.Label | None = None
         self._timeline_pan_last_x: int | None = None
 
+        self._configure_dark_console_theme()
         self._build_layout()
         self._load_mode(initial_mode)
+
+    def _configure_dark_console_theme(self) -> None:
+        self.root.configure(background=DARK_CONSOLE_THEME["root_bg"])
+        style = ttk.Style(self.root)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        style.configure(".", font=("TkDefaultFont", 10))
+        style.configure("TFrame", background=DARK_CONSOLE_THEME["panel_bg"])
+        style.configure(
+            "Panel.TFrame",
+            background=DARK_CONSOLE_THEME["panel_bg"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            relief="flat",
+        )
+        style.configure(
+            "TLabelFrame",
+            background=DARK_CONSOLE_THEME["panel_bg"],
+            foreground=DARK_CONSOLE_THEME["primary"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            relief="solid",
+        )
+        style.configure(
+            "TLabelFrame.Label",
+            background=DARK_CONSOLE_THEME["panel_bg"],
+            foreground=DARK_CONSOLE_THEME["primary"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.configure("TLabel", background=DARK_CONSOLE_THEME["panel_bg"], foreground=DARK_CONSOLE_THEME["text_fg"])
+        style.configure(
+            "Muted.TLabel",
+            background=DARK_CONSOLE_THEME["panel_bg"],
+            foreground=DARK_CONSOLE_THEME["muted_fg"],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=DARK_CONSOLE_THEME["field_bg"],
+            foreground=DARK_CONSOLE_THEME["field_fg"],
+            insertcolor=DARK_CONSOLE_THEME["field_fg"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            lightcolor=DARK_CONSOLE_THEME["border"],
+            darkcolor=DARK_CONSOLE_THEME["border"],
+            padding=4,
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=DARK_CONSOLE_THEME["field_bg"],
+            foreground=DARK_CONSOLE_THEME["field_fg"],
+            background=DARK_CONSOLE_THEME["field_bg"],
+            arrowcolor=DARK_CONSOLE_THEME["primary"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            lightcolor=DARK_CONSOLE_THEME["border"],
+            darkcolor=DARK_CONSOLE_THEME["border"],
+            padding=4,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", DARK_CONSOLE_THEME["field_bg"])],
+            foreground=[("readonly", DARK_CONSOLE_THEME["field_fg"])],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=DARK_CONSOLE_THEME["panel_bg"],
+            foreground=DARK_CONSOLE_THEME["text_fg"],
+            indicatorcolor=DARK_CONSOLE_THEME["field_bg"],
+        )
+        style.map(
+            "TCheckbutton",
+            foreground=[("active", DARK_CONSOLE_THEME["primary_hover"])],
+            background=[("active", DARK_CONSOLE_THEME["panel_bg"])],
+        )
+        style.configure(
+            "TButton",
+            background=DARK_CONSOLE_THEME["field_bg"],
+            foreground=DARK_CONSOLE_THEME["text_fg"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            lightcolor=DARK_CONSOLE_THEME["border"],
+            darkcolor=DARK_CONSOLE_THEME["border"],
+            focusthickness=1,
+            focuscolor=DARK_CONSOLE_THEME["primary"],
+            padding=(10, 5),
+        )
+        style.map(
+            "TButton",
+            background=[("active", DARK_CONSOLE_THEME["border"]), ("disabled", DARK_CONSOLE_THEME["panel_alt_bg"])],
+            foreground=[("active", DARK_CONSOLE_THEME["primary_hover"]), ("disabled", DARK_CONSOLE_THEME["muted_fg"])],
+        )
+        style.configure(
+            "Accent.TButton",
+            background=DARK_CONSOLE_THEME["primary"],
+            foreground="#04111f",
+            bordercolor=DARK_CONSOLE_THEME["primary"],
+            lightcolor=DARK_CONSOLE_THEME["primary"],
+            darkcolor=DARK_CONSOLE_THEME["primary"],
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        style.map(
+            "Accent.TButton",
+            background=[("active", DARK_CONSOLE_THEME["primary_hover"]), ("disabled", DARK_CONSOLE_THEME["panel_alt_bg"])],
+            foreground=[("active", "#04111f"), ("disabled", DARK_CONSOLE_THEME["muted_fg"])],
+        )
+        style.configure(
+            "Vertical.TScrollbar",
+            background=DARK_CONSOLE_THEME["field_bg"],
+            troughcolor=DARK_CONSOLE_THEME["panel_alt_bg"],
+            bordercolor=DARK_CONSOLE_THEME["border"],
+            arrowcolor=DARK_CONSOLE_THEME["primary"],
+        )
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -464,7 +593,7 @@ class DotsGuiApp:
         self.root.rowconfigure(2, weight=1)
         self.root.rowconfigure(3, weight=0)
 
-        preview = ttk.Frame(self.root, padding=(12, 12, 12, 6))
+        preview = ttk.Frame(self.root, padding=(12, 12, 12, 6), style="TFrame")
         preview.grid(row=0, column=0, sticky="ew")
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(1, weight=0)
@@ -483,7 +612,7 @@ class DotsGuiApp:
         self.timeline_canvas = tk.Canvas(
             timeline_frame,
             height=TIMELINE_PREVIEW_HEIGHT_PX,
-            background="white",
+            background=DARK_CONSOLE_THEME["canvas_bg"],
             highlightthickness=0,
         )
         self.timeline_canvas.grid(row=0, column=0, sticky="ew")
@@ -546,7 +675,12 @@ class DotsGuiApp:
         forms_frame.columnconfigure(0, weight=1)
         forms_frame.rowconfigure(0, weight=1)
 
-        self.forms_canvas = tk.Canvas(forms_frame, highlightthickness=0, borderwidth=0)
+        self.forms_canvas = tk.Canvas(
+            forms_frame,
+            highlightthickness=0,
+            borderwidth=0,
+            background=DARK_CONSOLE_THEME["root_bg"],
+        )
         self.forms_canvas.grid(row=0, column=0, sticky="nsew")
         forms_scrollbar = ttk.Scrollbar(forms_frame, orient="vertical", command=self.forms_canvas.yview)
         forms_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -571,11 +705,11 @@ class DotsGuiApp:
         buttons = ttk.Frame(footer)
         buttons.grid(row=0, column=0, sticky="ew")
         buttons.columnconfigure((0, 1), weight=1)
-        self.run_button = ttk.Button(buttons, text="Run", command=self.run_plan, state="disabled")
+        self.run_button = ttk.Button(buttons, text="Run", command=self.run_plan, state="disabled", style="Accent.TButton")
         self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(buttons, text="Quit", command=self.root.destroy).grid(row=0, column=1, sticky="ew")
 
-        ttk.Label(footer, textvariable=self.status_var, wraplength=1260, foreground="#374151").grid(
+        ttk.Label(footer, textvariable=self.status_var, wraplength=1260, style="Muted.TLabel").grid(
             row=1, column=0, sticky="ew", pady=(12, 0)
         )
 
@@ -978,7 +1112,7 @@ class DotsGuiApp:
     def _render_legend(self) -> None:
         for child in self.legend_frame.winfo_children():
             child.destroy()
-        legend_bg = ttk.Style().lookup("TFrame", "background") or self.root.cget("background")
+        legend_bg = DARK_CONSOLE_THEME["panel_bg"]
         entries: list[tuple[str, str]] = [
             (kind.replace("_", " "), color) for kind, color in BASE_TIMELINE_COLORS.items()
         ]
@@ -1138,7 +1272,7 @@ class DotsGuiApp:
         canvas.delete("all")
         self.timeline_segment_items = {}
         if not self.current_plan:
-            canvas.create_text(24, 24, anchor="nw", text="No preview yet.", fill="#6b7280")
+            canvas.create_text(24, 24, anchor="nw", text="No preview yet.", fill=DARK_CONSOLE_THEME["muted_fg"])
             return
 
         width, label_width, right_margin, timeline_width = self._timeline_geometry()
@@ -1155,9 +1289,14 @@ class DotsGuiApp:
         visible_end = self.timeline_view_end_sec
         visible_duration = max(visible_end - visible_start, TIMELINE_MIN_VISIBLE_SEC)
 
-        canvas.create_text(16, 16, anchor="nw", text=format_duration(visible_start), fill="#374151")
-        canvas.create_text(width / 2, 16, text=f"Visible: {format_duration(visible_duration)}", fill="#374151")
-        canvas.create_text(width - 16, 16, anchor="ne", text=format_duration(visible_end), fill="#374151")
+        canvas.create_text(16, 16, anchor="nw", text=format_duration(visible_start), fill=DARK_CONSOLE_THEME["muted_fg"])
+        canvas.create_text(
+            width / 2,
+            16,
+            text=f"Visible: {format_duration(visible_duration)}",
+            fill=DARK_CONSOLE_THEME["muted_fg"],
+        )
+        canvas.create_text(width - 16, 16, anchor="ne", text=format_duration(visible_end), fill=DARK_CONSOLE_THEME["muted_fg"])
 
         tracks = [
             ("rest", "Rest"),
@@ -1172,8 +1311,8 @@ class DotsGuiApp:
 
         for kind, label in tracks:
             y = track_y[kind]
-            canvas.create_text(12, y + 12, anchor="w", text=label, fill="#111827")
-            canvas.create_line(label_width, y + 24, width - right_margin, y + 24, fill="#e5e7eb")
+            canvas.create_text(12, y + 12, anchor="w", text=label, fill=DARK_CONSOLE_THEME["text_fg"])
+            canvas.create_line(label_width, y + 24, width - right_margin, y + 24, fill=DARK_CONSOLE_THEME["grid"])
 
         for segment in self.current_plan.timeline:
             if segment.duration_sec <= 0 or segment.kind not in track_y:
@@ -1190,7 +1329,7 @@ class DotsGuiApp:
             color = BASE_TIMELINE_COLORS.get(segment.kind, "#e5e7eb")
             if segment.kind == "stimulus":
                 color = stimulus_type_colors.get(infer_stimulus_type(segment.stimulus_name), "#fca5a5")
-            outline = "#111827" if segment.order == self.hovered_timeline_segment_order else ""
+            outline = DARK_CONSOLE_THEME["hover_outline"] if segment.order == self.hovered_timeline_segment_order else ""
             width_px = 2 if segment.order == self.hovered_timeline_segment_order else 1
             item_id = canvas.create_rectangle(
                 x0,
@@ -1211,10 +1350,17 @@ class DotsGuiApp:
             if segment.start_sec < visible_start or segment.start_sec > visible_end:
                 continue
             x = label_width + ((segment.start_sec - visible_start) / visible_duration) * timeline_width
-            canvas.create_line(x, top - 6, x, top + len(tracks) * row_height, fill="#111827", dash=(3, 3))
+            canvas.create_line(
+                x,
+                top - 6,
+                x,
+                top + len(tracks) * row_height,
+                fill=DARK_CONSOLE_THEME["trigger"],
+                dash=(3, 3),
+            )
 
-        canvas.create_text(12, block_guide_y, anchor="w", text=TIMELINE_BLOCK_GUIDE_LABEL, fill="#111827")
-        canvas.create_line(label_width, block_guide_y, width - right_margin, block_guide_y, fill="#e5e7eb")
+        canvas.create_text(12, block_guide_y, anchor="w", text=TIMELINE_BLOCK_GUIDE_LABEL, fill=DARK_CONSOLE_THEME["text_fg"])
+        canvas.create_line(label_width, block_guide_y, width - right_margin, block_guide_y, fill=DARK_CONSOLE_THEME["grid"])
         for block, clipped_start, clipped_end in visible_timeline_block_spans(
             self.current_plan.planned_blocks,
             visible_start,
@@ -1224,7 +1370,11 @@ class DotsGuiApp:
             x1 = label_width + ((clipped_end - visible_start) / visible_duration) * timeline_width
             if x1 - x0 < 2:
                 x1 = x0 + 2
-            color = "#2563eb" if block.block_kind == "baseline_rest" else "#111827"
+            color = (
+                DARK_CONSOLE_THEME["baseline_block"]
+                if block.block_kind == "baseline_rest"
+                else DARK_CONSOLE_THEME["stimulus_block"]
+            )
             canvas.create_line(x0, block_guide_y, x1, block_guide_y, fill=color, width=4)
             label_x = min(max((x0 + x1) / 2, label_width + 12), width - right_margin - 12)
             canvas.create_text(
@@ -1273,6 +1423,7 @@ class PreRunChecklistDialog:
         self.accepted = False
         self.window = tk.Toplevel(parent)
         self.window.title("Pre-run checklist")
+        self.window.configure(background=DARK_CONSOLE_THEME["panel_bg"])
         self.window.transient(parent)
         self.window.grab_set()
         self.window.protocol("WM_DELETE_WINDOW", self._cancel)

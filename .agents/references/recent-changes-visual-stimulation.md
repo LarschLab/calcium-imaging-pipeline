@@ -12,6 +12,19 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-01 - dots GUI dark console theme
+- Date and label: 2026-05-01, dots GUI dark console theme
+- Slice goal: Make the dots GUI look sleeker with a dark console style without changing run or preview semantics.
+- Passes completed in this session: Theme constants -> ttk style setup -> canvas palette update -> palette regression test -> reference/log update -> compile/unit checks.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: added the dark-console default theme for ttk widgets, timeline canvas, legends, tooltips, and the pre-run checklist.
+  - `tests/test_dots_gui_layout.py`: added coverage that the dark palette covers timeline and block-guide drawing surfaces.
+  - `.agents/references/visual-stimulation-script-index.md`: updated dots GUI ownership to include the dark-console default theme.
+- What remains broken: Manual GUI confirmation remains useful for final visual tuning on the operator display.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want a light/dark toggle later, add it as GUI-local state rather than changing protocol or runner code.
+- Rerun implications: Presentation only; experiment outputs, trigger timing, metadata, saved setting keys, and run planning are unchanged.
+
 ## 2026-05-01 - dots GUI timeline block guide lane
 - Date and label: 2026-05-01, dots GUI timeline block guide lane
 - Slice goal: Keep planned block context visible while operators zoom and pan the timeline preview.

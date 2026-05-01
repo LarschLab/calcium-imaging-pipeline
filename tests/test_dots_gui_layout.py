@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "visual_stimulation"))
 
 from dots_gui import (  # noqa: E402
+    BASE_TIMELINE_COLORS,
+    DARK_CONSOLE_THEME,
     DEFAULT_INITIAL_MODE,
     FORM_GROUP_COLUMNS,
     GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY,
@@ -208,6 +210,24 @@ class DotsGuiLayoutTests(unittest.TestCase):
     def test_legend_positions_reject_non_positive_entries_per_row(self) -> None:
         with self.assertRaises(ValueError):
             compute_legend_grid_positions(1, 0)
+
+    def test_dark_console_palette_covers_timeline_and_block_guides(self) -> None:
+        self.assertEqual(
+            set(BASE_TIMELINE_COLORS),
+            {"rest", "prestim_pause", "poststim_pause", "interblock_pause"},
+        )
+        for color_key in (
+            "canvas_bg",
+            "grid",
+            "trigger",
+            "hover_outline",
+            "baseline_block",
+            "stimulus_block",
+            "primary",
+            "panel_bg",
+            "text_fg",
+        ):
+            self.assertRegex(DARK_CONSOLE_THEME[color_key], r"^#[0-9a-fA-F]{6}$")
 
     def test_timeline_view_clamps_to_total_duration(self) -> None:
         self.assertEqual(clamp_timeline_view(-5, 20, 10), (0.0, 10.0))
