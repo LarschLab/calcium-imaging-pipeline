@@ -13,6 +13,8 @@ from dots_protocol import (
     FPS,
     MODE_LOOP_BLOCKS,
     MODE_LOOP_STIMULI,
+    STIMULUS_MEDIA_CSV,
+    STIMULUS_MEDIA_VIDEO,
     plan_to_planned_block_rows,
     plan_to_schedule_rows,
 )
@@ -99,7 +101,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
         raise
 
     flip_coordinates = str(metadata.get("fish_orientation", "")).lower() == "bottom-left"
-    stimulus_frames = {stimulus.runtime_key: stimulus.data_frame for stimulus in plan.stimuli_catalog}
+    stimuli_by_key = {stimulus.runtime_key: stimulus for stimulus in plan.stimuli_catalog}
     trigger_pulse_sec = float(runtime.get("trigger_pulse_sec", 0.05))
 
     exp_event_log: list[dict[str, Any]] = []
@@ -131,12 +133,12 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                 print(trial.stimulus_key, "started")
                 log_event(f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_key}")
 
-                data_frame = stimulus_frames[trial.stimulus_key]
-                _draw_stimulus(
+                stimulus = stimuli_by_key[trial.stimulus_key]
+                _present_stimulus(
                     win,
+                    visual,
                     dots,
-                    data_frame,
-                    trial.n_dots,
+                    stimulus,
                     flip_coordinates,
                     dot_radius_mode=runtime.get("dot_radius_mode", "fixed"),
                     fixed_radius=dot_radius,
@@ -171,7 +173,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                 for trial_index in planned_block.trial_indices:
                     trial = plan.trials[trial_index]
                     trial_sequence.append(trial.stimulus_name)
-                    data_frame = stimulus_frames[trial.stimulus_key]
+                    stimulus = stimuli_by_key[trial.stimulus_key]
 
                     log_event(f"B{block_num}_prestim{trial.trial_index}_pause")
                     _flip_for_duration(win, float(stimuli_params["pre_stim_pause_sec"]))
@@ -179,11 +181,11 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
                     pin_aux.write(1)
                     print(trial.stimulus_name, "started")
                     log_event(f"B{block_num}_stim{trial.trial_index}_{trial.stimulus_name}")
-                    _draw_stimulus(
+                    _present_stimulus(
                         win,
+                        visual,
                         dots,
-                        data_frame,
-                        trial.n_dots,
+                        stimulus,
                         flip_coordinates,
                         dot_radius_mode=runtime.get("dot_radius_mode", "per_frame"),
                         fixed_radius=float(stimuli_params.get("dot_radius_cm", dot_radius)),
@@ -373,7 +375,7 @@ def _simulate_stimulus(
     use_loom_markers: bool,
 ) -> None:
     stimulus = next(stim for stim in plan.stimuli_catalog if stim.runtime_key == trial.stimulus_key)
-    if use_loom_markers:
+    if stimulus.media_type == STIMULUS_MEDIA_CSV and stimulus.data_frame is not None and use_loom_markers:
         radius_columns = [f"dot{dot_idx}_radius" for dot_idx in range(trial.n_dots)]
         for frame_index in range(len(stimulus.data_frame)):
             radius_values = [
@@ -397,6 +399,60 @@ def _simulate_stimulus(
                 )
                 break
     state.advance(trial.duration_sec)
+
+
+def _present_stimulus(
+    win: Any,
+    visual: Any,
+    dots: list[Any],
+    stimulus: Any,
+    flip_coordinates: bool,
+    dot_radius_mode: str,
+    fixed_radius: float,
+    pin_aux: Any,
+    exp_event_log: list[dict[str, Any]],
+    block_event_log: list[dict[str, Any]],
+    exp_clock: Any,
+    block_clock: Any,
+    trigger_pulse_sec: float,
+    wait: Any,
+    block_num: int,
+    trial_index: int,
+    stimulus_key: str,
+    use_loom_markers: bool,
+) -> None:
+    if stimulus.media_type == STIMULUS_MEDIA_VIDEO:
+        _draw_video_stimulus(win, visual, stimulus.path)
+        return
+    if stimulus.media_type != STIMULUS_MEDIA_CSV or stimulus.data_frame is None:
+        raise ValueError(f"Unsupported stimulus media type for {stimulus.path}: {stimulus.media_type}")
+    _draw_stimulus(
+        win,
+        dots,
+        stimulus.data_frame,
+        stimulus.n_dots,
+        flip_coordinates,
+        dot_radius_mode,
+        fixed_radius,
+        pin_aux,
+        exp_event_log,
+        block_event_log,
+        exp_clock,
+        block_clock,
+        trigger_pulse_sec,
+        wait,
+        block_num,
+        trial_index,
+        stimulus_key,
+        use_loom_markers,
+    )
+
+
+def _draw_video_stimulus(win: Any, visual: Any, stimulus_path: Path) -> None:
+    movie = visual.MovieStim(win, filename=str(stimulus_path), units="pix", loop=False)
+    while not movie.isFinished:
+        movie.draw()
+        win.flip()
 
 
 def _draw_stimulus(

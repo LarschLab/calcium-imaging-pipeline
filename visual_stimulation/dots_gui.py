@@ -19,12 +19,12 @@ from dots_protocol import (
     MOCK_OUTPUT_ROOT,
     PlannedBlock,
     SAMPLE_STIMULI_DIR,
+    STIMULUS_MEDIA_VIDEO,
     StimulusSpec,
     TimelineSegment,
     build_run_plan,
     format_duration,
     get_mode_defaults,
-    infer_stimulus_type,
     load_stimuli_catalog,
     prepare_run_config,
     summarize_plan,
@@ -184,6 +184,20 @@ DARK_CONSOLE_THEME = {
 }
 TOOLTIP_BG_COLOR = "#020617"
 TOOLTIP_FG_COLOR = DARK_CONSOLE_THEME["text_fg"]
+DARK_TTK_STYLE_NAMES = (
+    "TFrame",
+    "Panel.TFrame",
+    "TLabelframe",
+    "TLabelframe.Label",
+    "TLabel",
+    "Muted.TLabel",
+    "TEntry",
+    "TCombobox",
+    "TCheckbutton",
+    "TButton",
+    "Accent.TButton",
+    "Vertical.TScrollbar",
+)
 
 BASE_TIMELINE_COLORS = {
     "rest": "#1d4ed8",
@@ -206,6 +220,16 @@ def compute_legend_grid_positions(entry_count: int, entries_per_row: int) -> lis
         (entry_index // entries_per_row, (entry_index % entries_per_row) * 2)
         for entry_index in range(entry_count)
     ]
+
+
+def collect_timeline_stimulus_identities(timeline: list[TimelineSegment]) -> list[str]:
+    return sorted(
+        {
+            segment.stimulus_name
+            for segment in timeline
+            if segment.kind == "stimulus" and segment.stimulus_name
+        }
+    )
 
 
 def clamp_timeline_view(start_sec: float, end_sec: float, total_duration_sec: float) -> tuple[float, float]:
@@ -320,7 +344,10 @@ def build_timeline_segment_description(plan: DotsRunPlan, segment: TimelineSegme
     if segment.kind == "stimulus":
         for trial in plan.trials:
             if trial.trial_index == segment.trial_index:
-                lines.append(f"Dots: {trial.n_dots}")
+                if trial.media_type == STIMULUS_MEDIA_VIDEO:
+                    lines.append("Media: MP4 video")
+                else:
+                    lines.append(f"Dots: {trial.n_dots}")
                 lines.append(f"Path: {trial.stimulus_path}")
                 break
     elif segment.stimulus_name:
@@ -481,6 +508,20 @@ class DotsGuiApp:
 
     def _configure_dark_console_theme(self) -> None:
         self.root.configure(background=DARK_CONSOLE_THEME["root_bg"])
+        self.root.option_add("*Background", DARK_CONSOLE_THEME["panel_bg"])
+        self.root.option_add("*Foreground", DARK_CONSOLE_THEME["text_fg"])
+        self.root.option_add("*selectBackground", DARK_CONSOLE_THEME["primary"])
+        self.root.option_add("*selectForeground", "#04111f")
+        self.root.option_add("*Entry.Background", DARK_CONSOLE_THEME["field_bg"])
+        self.root.option_add("*Entry.Foreground", DARK_CONSOLE_THEME["field_fg"])
+        self.root.option_add("*Listbox.Background", DARK_CONSOLE_THEME["field_bg"])
+        self.root.option_add("*Listbox.Foreground", DARK_CONSOLE_THEME["field_fg"])
+        self.root.option_add("*Listbox.selectBackground", DARK_CONSOLE_THEME["primary"])
+        self.root.option_add("*Listbox.selectForeground", "#04111f")
+        self.root.option_add("*TCombobox*Listbox.background", DARK_CONSOLE_THEME["field_bg"])
+        self.root.option_add("*TCombobox*Listbox.foreground", DARK_CONSOLE_THEME["field_fg"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", DARK_CONSOLE_THEME["primary"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", "#04111f")
         style = ttk.Style(self.root)
         if "clam" in style.theme_names():
             style.theme_use("clam")
@@ -493,14 +534,14 @@ class DotsGuiApp:
             relief="flat",
         )
         style.configure(
-            "TLabelFrame",
+            "TLabelframe",
             background=DARK_CONSOLE_THEME["panel_bg"],
             foreground=DARK_CONSOLE_THEME["primary"],
             bordercolor=DARK_CONSOLE_THEME["border"],
             relief="solid",
         )
         style.configure(
-            "TLabelFrame.Label",
+            "TLabelframe.Label",
             background=DARK_CONSOLE_THEME["panel_bg"],
             foreground=DARK_CONSOLE_THEME["primary"],
             font=("TkDefaultFont", 10, "bold"),
@@ -519,6 +560,8 @@ class DotsGuiApp:
             bordercolor=DARK_CONSOLE_THEME["border"],
             lightcolor=DARK_CONSOLE_THEME["border"],
             darkcolor=DARK_CONSOLE_THEME["border"],
+            selectbackground=DARK_CONSOLE_THEME["primary"],
+            selectforeground="#04111f",
             padding=4,
         )
         style.configure(
@@ -530,6 +573,8 @@ class DotsGuiApp:
             bordercolor=DARK_CONSOLE_THEME["border"],
             lightcolor=DARK_CONSOLE_THEME["border"],
             darkcolor=DARK_CONSOLE_THEME["border"],
+            selectbackground=DARK_CONSOLE_THEME["primary"],
+            selectforeground="#04111f",
             padding=4,
         )
         style.map(
@@ -584,6 +629,8 @@ class DotsGuiApp:
             troughcolor=DARK_CONSOLE_THEME["panel_alt_bg"],
             bordercolor=DARK_CONSOLE_THEME["border"],
             arrowcolor=DARK_CONSOLE_THEME["primary"],
+            lightcolor=DARK_CONSOLE_THEME["border"],
+            darkcolor=DARK_CONSOLE_THEME["border"],
         )
 
     def _build_layout(self) -> None:
@@ -851,7 +898,7 @@ class DotsGuiApp:
         self.forms_canvas.yview_scroll(delta, "units")
 
     def _browse_stimuli_dir(self) -> None:
-        selected = filedialog.askdirectory(title="Select the folder containing the stimulus CSV files")
+        selected = filedialog.askdirectory(title="Select the folder containing the stimulus CSV/MP4 files")
         if selected:
             self.stimuli_dir_var.set(selected)
             self._mark_dirty("Stimulus folder changed. Refreshing preview.")
@@ -1083,20 +1130,14 @@ class DotsGuiApp:
         except OSError as exc:
             self.status_var.set(f"Preview is current, but GUI settings were not saved: {exc}")
 
-    def _stimulus_type_color_map(self) -> dict[str, str]:
+    def _stimulus_identity_color_map(self) -> dict[str, str]:
         if not self.current_plan:
             return {}
-        stimulus_types = sorted(
-            {
-                infer_stimulus_type(segment.stimulus_name)
-                for segment in self.current_plan.timeline
-                if segment.kind == "stimulus"
-            }
-        )
-        if not stimulus_types:
+        stimulus_identities = collect_timeline_stimulus_identities(self.current_plan.timeline)
+        if not stimulus_identities:
             return {}
-        colors = self._generate_distinct_colors(len(stimulus_types))
-        return dict(zip(stimulus_types, colors))
+        colors = self._generate_distinct_colors(len(stimulus_identities))
+        return dict(zip(stimulus_identities, colors))
 
     @staticmethod
     def _generate_distinct_colors(count: int) -> list[str]:
@@ -1117,7 +1158,7 @@ class DotsGuiApp:
             (kind.replace("_", " "), color) for kind, color in BASE_TIMELINE_COLORS.items()
         ]
         entries.extend(
-            (f"stimulus: {stim_type}", color) for stim_type, color in self._stimulus_type_color_map().items()
+            (f"stimulus: {stimulus_name}", color) for stimulus_name, color in self._stimulus_identity_color_map().items()
         )
         positions = compute_legend_grid_positions(len(entries), LEGEND_ENTRIES_PER_ROW)
         for idx, (label, color) in enumerate(entries):
@@ -1305,7 +1346,7 @@ class DotsGuiApp:
             ("stimulus", "Stimulus"),
             ("poststim_pause", "Post"),
         ]
-        stimulus_type_colors = self._stimulus_type_color_map()
+        stimulus_identity_colors = self._stimulus_identity_color_map()
         track_y = {kind: top + idx * row_height for idx, (kind, _) in enumerate(tracks)}
         block_guide_y = top + len(tracks) * row_height + 24
 
@@ -1328,7 +1369,7 @@ class DotsGuiApp:
             y = track_y[segment.kind]
             color = BASE_TIMELINE_COLORS.get(segment.kind, "#e5e7eb")
             if segment.kind == "stimulus":
-                color = stimulus_type_colors.get(infer_stimulus_type(segment.stimulus_name), "#fca5a5")
+                color = stimulus_identity_colors.get(segment.stimulus_name, "#fca5a5")
             outline = DARK_CONSOLE_THEME["hover_outline"] if segment.order == self.hovered_timeline_segment_order else ""
             width_px = 2 if segment.order == self.hovered_timeline_segment_order else 1
             item_id = canvas.create_rectangle(

@@ -13,8 +13,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "visual_stimulation"))
 
-from dots_protocol import DotsRunPlan, MODE_LOOP_STIMULI, get_mode_defaults  # noqa: E402
-from dots_runner import _append_post_run_metadata, _pulse_pin, _run_hardware_experiment, _setup_trigger_pins  # noqa: E402
+from dots_protocol import DotsRunPlan, MODE_LOOP_STIMULI, STIMULUS_MEDIA_VIDEO, StimulusSpec, get_mode_defaults  # noqa: E402
+from dots_runner import (  # noqa: E402
+    _append_post_run_metadata,
+    _present_stimulus,
+    _pulse_pin,
+    _run_hardware_experiment,
+    _setup_trigger_pins,
+)
 
 
 class DotsRunnerHardwareTests(unittest.TestCase):
@@ -95,6 +101,60 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         _pulse_pin(Pin(), 0.05, wait)
 
         self.assertEqual(events, [("write", 1), ("wait", 0.05), ("write", 0)])
+
+    def test_present_video_stimulus_draws_movie_frames(self) -> None:
+        events: list[str] = []
+
+        class Window:
+            def flip(self) -> None:
+                events.append("flip")
+
+        class Movie:
+            def __init__(self, win: object, filename: str, units: str, loop: bool) -> None:
+                events.append(f"movie:{Path(filename).name}:{units}:{loop}")
+                self.draw_count = 0
+
+            @property
+            def isFinished(self) -> bool:
+                return self.draw_count >= 2
+
+            def draw(self) -> None:
+                self.draw_count += 1
+                events.append("draw")
+
+        visual = types.SimpleNamespace(MovieStim=Movie)
+        stimulus = StimulusSpec(
+            runtime_key="stim_video",
+            display_name="stim_video",
+            path=Path("stim_video.mp4"),
+            frame_count=120,
+            n_dots=0,
+            duration_sec=2.0,
+            media_type=STIMULUS_MEDIA_VIDEO,
+        )
+
+        _present_stimulus(
+            Window(),
+            visual,
+            [],
+            stimulus,
+            False,
+            "fixed",
+            0.2,
+            None,
+            [],
+            [],
+            None,
+            None,
+            0.05,
+            lambda _: None,
+            0,
+            0,
+            "stim_video",
+            False,
+        )
+
+        self.assertEqual(events, ["movie:stim_video.mp4:pix:False", "draw", "flip", "draw", "flip"])
 
     def test_post_run_metadata_opens_metadata_and_anatomy_dialogs(self) -> None:
         dialog_titles: list[str] = []

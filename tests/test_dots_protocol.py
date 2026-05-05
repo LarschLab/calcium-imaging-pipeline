@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -17,7 +18,6 @@ from dots_protocol import (  # noqa: E402
     build_run_plan,
     derive_functional_framerate,
     get_mode_defaults,
-    infer_stimulus_type,
     load_stimuli_catalog,
     plan_to_planned_block_rows,
     plan_to_schedule_rows,
@@ -110,6 +110,113 @@ class DotsProtocolTests(unittest.TestCase):
                 [trial.stimulus_name for trial in first_plan.trials],
                 [trial.stimulus_name for trial in second_plan.trials],
             )
+
+    def test_block_mode_keeps_underscore_stems_as_distinct_stimuli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "Ll_RB_trajectory.csv", frames=30)
+            self._write_stimulus(tmp_path / "Ll_RC_trajectory.csv", frames=30)
+            self._write_stimulus(tmp_path / "Rl_RB_trajectory.csv", frames=30)
+            self._write_stimulus(tmp_path / "Rl_RC_trajectory.csv", frames=30)
+
+            defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
+            defaults["stimuli_params"]["n_rep_stim"] = 1
+            defaults["stimuli_params"]["n_trials_per_block"] = 4
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["inter_block_pause_sec"] = 0
+            defaults["runtime"]["stimulus_order"] = "sequential"
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_BLOCKS,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                tmp_path,
+            )
+            catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_BLOCKS)
+            plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
+
+            expected_names = [
+                "Ll_RB_trajectory",
+                "Ll_RC_trajectory",
+                "Rl_RB_trajectory",
+                "Rl_RC_trajectory",
+            ]
+            self.assertEqual([stimulus.runtime_key for stimulus in catalog], expected_names)
+            self.assertEqual([stimulus.display_name for stimulus in catalog], expected_names)
+            self.assertEqual([trial.stimulus_name for trial in plan.trials], expected_names)
+
+    def test_catalog_loads_mp4_only_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            video_path = tmp_path / "stim1.mp4"
+            video_path.write_bytes(b"not-a-real-video")
+
+            with patch("dots_protocol._read_video_duration_sec", return_value=2.5):
+                catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_STIMULI)
+
+            self.assertEqual(len(catalog), 1)
+            self.assertEqual(catalog[0].path, video_path)
+            self.assertEqual(catalog[0].media_type, "video")
+            self.assertEqual(catalog[0].frame_count, 150)
+            self.assertEqual(catalog[0].n_dots, 0)
+            self.assertIsNone(catalog[0].data_frame)
+            self.assertAlmostEqual(catalog[0].duration_sec, 2.5, places=6)
+
+    def test_catalog_loads_mixed_csv_and_mp4_in_numeric_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            self._write_stimulus(tmp_path / "stim2.csv", frames=60)
+            (tmp_path / "stim1.mp4").write_bytes(b"not-a-real-video")
+
+            with patch("dots_protocol._read_video_duration_sec", return_value=0.5):
+                catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_STIMULI)
+
+            self.assertEqual([stimulus.path.name for stimulus in catalog], ["stim1.mp4", "stim2.csv"])
+            self.assertEqual([stimulus.media_type for stimulus in catalog], ["video", "csv"])
+
+    def test_mp4_duration_contributes_to_block_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "video_a.mp4").write_bytes(b"not-a-real-video")
+            self._write_stimulus(tmp_path / "stim_b.csv", frames=60)
+
+            defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
+            defaults["stimuli_params"]["n_rep_stim"] = 1
+            defaults["stimuli_params"]["n_trials_per_block"] = 2
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["inter_block_pause_sec"] = 0
+            defaults["runtime"]["stimulus_order"] = "sequential"
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_BLOCKS,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                tmp_path,
+            )
+            with patch("dots_protocol._read_video_duration_sec", return_value=2.0):
+                catalog = load_stimuli_catalog(tmp_path, MODE_LOOP_BLOCKS)
+            plan = build_run_plan(MODE_LOOP_BLOCKS, metadata, functional, stimuli_params, runtime, catalog)
+
+            self.assertEqual([trial.media_type for trial in plan.trials], ["csv", "video"])
+            self.assertAlmostEqual(plan.planned_blocks[0].duration_sec, 3.0, places=6)
+            self.assertAlmostEqual(plan.planned_blocks[1].duration_sec, 3.0, places=6)
+            self.assertEqual(plan.planned_block_frame_counts, [6, 6])
+
+    def test_unreadable_mp4_raises_clear_catalog_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            video_path = tmp_path / "bad.mp4"
+            video_path.write_bytes(b"not-a-real-video")
+
+            with patch("dots_protocol._read_video_duration_sec", side_effect=ValueError(f"Could not read MP4 stimulus duration: {video_path}")):
+                with self.assertRaisesRegex(ValueError, "Could not read MP4 stimulus duration"):
+                    load_stimuli_catalog(tmp_path, MODE_LOOP_STIMULI)
 
     def test_block_mode_plans_baseline_rest_before_stimulus_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -279,6 +386,38 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertEqual(list(planned_blocks_df["acquisition_frame_count"]), plan.planned_block_frame_counts)
             self.assertEqual(planned_blocks_df.to_dict("records"), plan_to_planned_block_rows(plan))
 
+    def test_mock_run_accepts_mp4_stimulus(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            stimuli_dir = tmp_path / "stimuli"
+            stimuli_dir.mkdir()
+            (stimuli_dir / "video1.mp4").write_bytes(b"not-a-real-video")
+
+            defaults = get_mode_defaults(MODE_LOOP_STIMULI)
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["runtime"]["mock_mode"] = True
+            defaults["runtime"]["mock_output_root"] = str(tmp_path / "mock_runs")
+
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_STIMULI,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                stimuli_dir,
+            )
+            with patch("dots_protocol._read_video_duration_sec", return_value=1.25):
+                catalog = load_stimuli_catalog(stimuli_dir, MODE_LOOP_STIMULI)
+            plan = build_run_plan(MODE_LOOP_STIMULI, metadata, functional, stimuli_params, runtime, catalog)
+
+            meta_dir = run_planned_experiment(plan)
+            trial_sequence = pd.read_csv(next(path for path in meta_dir.iterdir() if path.name.endswith("_trial_sequence.csv")))
+
+            self.assertEqual(plan.trials[0].media_type, "video")
+            self.assertIn("video1.mp4", trial_sequence["stimulus"].iloc[0])
+
     def test_mock_block_run_uses_zero_based_block_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -338,12 +477,6 @@ class DotsProtocolTests(unittest.TestCase):
         catalog = load_stimuli_catalog(SAMPLE_STIMULI_DIR, MODE_LOOP_STIMULI)
         self.assertGreaterEqual(len(catalog), 2)
         self.assertTrue(all(stim.frame_count > 0 for stim in catalog))
-
-    def test_infer_stimulus_type_groups_variants(self) -> None:
-        self.assertEqual(infer_stimulus_type("LeConti_trajectory"), "LeConti")
-        self.assertEqual(infer_stimulus_type("loom-left-fast"), "loom")
-        self.assertEqual(infer_stimulus_type("stimulus"), "stimulus")
-        self.assertEqual(infer_stimulus_type(""), "unknown")
 
     @staticmethod
     def _write_stimulus(path: Path, frames: int) -> None:

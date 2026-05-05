@@ -13,6 +13,9 @@ import pandas as pd
 
 
 FPS = 60
+STIMULUS_MEDIA_CSV = "csv"
+STIMULUS_MEDIA_VIDEO = "video"
+SUPPORTED_STIMULUS_SUFFIXES = {".csv", ".mp4"}
 MICROSCOPE_BASE_FRAME_RATE_HZ = 30
 PIXELS_MONITOR = [1280, 800]
 MONITOR_NAME = "DLC_Projector"
@@ -52,7 +55,8 @@ class StimulusSpec:
     frame_count: int
     n_dots: int
     duration_sec: float
-    data_frame: pd.DataFrame
+    data_frame: pd.DataFrame | None = None
+    media_type: str = STIMULUS_MEDIA_CSV
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,7 @@ class PlannedTrial:
     frame_count: int
     n_dots: int
     duration_sec: float
+    media_type: str = STIMULUS_MEDIA_CSV
 
 
 @dataclass(frozen=True)
@@ -341,25 +346,42 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
 
 def load_stimuli_catalog(stimuli_dir: str | Path, mode: str) -> list[StimulusSpec]:
     stimuli_path = Path(stimuli_dir)
-    file_paths = sorted(stimuli_path.glob("*.csv"), key=lambda path: path.name)
+    file_paths = sorted(
+        (path for path in stimuli_path.iterdir() if path.is_file() and path.suffix.lower() in SUPPORTED_STIMULUS_SUFFIXES),
+        key=lambda path: path.name,
+    )
     if mode == MODE_LOOP_STIMULI:
         file_paths.sort(key=_numeric_sort_key)
     if not file_paths:
-        raise ValueError(f"No stimulus CSV files found in {stimuli_path}")
+        raise ValueError(f"No stimulus CSV/MP4 files found in {stimuli_path}")
 
     catalog: list[StimulusSpec] = []
+    runtime_keys: set[str] = set()
     for file_path in file_paths:
-        data_frame = pd.read_csv(file_path)
-        if data_frame.empty:
-            raise ValueError(f"Stimulus file is empty: {file_path}")
         if mode == MODE_LOOP_STIMULI:
             runtime_key = str(file_path)
             display_name = file_path.stem
         else:
-            runtime_key = file_path.stem.split("_")[0]
-            display_name = runtime_key
-        frame_count = len(data_frame)
-        n_dots = _infer_n_dots(data_frame)
+            runtime_key = file_path.stem
+            display_name = file_path.stem
+        if runtime_key in runtime_keys:
+            raise ValueError(f"Duplicate stimulus key '{runtime_key}' from files in {stimuli_path}")
+        runtime_keys.add(runtime_key)
+
+        if file_path.suffix.lower() == ".csv":
+            data_frame = pd.read_csv(file_path)
+            if data_frame.empty:
+                raise ValueError(f"Stimulus file is empty: {file_path}")
+            frame_count = len(data_frame)
+            n_dots = _infer_n_dots(data_frame)
+            duration_sec = frame_count / FPS
+            media_type = STIMULUS_MEDIA_CSV
+        else:
+            data_frame = None
+            duration_sec = _read_video_duration_sec(file_path)
+            frame_count = max(1, round(duration_sec * FPS))
+            n_dots = 0
+            media_type = STIMULUS_MEDIA_VIDEO
         catalog.append(
             StimulusSpec(
                 runtime_key=runtime_key,
@@ -367,8 +389,9 @@ def load_stimuli_catalog(stimuli_dir: str | Path, mode: str) -> list[StimulusSpe
                 path=file_path,
                 frame_count=frame_count,
                 n_dots=n_dots,
-                duration_sec=frame_count / FPS,
+                duration_sec=duration_sec,
                 data_frame=data_frame,
+                media_type=media_type,
             )
         )
     return catalog
@@ -455,6 +478,7 @@ def build_run_plan(
                     frame_count=stimulus.frame_count,
                     n_dots=stimulus.n_dots,
                     duration_sec=stimulus.duration_sec,
+                    media_type=stimulus.media_type,
                 )
             )
             current_time, order_index = _append_timed_segment(
@@ -701,18 +725,6 @@ def format_duration(total_seconds: float) -> str:
     return f"{minutes:d}:{seconds:02d}"
 
 
-def infer_stimulus_type(stimulus_name: str | None) -> str:
-    if not stimulus_name:
-        return "unknown"
-    normalized = stimulus_name.strip()
-    if not normalized:
-        return "unknown"
-    tokens = re.split(r"[_\-\s]+", normalized)
-    if tokens and tokens[0]:
-        return tokens[0]
-    return normalized
-
-
 def compute_fish_age_days(fish_birth: str | None) -> int | None:
     if not fish_birth:
         return None
@@ -763,6 +775,54 @@ def _infer_n_dots(data_frame: pd.DataFrame) -> int:
     if x_columns:
         return len(x_columns)
     return len(data_frame.columns) // 3
+
+
+def _read_video_duration_sec(file_path: Path) -> float:
+    duration_sec = _read_video_duration_with_cv2(file_path)
+    if duration_sec is None:
+        duration_sec = _read_video_duration_with_moviepy(file_path)
+    if duration_sec is None or duration_sec <= 0:
+        raise ValueError(f"Could not read MP4 stimulus duration: {file_path}")
+    return duration_sec
+
+
+def _read_video_duration_with_cv2(file_path: Path) -> float | None:
+    try:
+        import cv2
+    except ImportError:
+        return None
+
+    capture = cv2.VideoCapture(str(file_path))
+    try:
+        if not capture.isOpened():
+            return None
+        frame_count = float(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+        if frame_count <= 0 or fps <= 0:
+            return None
+        return frame_count / fps
+    finally:
+        capture.release()
+
+
+def _read_video_duration_with_moviepy(file_path: Path) -> float | None:
+    try:
+        from moviepy.editor import VideoFileClip
+    except ImportError:
+        try:
+            from moviepy import VideoFileClip
+        except ImportError:
+            return None
+
+    try:
+        clip = VideoFileClip(str(file_path))
+    except Exception:
+        return None
+    try:
+        duration = float(clip.duration)
+    finally:
+        clip.close()
+    return duration if duration > 0 else None
 
 
 def _append_timed_segment(

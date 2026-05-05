@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "visual_stimulation"))
 from dots_gui import (  # noqa: E402
     BASE_TIMELINE_COLORS,
     DARK_CONSOLE_THEME,
+    DARK_TTK_STYLE_NAMES,
     DEFAULT_INITIAL_MODE,
     FORM_GROUP_COLUMNS,
     GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY,
@@ -23,6 +24,7 @@ from dots_gui import (  # noqa: E402
     clamp_timeline_view,
     compute_legend_grid_positions,
     compute_group_grid_positions,
+    collect_timeline_stimulus_identities,
     count_unique_presented_stimuli,
     derive_standard_trials_per_block,
     format_field_label,
@@ -211,6 +213,28 @@ class DotsGuiLayoutTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             compute_legend_grid_positions(1, 0)
 
+    def test_timeline_stimulus_identities_use_full_stems(self) -> None:
+        timeline = [
+            TimelineSegment(order=0, kind="stimulus", start_sec=0, duration_sec=1, label="a", stimulus_name="Ll_RB_trajectory"),
+            TimelineSegment(order=1, kind="stimulus", start_sec=1, duration_sec=1, label="b", stimulus_name="Ll_RC_trajectory"),
+            TimelineSegment(order=2, kind="stimulus", start_sec=2, duration_sec=1, label="c", stimulus_name="Rl_RB_trajectory"),
+            TimelineSegment(order=3, kind="stimulus", start_sec=3, duration_sec=1, label="d", stimulus_name="Rl_RC_trajectory"),
+        ]
+
+        identities = collect_timeline_stimulus_identities(timeline)
+
+        self.assertEqual(
+            identities,
+            [
+                "Ll_RB_trajectory",
+                "Ll_RC_trajectory",
+                "Rl_RB_trajectory",
+                "Rl_RC_trajectory",
+            ],
+        )
+        self.assertNotIn("Ll", identities)
+        self.assertNotIn("Rl", identities)
+
     def test_dark_console_palette_covers_timeline_and_block_guides(self) -> None:
         self.assertEqual(
             set(BASE_TIMELINE_COLORS),
@@ -228,6 +252,12 @@ class DotsGuiLayoutTests(unittest.TestCase):
             "text_fg",
         ):
             self.assertRegex(DARK_CONSOLE_THEME[color_key], r"^#[0-9a-fA-F]{6}$")
+
+    def test_dark_console_theme_uses_tk_labelframe_style_names(self) -> None:
+        self.assertIn("TLabelframe", DARK_TTK_STYLE_NAMES)
+        self.assertIn("TLabelframe.Label", DARK_TTK_STYLE_NAMES)
+        self.assertNotIn("TLabelFrame", DARK_TTK_STYLE_NAMES)
+        self.assertNotIn("TLabelFrame.Label", DARK_TTK_STYLE_NAMES)
 
     def test_timeline_view_clamps_to_total_duration(self) -> None:
         self.assertEqual(clamp_timeline_view(-5, 20, 10), (0.0, 10.0))
@@ -314,6 +344,27 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertIn("Trial: 1", description)
         self.assertIn("Dots: 3", description)
         self.assertIn("Path: stim_a.csv", description)
+
+    def test_timeline_segment_description_labels_video_stimuli(self) -> None:
+        plan = self._plan_for_timeline_description(media_type="video", stimulus_path=Path("stim_a.mp4"), n_dots=0)
+        segment = TimelineSegment(
+            order=1,
+            kind="stimulus",
+            start_sec=2.0,
+            duration_sec=0.5,
+            label="stim_a",
+            trial_index=0,
+            block_num=1,
+            stimulus_key="stim",
+            stimulus_name="stim_a",
+            stimulus_path="stim_a.mp4",
+        )
+
+        description = build_timeline_segment_description(plan, segment)
+
+        self.assertIn("Media: MP4 video", description)
+        self.assertNotIn("Dots: 0", description)
+        self.assertIn("Path: stim_a.mp4", description)
 
     def test_timeline_segment_description_includes_pause_duration_frames(self) -> None:
         plan = self._plan_for_timeline_description()
@@ -436,7 +487,11 @@ class DotsGuiLayoutTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _plan_for_timeline_description() -> DotsRunPlan:
+    def _plan_for_timeline_description(
+        media_type: str = "csv",
+        stimulus_path: Path = Path("stim_a.csv"),
+        n_dots: int = 3,
+    ) -> DotsRunPlan:
         return DotsRunPlan(
             mode=MODE_LOOP_BLOCKS,
             metadata={},
@@ -450,10 +505,11 @@ class DotsGuiLayoutTests(unittest.TestCase):
                     block_num=1,
                     stimulus_key="stim",
                     stimulus_name="stim_a",
-                    stimulus_path=Path("stim_a.csv"),
+                    stimulus_path=stimulus_path,
                     frame_count=30,
-                    n_dots=3,
+                    n_dots=n_dots,
                     duration_sec=0.5,
+                    media_type=media_type,
                 )
             ],
             planned_blocks=[],

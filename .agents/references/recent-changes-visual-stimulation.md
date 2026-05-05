@@ -12,6 +12,45 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-01 - dots full-stem timeline legend
+- Date and label: 2026-05-01, dots full-stem timeline legend update
+- Slice goal: Ensure the GUI timeline legend/list and segment colors distinguish each CSV stimulus by full file stem instead of grouping by underscore-delimited prefixes.
+- Passes completed in this session: Owner/routing verification -> GUI identity-coloring fix -> protocol helper cleanup -> regression/docs/log update -> compile/unit checks -> screenshot validation.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: timeline legend and stimulus segment colors now use full `segment.stimulus_name` identities such as `Ll_RB_trajectory` and `Ll_RC_trajectory`.
+  - `visual_stimulation/dots_protocol.py`: removed the now-unused `infer_stimulus_type(...)` helper and its obsolete prefix-grouping test.
+  - `tests/test_dots_gui_layout.py`: added regression coverage that timeline stimulus identities keep full underscore-containing stems and do not collapse to `Ll`/`Rl`.
+  - `.agents/references/visual-stimulation-stage-map.md` and `.agents/references/visual-stimulation-script-index.md`: updated GUI preview wording from stimulus-type coloring to full-stem stimulus identity coloring.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators later want family-level grouping, add it as a separate optional control without replacing full-stem legend identity.
+- Rerun implications: GUI preview presentation changes; experiment execution, trigger timing, saved metadata paths, and catalog keys are unchanged from the prior full-stem loader update.
+
+## 2026-05-01 - dots underscore stimulus names
+- Date and label: 2026-05-01, dots full-stem stimulus key update
+- Slice goal: Prevent underscore-delimited stimulus filenames from collapsing to the same GUI/planning stimulus entry in block-based dots modes.
+- Passes completed in this session: Owner/routing verification -> protocol loader fix -> regression test/docs/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: block/continuous catalog loading now uses the full CSV stem for both `runtime_key` and `display_name`, matching operator-visible filenames such as `Ll_RB_trajectory`.
+  - `tests/test_dots_protocol.py`: added regression coverage for underscore-containing names that previously collapsed to `Ll`/`Rl` keys.
+  - `.agents/references/visual-stimulation-script-index.md`: documented full-stem catalog key/display behavior in the protocol owner description.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: Manual GUI confirmation with the target `danin` stimulus folder.
+- Next likely breakpoint: If operators need separate stimulus-type grouping labels, add a new GUI-local grouping helper without changing catalog keys.
+- Rerun implications: Block/continuous trial logs and planned schedules now show full stimulus stems for underscore-containing CSV names instead of truncated prefixes.
+
+## 2026-05-01 - dots GUI labelframe dark-theme completion
+- Date and label: 2026-05-01, dots GUI labelframe dark-theme completion
+- Slice goal: Remove remaining light native Tk surfaces from the dots launcher content area.
+- Passes completed in this session: Tk/ttk theme correction -> palette regression test -> compile/unit checks -> GUI launch -> screenshot verification.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: corrected labelframe style names to Tk's `TLabelframe` forms, added dark option defaults for Tk popup/listbox surfaces, and extended entry/combobox/scrollbar selection/border colors.
+  - `tests/test_dots_gui_layout.py`: added coverage that the dark theme uses the effective Tk labelframe style names and not the inert `TLabelFrame` spelling.
+- What remains broken: Nothing known for launcher-owned dark-theme surfaces; native OS chrome remains platform-controlled.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If platform-native file dialogs or messageboxes need dark styling, replace those specific modal surfaces intentionally rather than widening main-launcher theme code.
+- Rerun implications: Presentation only; experiment outputs, trigger timing, metadata, saved setting keys, and run planning are unchanged.
+
 ## 2026-05-01 - dots GUI dark console theme
 - Date and label: 2026-05-01, dots GUI dark console theme
 - Slice goal: Make the dots GUI look sleeker with a dark console style without changing run or preview semantics.
@@ -376,3 +415,17 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Remaining in-slice work: Manual GUI launch to confirm three side-by-side sections and width floor behavior on target displays.
 - Next likely breakpoint: If operators request larger/smaller default widths on specific monitors, tune `DEFAULT_WINDOW_GEOMETRY`, `MIN_WINDOW_WIDTH`, and `WINDOW_SAFETY_MARGIN_PX`.
 - Rerun implications: This supersedes the earlier uncommitted vertical-stack slice in “2026-04-16 - dots GUI layout and tooltip visibility fixes”; runtime protocol/output semantics remain unchanged.
+
+## 2026-05-05 - dots GUI MP4 stimulus support
+- Date and label: 2026-05-05, dots GUI CSV/MP4 stimulus loading
+- Slice goal: Let GUI-selected stimulus folders include MP4 files alongside existing CSV dot stimuli.
+- Passes completed in this session: Owner discovery -> protocol/runner/GUI update -> tests/docs update.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: stimulus catalog loading now accepts `.csv` and `.mp4`, records each stimulus media type, derives MP4 duration from video metadata, and includes MP4 durations in plan/block frame counts.
+  - `visual_stimulation/dots_runner.py`: hardware runs present MP4 stimuli with PsychoPy `MovieStim`; mock runs simulate MP4 trials by planned duration while leaving CSV dot rendering unchanged.
+  - `visual_stimulation/dots_gui.py`: stimulus folder chooser copy now says CSV/MP4, and timeline hover details label MP4 stimuli as video media instead of zero-dot stimuli.
+  - Tests added mixed CSV/MP4 catalog, MP4 planning, mock-run, and video playback coverage.
+- What remains broken: Runtime MP4 playback still requires the target PsychoPy environment/codecs to support the file; unreadable MP4 durations fail preview with a clear catalog error.
+- Remaining in-slice work: Manual GUI/hardware confirmation with real MP4 stimuli on the projector workstation.
+- Next likely breakpoint: If operators use duplicate CSV/MP4 stems in block modes, rename files or intentionally change runtime-key policy.
+- Rerun implications: GUI preview and planned acquisition frames now include MP4 durations; metadata/log output schemas are unchanged.
