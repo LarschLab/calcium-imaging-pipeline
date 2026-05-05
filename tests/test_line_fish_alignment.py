@@ -16,6 +16,9 @@ class LineFishAlignmentTests(unittest.TestCase):
     def test_module_import_has_no_psychopy_side_effects(self) -> None:
         self.assertTrue(hasattr(line_fish_alignment, "show_fish_alignment"))
 
+    def test_alignment_marker_color_is_black(self) -> None:
+        self.assertEqual(line_fish_alignment.MARKER_COLOR, "black")
+
     def test_alignment_geometry_matches_existing_dot_positions(self) -> None:
         top_right = line_fish_alignment.compute_alignment_geometry("top-right", 10)
         bottom_left = line_fish_alignment.compute_alignment_geometry("bottom-left", 10)

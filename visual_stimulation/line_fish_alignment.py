@@ -25,6 +25,7 @@ DOT_DISTANCE_CM = 0.1
 DOT_SIZE_CM = 0.1
 ANGLE_DEG = -45
 DOT_POSITION_CHOICES = ("bottom-left", "top-right")
+MARKER_COLOR = "black"
 
 
 def compute_alignment_geometry(dot_position: str, pixel_cm_ratio: float) -> dict[str, Any]:
@@ -83,20 +84,20 @@ def show_fish_alignment(dot_position: str, runtime: dict[str, Any] | None = None
             win,
             start=geometry["line_start"],
             end=geometry["line_end"],
-            lineColor="white",
+            lineColor=MARKER_COLOR,
             lineWidth=3,
         ).draw()
         visual.Line(
             win,
             start=geometry["perpendicular_start"],
             end=geometry["perpendicular_end"],
-            lineColor="white",
+            lineColor=MARKER_COLOR,
             lineWidth=3,
         ).draw()
         visual.Circle(
             win=win,
             size=geometry["dot_size"],
-            fillColor="white",
+            fillColor=MARKER_COLOR,
             pos=geometry["dot_pos"],
         ).draw()
         win.flip()

@@ -429,3 +429,15 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Remaining in-slice work: Manual GUI/hardware confirmation with real MP4 stimuli on the projector workstation.
 - Next likely breakpoint: If operators use duplicate CSV/MP4 stems in block modes, rename files or intentionally change runtime-key policy.
 - Rerun implications: GUI preview and planned acquisition frames now include MP4 durations; metadata/log output schemas are unchanged.
+
+## 2026-05-05 - fish alignment marker color
+- Date and label: 2026-05-05, fish alignment marker color update
+- Slice goal: Change the fish-orientation alignment marker from white to black.
+- Passes completed in this session: Owner discovery -> support-script update -> focused validation/log update.
+- What changed:
+  - `visual_stimulation/line_fish_alignment.py`: added `MARKER_COLOR = "black"` and applied it to both alignment lines and the dot marker.
+  - `tests/test_line_fish_alignment.py`: added regression coverage for the marker color constant.
+- What remains broken: No known breakage from this slice.
+- Remaining in-slice work: Manual projector confirmation that the black marker is visible against the selected alignment background.
+- Next likely breakpoint: If operators need contrast control per background, add an explicit runtime-configured marker color.
+- Rerun implications: GUI “Orient fish” and standalone alignment display now show a black marker; run metadata/output behavior is unchanged.
