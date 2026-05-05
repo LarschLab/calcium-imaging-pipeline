@@ -48,6 +48,7 @@ TIMELINE_MIN_VISIBLE_SEC = 1.0
 TIMELINE_ZOOM_IN_FACTOR = 0.8
 TIMELINE_ZOOM_OUT_FACTOR = 1.25
 TIMELINE_BLOCK_GUIDE_LABEL = "Blocks"
+VISUAL_TEST_BOUTS_POLL_MS = 500
 INPUT_GROUP_ROWS = ("metadata", "functional_params", "stimuli_params")
 FORM_GROUP_COLUMNS = 3
 DEFAULT_WINDOW_GEOMETRY = "1800x1250"
@@ -515,6 +516,8 @@ class DotsGuiApp:
         self.timeline_hover_popup: tk.Toplevel | None = None
         self.timeline_hover_label: tk.Label | None = None
         self._timeline_pan_last_x: int | None = None
+        self.visual_test_bouts_process: subprocess.Popen[Any] | None = None
+        self.visual_test_bouts_button: ttk.Button | None = None
 
         self._configure_dark_console_theme()
         self._build_layout()
@@ -723,7 +726,12 @@ class DotsGuiApp:
         ttk.Button(setup_buttons, text="Orient fish", command=self._show_fish_alignment_from_current_inputs).grid(
             row=0, column=0, sticky="ew"
         )
-        ttk.Button(setup_buttons, text="Visual test bouts", command=self._launch_visual_test_bouts).grid(
+        self.visual_test_bouts_button = ttk.Button(
+            setup_buttons,
+            text="Visual test bouts",
+            command=self._toggle_visual_test_bouts,
+        )
+        self.visual_test_bouts_button.grid(
             row=1, column=0, sticky="ew", pady=(8, 0)
         )
 
@@ -954,15 +962,53 @@ class DotsGuiApp:
             return
         self.status_var.set("Fish orientation display closed.")
 
+    def _toggle_visual_test_bouts(self) -> None:
+        if self.visual_test_bouts_process and self.visual_test_bouts_process.poll() is None:
+            self._stop_visual_test_bouts()
+            return
+        self._reset_visual_test_bouts_state()
+        self._launch_visual_test_bouts()
+
     def _launch_visual_test_bouts(self) -> None:
         script_path = Path(__file__).with_name("visual_test_bouts.py")
         try:
-            subprocess.Popen([sys.executable, str(script_path)], cwd=str(script_path.parent))
+            self.visual_test_bouts_process = subprocess.Popen(
+                [sys.executable, str(script_path)],
+                cwd=str(script_path.parent),
+            )
         except Exception as exc:
+            self._reset_visual_test_bouts_state()
             messagebox.showerror("Visual test bouts failed", str(exc))
             self.status_var.set(f"Visual test bouts failed: {exc}")
             return
+        self._set_visual_test_bouts_button_text("Stop visual test bouts")
         self.status_var.set("Visual test bouts launched.")
+        self.root.after(VISUAL_TEST_BOUTS_POLL_MS, self._poll_visual_test_bouts_process)
+
+    def _stop_visual_test_bouts(self) -> None:
+        process = self.visual_test_bouts_process
+        if process and process.poll() is None:
+            process.terminate()
+        self._reset_visual_test_bouts_state()
+        self.status_var.set("Visual test bouts stopped.")
+
+    def _poll_visual_test_bouts_process(self) -> None:
+        process = self.visual_test_bouts_process
+        if process is None:
+            return
+        if process.poll() is None:
+            self.root.after(VISUAL_TEST_BOUTS_POLL_MS, self._poll_visual_test_bouts_process)
+            return
+        self._reset_visual_test_bouts_state()
+        self.status_var.set("Visual test bouts finished.")
+
+    def _reset_visual_test_bouts_state(self) -> None:
+        self.visual_test_bouts_process = None
+        self._set_visual_test_bouts_button_text("Visual test bouts")
+
+    def _set_visual_test_bouts_button_text(self, text: str) -> None:
+        if self.visual_test_bouts_button is not None:
+            self.visual_test_bouts_button.configure(text=text)
 
     def _apply_remembered_settings(self) -> None:
         metadata_settings = self.remembered_settings.get("metadata", {})

@@ -12,7 +12,7 @@ Use this file when
 ## Main run flow for `dots_*` scripts
 1. Operator setup
     - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
-    - Outputs: in-memory metadata (via scrollable parameter forms), selected CSV/MP4 stimulus directory, monitor config, mock-run flags, planned trial order, dynamic `n_trials_per_block` default at two times unique presented stimuli, derived baseline rest duration, derived functional `framerate`/`n_volumes`, automatic block-duration/frame planning including baseline rest as `B0`, auto-refresh preview timeline with full-stem stimulus identity coloring, manual fish-orientation alignment display, standalone visual test-bouts launcher, pre-run operator checklist
+    - Outputs: in-memory metadata (via scrollable parameter forms), selected CSV/MP4 stimulus directory, monitor config, mock-run flags, planned trial order, dynamic `n_trials_per_block` default at two times unique presented stimuli, derived baseline rest duration, derived functional `framerate`/`n_volumes`, automatic block-duration/frame planning including baseline rest as `B0`, auto-refresh preview timeline with full-stem stimulus identity coloring, manual fish-orientation alignment display, start/stop visual test-bouts launcher, pre-run operator checklist
 2. Experiment tree bootstrap
    - Owner region: `visual_stimulation/dots_runner.py` `init_experiment_tree` call and `meta_dir` selection
    - Output destination: `01_raw/2p/metadata` in the canonical experiment tree

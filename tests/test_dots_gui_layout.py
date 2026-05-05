@@ -508,24 +508,40 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertTrue(any("light-path levers" in item for item in checklist_items))
 
     def test_visual_test_bouts_launches_standalone_script(self) -> None:
-        app = object.__new__(DotsGuiApp)
-
-        class Status:
-            def __init__(self) -> None:
-                self.value = ""
-
-            def set(self, value: str) -> None:
-                self.value = value
-
-        app.status_var = Status()
+        app = self._fake_app_for_visual_test_bouts()
 
         with patch("dots_gui.subprocess.Popen") as popen_mock:
-            app._launch_visual_test_bouts()
+            app._toggle_visual_test_bouts()
 
         args, kwargs = popen_mock.call_args
         self.assertTrue(str(args[0][1]).endswith("visual_test_bouts.py"))
         self.assertEqual(kwargs["cwd"], str(Path(args[0][1]).parent))
         self.assertEqual(app.status_var.value, "Visual test bouts launched.")
+        self.assertEqual(app.visual_test_bouts_button.text, "Stop visual test bouts")
+
+    def test_visual_test_bouts_second_click_stops_running_process(self) -> None:
+        app = self._fake_app_for_visual_test_bouts()
+        process = self._FakeProcess(returncode=None)
+        app.visual_test_bouts_process = process
+        app.visual_test_bouts_button.text = "Stop visual test bouts"
+
+        app._toggle_visual_test_bouts()
+
+        self.assertTrue(process.terminated)
+        self.assertIsNone(app.visual_test_bouts_process)
+        self.assertEqual(app.visual_test_bouts_button.text, "Visual test bouts")
+        self.assertEqual(app.status_var.value, "Visual test bouts stopped.")
+
+    def test_visual_test_bouts_poll_resets_after_natural_exit(self) -> None:
+        app = self._fake_app_for_visual_test_bouts()
+        app.visual_test_bouts_process = self._FakeProcess(returncode=0)
+        app.visual_test_bouts_button.text = "Stop visual test bouts"
+
+        app._poll_visual_test_bouts_process()
+
+        self.assertIsNone(app.visual_test_bouts_process)
+        self.assertEqual(app.visual_test_bouts_button.text, "Visual test bouts")
+        self.assertEqual(app.status_var.value, "Visual test bouts finished.")
 
     @staticmethod
     def _stimulus(display_name: str, runtime_key: str) -> StimulusSpec:
@@ -605,6 +621,49 @@ class DotsGuiLayoutTests(unittest.TestCase):
             total_duration_sec=0,
         )
         return app
+
+    @staticmethod
+    def _fake_app_for_visual_test_bouts() -> DotsGuiApp:
+        app = object.__new__(DotsGuiApp)
+
+        class Root:
+            def __init__(self) -> None:
+                self.after_calls = []
+
+            def after(self, delay_ms: int, callback: object) -> None:
+                self.after_calls.append((delay_ms, callback))
+
+        class Status:
+            def __init__(self) -> None:
+                self.value = ""
+
+            def set(self, value: str) -> None:
+                self.value = value
+
+        class Button:
+            def __init__(self) -> None:
+                self.text = "Visual test bouts"
+
+            def configure(self, **kwargs: str) -> None:
+                if "text" in kwargs:
+                    self.text = kwargs["text"]
+
+        app.root = Root()
+        app.status_var = Status()
+        app.visual_test_bouts_button = Button()
+        app.visual_test_bouts_process = None
+        return app
+
+    class _FakeProcess:
+        def __init__(self, returncode: int | None) -> None:
+            self.returncode = returncode
+            self.terminated = False
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
 
 
 if __name__ == "__main__":

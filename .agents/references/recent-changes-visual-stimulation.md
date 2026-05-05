@@ -12,6 +12,20 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-05 - dots GUI test-bouts stop toggle
+- Date and label: 2026-05-05, dots GUI test-bouts stop toggle
+- Slice goal: Let operators stop visual test bouts from the dots GUI after confirming fish responsiveness.
+- Passes completed in this session: GUI process-state update -> toggle/poll tests -> reference/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: the `Visual test bouts` button now toggles between launching the standalone helper and terminating its running process.
+  - `visual_stimulation/dots_gui.py`: the button text changes to `Stop visual test bouts` while the helper is active and resets after early stop or natural process exit.
+  - `tests/test_dots_gui_layout.py`: added coverage for launch, second-click stop, and natural-exit polling.
+  - `.agents/references/visual-stimulation-stage-map.md` and `.agents/references/visual-stimulation-script-index.md`: documented the start/stop test-bouts launcher.
+- What remains broken: Manual validation on the projector/hardware display is still needed to confirm process termination closes the full-screen PsychoPy window cleanly.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If termination is too abrupt on the operator machine, refactor `visual_test_bouts.py` into an import-safe runner with a cooperative stop signal.
+- Rerun implications: No experiment metadata, trigger timing, or saved output paths changed.
+
 ## 2026-05-05 - dots GUI manual alignment and test bouts
 - Date and label: 2026-05-05, dots GUI manual alignment and test-bouts launcher
 - Slice goal: Make fish alignment a manual-only setup action and expose the visual test bouts helper from the dots GUI.
