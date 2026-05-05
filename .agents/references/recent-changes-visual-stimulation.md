@@ -441,3 +441,17 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Remaining in-slice work: Manual projector confirmation that the black marker is visible against the selected alignment background.
 - Next likely breakpoint: If operators need contrast control per background, add an explicit runtime-configured marker color.
 - Rerun implications: GUI “Orient fish” and standalone alignment display now show a black marker; run metadata/output behavior is unchanged.
+
+## 2026-05-05 - dots GUI compact preview + run diagnostics
+- Date and label: 2026-05-05, dots GUI compact layout and console diagnostics
+- Slice goal: Make microscope testing easier by printing explicit run-progress checkpoints and make the metadata forms visible on lower-resolution GUI windows.
+- Passes completed in this session: Owner discovery -> GUI/runner update -> tests/docs update -> screenshot verification.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: added console-only run diagnostics around checklist handling, GUI withdrawal, fish alignment, and `run_planned_experiment(...)`; added compact one-line visible preview summary; reduced timeline height and preview padding; lowered minimum GUI width to support constrained screenshot checks.
+  - `visual_stimulation/dots_runner.py`: added console-only diagnostics at runner entry, hardware/mock branch startup, metadata directory resolution, Arduino/window setup, B0/block acquisition trigger pulses, and final output save boundaries.
+  - Tests cover compact summary formatting, GUI runner-call diagnostics, runner error diagnostics, and hardware setup-through-B0 diagnostics.
+  - Screenshot checks captured `/tmp/dots_gui_1366x768.png` and `/tmp/dots_gui_1600x900.png`; both show the compact summary, nonblank timeline, and visible metadata section.
+- What remains broken: No known breakage from this slice; screenshots do not validate real microscope/Arduino hardware execution.
+- Remaining in-slice work: Use the new console diagnostics during a 2P workstation run to identify any hardware-only startup breakpoint.
+- Next likely breakpoint: If stdout is still hidden on the microscope workstation, add a metadata-folder debug trace file in a follow-up.
+- Rerun implications: GUI layout and console output changed; trigger timing, metadata schemas, and saved CSV outputs are unchanged.

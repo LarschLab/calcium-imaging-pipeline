@@ -30,6 +30,10 @@ sys.path.insert(0, _repo_root_str)
 from utils import init_experiment_tree
 
 
+def _diagnostic(message: str) -> None:
+    print(f"[dots_runner] {message}", flush=True)
+
+
 @dataclass
 class _MockRuntimeState:
     exp_time: float = 0.0
@@ -53,6 +57,8 @@ class _MockRuntimeState:
 
 
 def run_planned_experiment(plan: DotsRunPlan) -> Path:
+    branch = "mock" if plan.runtime.get("mock_mode") else "hardware"
+    _diagnostic(f"run_planned_experiment entered: mode={plan.mode} branch={branch}")
     if plan.runtime.get("mock_mode"):
         return _run_mock_experiment(plan)
     return _run_hardware_experiment(plan)
@@ -61,15 +67,18 @@ def run_planned_experiment(plan: DotsRunPlan) -> Path:
 def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
     from psychopy import core, monitors, tools, visual
 
+    _diagnostic("hardware runner entered")
     metadata = dict(plan.metadata)
     functional_params = dict(plan.functional_params)
     stimuli_params = dict(plan.stimuli_params)
     runtime = dict(plan.runtime)
 
     meta_dir = _resolve_metadata_dir(metadata, runtime)
+    _diagnostic(f"metadata directory resolved: {meta_dir}")
 
     win = None
     board, pin_acq, pin_aux = _setup_trigger_pins(runtime)
+    _diagnostic("Arduino trigger pins initialized")
 
     try:
         monitor = monitors.Monitor(runtime["monitor_name"], width=float(runtime["monitor_width_cm"]))
@@ -85,6 +94,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
             screen=int(runtime["screen"]),
             fullscr=bool(runtime["fullscr"]),
         )
+        _diagnostic("PsychoPy window created")
 
         dot_radius = float(runtime.get("dot_radius_cm") or stimuli_params.get("dot_radius_cm", 0.2))
         dots = [
@@ -117,7 +127,9 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
 
     try:
         if plan.mode == MODE_LOOP_STIMULI:
+            _diagnostic("B0 acquisition trigger pulse starting")
             _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
+            _diagnostic("B0 acquisition trigger pulse finished")
             log_event("B0_start")
             _flip_for_duration(win, float(stimuli_params.get("pre_stim_resting_sec", 0)))
             for trial in plan.trials:
@@ -164,7 +176,9 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
             post_pause_key = "pre_stim_pause_sec" if plan.mode == MODE_LOOP_BLOCKS else "post_stim_pause_sec"
             for block_index, planned_block in enumerate(plan.planned_blocks):
                 block_num = planned_block.block_num
+                _diagnostic(f"B{block_num} acquisition trigger pulse starting")
                 _pulse_pin(pin_acq, trigger_pulse_sec, core.wait)
+                _diagnostic(f"B{block_num} acquisition trigger pulse finished")
                 block_clock = core.Clock()
                 log_event(f"B{block_num}_start")
                 if planned_block.block_kind == "baseline_rest":
@@ -227,6 +241,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
             pass
 
     current_date = datetime.datetime.now().strftime("%Y-%m-%d-%H%M")
+    _diagnostic("final output save starting")
     _save_outputs(
         meta_dir,
         current_date,
@@ -239,6 +254,7 @@ def _run_hardware_experiment(plan: DotsRunPlan) -> Path:
         block_event_log,
         trial_sequence,
     )
+    _diagnostic("final output save finished")
     _append_post_run_metadata(meta_dir, current_date, metadata, stimuli_params, functional_params, runtime, plan)
     return meta_dir
 
@@ -275,12 +291,14 @@ def _pulse_pin(pin: Any, duration_sec: float, wait: Any) -> None:
 
 
 def _run_mock_experiment(plan: DotsRunPlan) -> Path:
+    _diagnostic("mock runner entered")
     metadata = dict(plan.metadata)
     functional_params = dict(plan.functional_params)
     stimuli_params = dict(plan.stimuli_params)
     runtime = dict(plan.runtime)
 
     meta_dir = _resolve_metadata_dir(metadata, runtime)
+    _diagnostic(f"metadata directory resolved: {meta_dir}")
     exp_event_log: list[dict[str, Any]] = []
     block_event_log: list[dict[str, Any]] = []
     trial_sequence: list[Any] = []
@@ -348,6 +366,7 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
                 state.reset_block()
 
     current_date = datetime.datetime.now().strftime("%Y-%m-%d-%H%M")
+    _diagnostic("final output save starting")
     _save_outputs(
         meta_dir,
         current_date,
@@ -360,6 +379,7 @@ def _run_mock_experiment(plan: DotsRunPlan) -> Path:
         block_event_log,
         trial_sequence,
     )
+    _diagnostic("final output save finished")
     _append_mock_metadata(meta_dir, current_date, metadata, stimuli_params, functional_params, runtime, plan)
     return meta_dir
 

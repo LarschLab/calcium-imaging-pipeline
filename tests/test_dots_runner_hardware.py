@@ -20,6 +20,7 @@ from dots_runner import (  # noqa: E402
     _pulse_pin,
     _run_hardware_experiment,
     _setup_trigger_pins,
+    run_planned_experiment,
 )
 
 
@@ -101,6 +102,48 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         _pulse_pin(Pin(), 0.05, wait)
 
         self.assertEqual(events, [("write", 1), ("wait", 0.05), ("write", 0)])
+
+    def test_hardware_runner_prints_setup_and_b0_diagnostics(self) -> None:
+        state: dict[str, int] = {"windows": 0, "pin_writes": 0}
+
+        class Pin:
+            def write(self, _: int) -> None:
+                state["pin_writes"] += 1
+
+        class Arduino:
+            def __init__(self, _: str) -> None:
+                pass
+
+            def get_pin(self, _: str) -> Pin:
+                return Pin()
+
+            def exit(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = self._minimal_plan(tmpdir)
+            with (
+                self._fake_modules(Arduino, state),
+                patch("dots_runner._append_post_run_metadata"),
+                patch("builtins.print") as print_mock,
+            ):
+                run_planned_experiment(plan)
+
+        messages = [call.args[0] for call in print_mock.call_args_list]
+        expected = [
+            "[dots_runner] run_planned_experiment entered: mode=loop_stimuli branch=hardware",
+            "[dots_runner] hardware runner entered",
+            f"[dots_runner] metadata directory resolved: {Path(tmpdir) / 'Tester' / 'F001' / '01_raw' / '2p' / 'metadata'}",
+            "[dots_runner] Arduino trigger pins initialized",
+            "[dots_runner] PsychoPy window created",
+            "[dots_runner] B0 acquisition trigger pulse starting",
+            "[dots_runner] B0 acquisition trigger pulse finished",
+            "[dots_runner] final output save starting",
+            "[dots_runner] final output save finished",
+        ]
+        for message in expected:
+            self.assertIn(message, messages)
+        self.assertGreaterEqual(state["pin_writes"], 4)
 
     def test_present_video_stimulus_draws_movie_frames(self) -> None:
         events: list[str] = []
@@ -261,6 +304,15 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         def cm2pix(*args: object, **kwargs: object) -> int:
             return 1
 
+        class Clock:
+            def getTime(self) -> float:
+                return 0.0
+
+        def wait(_: float) -> None:
+            pass
+
+        core.Clock = Clock
+        core.wait = wait
         monitors.Monitor = Monitor
         monitorunittools.cm2pix = cm2pix
         tools.monitorunittools = monitorunittools

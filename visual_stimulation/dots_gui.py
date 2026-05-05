@@ -41,7 +41,7 @@ FIELD_GROUPS = (
 
 AUTO_PREVIEW_DEBOUNCE_MS = 400
 LABEL_TOOLTIP_DELAY_MS = 500
-TIMELINE_PREVIEW_HEIGHT_PX = 290
+TIMELINE_PREVIEW_HEIGHT_PX = 180
 TIMELINE_MIN_VISIBLE_SEC = 1.0
 TIMELINE_ZOOM_IN_FACTOR = 0.8
 TIMELINE_ZOOM_OUT_FACTOR = 1.25
@@ -49,7 +49,7 @@ TIMELINE_BLOCK_GUIDE_LABEL = "Blocks"
 INPUT_GROUP_ROWS = ("metadata", "functional_params", "stimuli_params")
 FORM_GROUP_COLUMNS = 3
 DEFAULT_WINDOW_GEOMETRY = "1800x1250"
-MIN_WINDOW_WIDTH = 1600
+MIN_WINDOW_WIDTH = 1280
 WINDOW_SAFETY_MARGIN_PX = 80
 PREVIEW_PENDING_RUN_BLOCK_REASON = "Wait for auto-preview to refresh current settings before running."
 DEFAULT_INITIAL_MODE = MODE_LOOP_BLOCKS
@@ -429,6 +429,22 @@ def build_base_preview_summary(plan: DotsRunPlan) -> str:
     )
 
 
+def build_compact_preview_summary(plan: DotsRunPlan) -> str:
+    n_volumes = plan.functional_params.get("n_volumes", plan.planned_total_acquisition_frames)
+    block_count = plan.planned_block_count
+    parts = [
+        MODE_LABELS[plan.mode],
+        f"{len(plan.stimuli_catalog)} stimuli",
+        f"{plan.total_trials} trials",
+        f"{format_duration(plan.total_duration_sec)} total",
+        f"{n_volumes} volumes",
+    ]
+    if block_count:
+        parts.append(f"{block_count} blocks")
+    parts.append(f"Mock: {'yes' if plan.runtime.get('mock_mode') else 'no'}")
+    return " | ".join(parts)
+
+
 def enrich_preview_summary_with_block_planning(plan: DotsRunPlan, base_summary: str) -> tuple[str, str | None]:
     if plan.mode not in {MODE_LOOP_BLOCKS, MODE_CONTINUOUS_SESSION}:
         return base_summary, None
@@ -640,19 +656,19 @@ class DotsGuiApp:
         self.root.rowconfigure(2, weight=1)
         self.root.rowconfigure(3, weight=0)
 
-        preview = ttk.Frame(self.root, padding=(12, 12, 12, 6), style="TFrame")
+        preview = ttk.Frame(self.root, padding=(12, 8, 12, 4), style="TFrame")
         preview.grid(row=0, column=0, sticky="ew")
         preview.columnconfigure(0, weight=1)
         preview.rowconfigure(1, weight=0)
 
-        summary_frame = ttk.LabelFrame(preview, text="Summary", padding=10)
+        summary_frame = ttk.LabelFrame(preview, text="Summary", padding=(8, 4, 8, 4))
         summary_frame.grid(row=0, column=0, sticky="ew")
         summary_frame.columnconfigure(0, weight=1)
         ttk.Label(summary_frame, textvariable=self.summary_var, wraplength=1260, justify="left").grid(
-            row=0, column=0, sticky="ew", pady=(10, 12)
+            row=0, column=0, sticky="ew"
         )
 
-        timeline_frame = ttk.LabelFrame(preview, text="Timeline Preview", padding=10)
+        timeline_frame = ttk.LabelFrame(preview, text="Timeline Preview", padding=(8, 6, 8, 6))
         timeline_frame.grid(row=1, column=0, sticky="ew")
         timeline_frame.columnconfigure(0, weight=1)
         timeline_frame.rowconfigure(0, weight=0)
@@ -665,7 +681,7 @@ class DotsGuiApp:
         self.timeline_canvas.grid(row=0, column=0, sticky="ew")
 
         legend = ttk.Frame(preview)
-        legend.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        legend.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self.legend_frame = legend
         self._render_legend()
 
@@ -1100,7 +1116,7 @@ class DotsGuiApp:
 
         summary_text = build_base_preview_summary(self.current_plan)
         summary_text, run_block_reason = enrich_preview_summary_with_block_planning(self.current_plan, summary_text)
-        self.summary_var.set(summary_text)
+        self.summary_var.set(build_compact_preview_summary(self.current_plan))
         if run_block_reason:
             self.status_var.set(f"Preview is current, but run is blocked: {run_block_reason}")
         else:
@@ -1427,6 +1443,7 @@ class DotsGuiApp:
             )
 
     def run_plan(self) -> None:
+        print("[dots_gui] Run button handler entered", flush=True)
         if self.run_block_reason:
             title = "Run blocked" if self.preview_is_current else "Preview pending"
             messagebox.showwarning(title, self.run_block_reason)
@@ -1436,20 +1453,29 @@ class DotsGuiApp:
             return
         checklist = PreRunChecklistDialog(self.root, build_pre_run_checklist_items(self.current_plan))
         if not checklist.accepted:
+            print("[dots_gui] Pre-run checklist cancelled", flush=True)
             return
+        print("[dots_gui] Pre-run checklist accepted", flush=True)
 
         self.root.withdraw()
+        print("[dots_gui] GUI withdrawn", flush=True)
         if should_show_fish_alignment(self.current_plan):
             try:
+                print("[dots_gui] Fish alignment display starting", flush=True)
                 self._show_fish_alignment_for_plan(self.current_plan)
+                print("[dots_gui] Fish alignment display finished", flush=True)
             except Exception as exc:
+                print(f"[dots_gui] Fish alignment display failed: {exc}", flush=True)
                 self.root.deiconify()
                 messagebox.showerror("Fish orientation failed", str(exc))
                 self.status_var.set(f"Fish orientation failed: {exc}")
                 return
         try:
+            print("[dots_gui] Calling run_planned_experiment()", flush=True)
             meta_dir = run_planned_experiment(self.current_plan)
+            print(f"[dots_gui] run_planned_experiment() returned: {meta_dir}", flush=True)
         except Exception as exc:
+            print(f"[dots_gui] run_planned_experiment() raised: {exc}", flush=True)
             self.root.deiconify()
             messagebox.showerror("Run failed", str(exc))
             self.status_var.set(f"Run failed: {exc}")

@@ -4,6 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,8 @@ from dots_gui import (  # noqa: E402
     GUI_SETTINGS_FUNCTIONAL_PARAMS_BY_MODE_KEY,
     GUI_SETTINGS_STIMULI_PARAMS_BY_MODE_KEY,
     INPUT_GROUP_ROWS,
+    DotsGuiApp,
+    build_compact_preview_summary,
     build_pre_run_checklist_items,
     build_remembered_gui_settings,
     build_timeline_segment_description,
@@ -66,6 +69,64 @@ class DotsGuiLayoutTests(unittest.TestCase):
 
     def test_standalone_gui_defaults_to_loop_blocks(self) -> None:
         self.assertEqual(DEFAULT_INITIAL_MODE, MODE_LOOP_BLOCKS)
+
+    def test_compact_preview_summary_is_single_line(self) -> None:
+        plan = DotsRunPlan(
+            mode=MODE_LOOP_BLOCKS,
+            metadata={},
+            functional_params={"n_volumes": 1610},
+            stimuli_params={},
+            runtime={"mock_mode": False},
+            stimuli_catalog=[self._stimulus("stim_a", "stim_a"), self._stimulus("stim_b", "stim_b")],
+            trials=[
+                PlannedTrial(0, 1, "stim_a", "stim_a", Path("stim_a.csv"), 60, 1, 1.0),
+                PlannedTrial(1, 1, "stim_b", "stim_b", Path("stim_b.csv"), 60, 1, 1.0),
+            ],
+            planned_blocks=[PlannedBlock(0, [], 0, 2, 2, 4), PlannedBlock(1, [0, 1], 3, 5, 2, 4)],
+            timeline=[],
+            total_duration_sec=5,
+        )
+
+        summary = build_compact_preview_summary(plan)
+
+        self.assertEqual(
+            summary,
+            "Loop Blocks | 2 stimuli | 2 trials | 0:05 total | 1610 volumes | 2 blocks | Mock: no",
+        )
+        self.assertNotIn("\n", summary)
+
+    def test_run_plan_prints_diagnostics_around_runner_call(self) -> None:
+        app = self._fake_app_for_run(mock_mode=True)
+
+        with (
+            patch("dots_gui.PreRunChecklistDialog", return_value=type("Checklist", (), {"accepted": True})()),
+            patch("dots_gui.run_planned_experiment", return_value=Path("/tmp/meta")),
+            patch("dots_gui.messagebox.showinfo"),
+            patch("builtins.print") as print_mock,
+        ):
+            app.run_plan()
+
+        messages = [call.args[0] for call in print_mock.call_args_list]
+        self.assertIn("[dots_gui] Run button handler entered", messages)
+        self.assertIn("[dots_gui] Pre-run checklist accepted", messages)
+        self.assertIn("[dots_gui] GUI withdrawn", messages)
+        self.assertIn("[dots_gui] Calling run_planned_experiment()", messages)
+        self.assertIn("[dots_gui] run_planned_experiment() returned: /tmp/meta", messages)
+
+    def test_run_plan_prints_diagnostics_when_runner_raises(self) -> None:
+        app = self._fake_app_for_run(mock_mode=True)
+
+        with (
+            patch("dots_gui.PreRunChecklistDialog", return_value=type("Checklist", (), {"accepted": True})()),
+            patch("dots_gui.run_planned_experiment", side_effect=RuntimeError("boom")),
+            patch("dots_gui.messagebox.showerror"),
+            patch("builtins.print") as print_mock,
+        ):
+            app.run_plan()
+
+        messages = [call.args[0] for call in print_mock.call_args_list]
+        self.assertIn("[dots_gui] Calling run_planned_experiment()", messages)
+        self.assertIn("[dots_gui] run_planned_experiment() raised: boom", messages)
 
     def test_remembered_gui_settings_include_only_operator_fields_and_stimuli_dir(self) -> None:
         settings = build_remembered_gui_settings(
@@ -516,6 +577,42 @@ class DotsGuiLayoutTests(unittest.TestCase):
             timeline=[],
             total_duration_sec=4,
         )
+
+    @staticmethod
+    def _fake_app_for_run(mock_mode: bool) -> DotsGuiApp:
+        app = object.__new__(DotsGuiApp)
+
+        class Root:
+            def withdraw(self) -> None:
+                pass
+
+            def deiconify(self) -> None:
+                pass
+
+            def destroy(self) -> None:
+                pass
+
+        class Status:
+            def set(self, _: str) -> None:
+                pass
+
+        app.root = Root()
+        app.status_var = Status()
+        app.run_block_reason = None
+        app.preview_is_current = True
+        app.current_plan = DotsRunPlan(
+            mode=MODE_LOOP_STIMULI,
+            metadata={"fish_orientation": "bottom-left"},
+            functional_params={},
+            stimuli_params={},
+            runtime={"mock_mode": mock_mode},
+            stimuli_catalog=[],
+            trials=[],
+            planned_blocks=[],
+            timeline=[],
+            total_duration_sec=0,
+        )
+        return app
 
 
 if __name__ == "__main__":
