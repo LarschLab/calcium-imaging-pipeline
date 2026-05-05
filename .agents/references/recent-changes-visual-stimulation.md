@@ -12,6 +12,20 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-05 - dots GUI manual alignment and test bouts
+- Date and label: 2026-05-05, dots GUI manual alignment and test-bouts launcher
+- Slice goal: Make fish alignment a manual-only setup action and expose the visual test bouts helper from the dots GUI.
+- Passes completed in this session: GUI run-flow update -> launcher button wiring -> regression/reference/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: `Run` no longer shows fish alignment before starting the experiment; alignment is available only from the `Orient fish` button.
+  - `visual_stimulation/dots_gui.py`: added a `Visual test bouts` button below `Orient fish` that launches `visual_test_bouts.py` as a separate Python process.
+  - `tests/test_dots_gui_layout.py`: updated run-flow coverage and added launcher subprocess coverage.
+  - `.agents/references/visual-stimulation-stage-map.md` and `.agents/references/visual-stimulation-script-index.md`: documented manual-only alignment and the GUI test-bouts launcher.
+- What remains broken: Manual validation on the projector/hardware display is still needed for actual PsychoPy windows.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want test bouts to reuse the selected GUI stimulus folder or fish orientation, refactor `visual_test_bouts.py` into import-safe callable helpers.
+- Rerun implications: Hardware runs now begin directly after the pre-run checklist; no metadata, trigger timing, or saved output paths changed.
+
 ## 2026-05-01 - dots full-stem timeline legend
 - Date and label: 2026-05-01, dots full-stem timeline legend update
 - Slice goal: Ensure the GUI timeline legend/list and segment colors distinguish each CSV stimulus by full file stem instead of grouping by underscore-delimited prefixes.

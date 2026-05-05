@@ -35,7 +35,6 @@ from dots_gui import (  # noqa: E402
     load_gui_settings,
     pan_timeline_view,
     save_gui_settings,
-    should_show_fish_alignment,
     visible_timeline_block_spans,
     zoom_timeline_view,
 )
@@ -96,11 +95,12 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertNotIn("\n", summary)
 
     def test_run_plan_prints_diagnostics_around_runner_call(self) -> None:
-        app = self._fake_app_for_run(mock_mode=True)
+        app = self._fake_app_for_run(mock_mode=False)
 
         with (
             patch("dots_gui.PreRunChecklistDialog", return_value=type("Checklist", (), {"accepted": True})()),
             patch("dots_gui.run_planned_experiment", return_value=Path("/tmp/meta")),
+            patch("dots_gui.show_fish_alignment") as alignment_mock,
             patch("dots_gui.messagebox.showinfo"),
             patch("builtins.print") as print_mock,
         ):
@@ -112,6 +112,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertIn("[dots_gui] GUI withdrawn", messages)
         self.assertIn("[dots_gui] Calling run_planned_experiment()", messages)
         self.assertIn("[dots_gui] run_planned_experiment() returned: /tmp/meta", messages)
+        alignment_mock.assert_not_called()
 
     def test_run_plan_prints_diagnostics_when_runner_raises(self) -> None:
         app = self._fake_app_for_run(mock_mode=True)
@@ -506,34 +507,25 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertTrue(any("4 volumes" in item for item in checklist_items))
         self.assertTrue(any("light-path levers" in item for item in checklist_items))
 
-    def test_fish_alignment_is_skipped_for_mock_runs_only(self) -> None:
-        hardware_plan = DotsRunPlan(
-            mode=MODE_LOOP_BLOCKS,
-            metadata={},
-            functional_params={},
-            stimuli_params={},
-            runtime={"mock_mode": False},
-            stimuli_catalog=[],
-            trials=[],
-            planned_blocks=[],
-            timeline=[],
-            total_duration_sec=0,
-        )
-        mock_plan = DotsRunPlan(
-            mode=MODE_LOOP_BLOCKS,
-            metadata={},
-            functional_params={},
-            stimuli_params={},
-            runtime={"mock_mode": True},
-            stimuli_catalog=[],
-            trials=[],
-            planned_blocks=[],
-            timeline=[],
-            total_duration_sec=0,
-        )
+    def test_visual_test_bouts_launches_standalone_script(self) -> None:
+        app = object.__new__(DotsGuiApp)
 
-        self.assertTrue(should_show_fish_alignment(hardware_plan))
-        self.assertFalse(should_show_fish_alignment(mock_plan))
+        class Status:
+            def __init__(self) -> None:
+                self.value = ""
+
+            def set(self, value: str) -> None:
+                self.value = value
+
+        app.status_var = Status()
+
+        with patch("dots_gui.subprocess.Popen") as popen_mock:
+            app._launch_visual_test_bouts()
+
+        args, kwargs = popen_mock.call_args
+        self.assertTrue(str(args[0][1]).endswith("visual_test_bouts.py"))
+        self.assertEqual(kwargs["cwd"], str(Path(args[0][1]).parent))
+        self.assertEqual(app.status_var.value, "Visual test bouts launched.")
 
     @staticmethod
     def _stimulus(display_name: str, runtime_key: str) -> StimulusSpec:

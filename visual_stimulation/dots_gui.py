@@ -3,6 +3,8 @@ from __future__ import annotations
 import colorsys
 import json
 import random
+import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -312,10 +314,6 @@ def build_pre_run_checklist_items(plan: DotsRunPlan) -> list[str]:
         "Confirm microscope acquisition is ready/armed.",
         "Confirm fish, stimulus folder, and previewed schedule are correct.",
     ]
-
-
-def should_show_fish_alignment(plan: DotsRunPlan) -> bool:
-    return not bool(plan.runtime.get("mock_mode"))
 
 
 def _visual_frame_count_for_segment(plan: DotsRunPlan, segment: TimelineSegment) -> int:
@@ -719,8 +717,14 @@ class DotsGuiApp:
             command=self._on_mock_mode_toggle,
         )
         self.mock_mode_button.grid(row=2, column=0, sticky="w", pady=(10, 0))
-        ttk.Button(controls, text="Orient fish", command=self._show_fish_alignment_from_current_inputs).grid(
-            row=2, column=1, sticky="ew", padx=(8, 0), pady=(10, 0)
+        setup_buttons = ttk.Frame(controls)
+        setup_buttons.grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=(10, 0))
+        setup_buttons.columnconfigure(0, weight=1)
+        ttk.Button(setup_buttons, text="Orient fish", command=self._show_fish_alignment_from_current_inputs).grid(
+            row=0, column=0, sticky="ew"
+        )
+        ttk.Button(setup_buttons, text="Visual test bouts", command=self._launch_visual_test_bouts).grid(
+            row=1, column=0, sticky="ew", pady=(8, 0)
         )
 
         self.mock_output_row = ttk.Frame(controls)
@@ -950,8 +954,15 @@ class DotsGuiApp:
             return
         self.status_var.set("Fish orientation display closed.")
 
-    def _show_fish_alignment_for_plan(self, plan: DotsRunPlan) -> None:
-        show_fish_alignment(str(plan.metadata.get("fish_orientation") or "bottom-left"), plan.runtime)
+    def _launch_visual_test_bouts(self) -> None:
+        script_path = Path(__file__).with_name("visual_test_bouts.py")
+        try:
+            subprocess.Popen([sys.executable, str(script_path)], cwd=str(script_path.parent))
+        except Exception as exc:
+            messagebox.showerror("Visual test bouts failed", str(exc))
+            self.status_var.set(f"Visual test bouts failed: {exc}")
+            return
+        self.status_var.set("Visual test bouts launched.")
 
     def _apply_remembered_settings(self) -> None:
         metadata_settings = self.remembered_settings.get("metadata", {})
@@ -1459,17 +1470,6 @@ class DotsGuiApp:
 
         self.root.withdraw()
         print("[dots_gui] GUI withdrawn", flush=True)
-        if should_show_fish_alignment(self.current_plan):
-            try:
-                print("[dots_gui] Fish alignment display starting", flush=True)
-                self._show_fish_alignment_for_plan(self.current_plan)
-                print("[dots_gui] Fish alignment display finished", flush=True)
-            except Exception as exc:
-                print(f"[dots_gui] Fish alignment display failed: {exc}", flush=True)
-                self.root.deiconify()
-                messagebox.showerror("Fish orientation failed", str(exc))
-                self.status_var.set(f"Fish orientation failed: {exc}")
-                return
         try:
             print("[dots_gui] Calling run_planned_experiment()", flush=True)
             meta_dir = run_planned_experiment(self.current_plan)
