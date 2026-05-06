@@ -63,6 +63,7 @@ LEGEND_ENTRIES_PER_ROW = 4
 AUTO_BLOCK_FIELD_NAME = "n_trials_per_block"
 AUTO_REST_FIELD_NAME = "pre_stim_resting_sec"
 REMEMBERED_STIMULI_PARAM_EXCLUDED_FIELDS = {AUTO_BLOCK_FIELD_NAME, AUTO_REST_FIELD_NAME}
+DERIVED_METADATA_FIELDS = {"fish_age_dpf"}
 DERIVED_FUNCTIONAL_FIELDS = {"n_volumes", "framerate"}
 REMEMBERED_FUNCTIONAL_PARAM_EXCLUDED_FIELDS = DERIVED_FUNCTIONAL_FIELDS
 REMEMBERED_METADATA_FIELDS = (
@@ -862,6 +863,10 @@ class DotsGuiApp:
         if field_name == "fish_orientation":
             variable = tk.StringVar(value=str(field_value))
             widget = ttk.Combobox(parent, textvariable=variable, state="readonly", values=["bottom-left", "top-right"])
+        elif group_key == "metadata" and field_name in DERIVED_METADATA_FIELDS:
+            text = "" if field_value is None else str(field_value)
+            variable = tk.StringVar(value=text)
+            widget = ttk.Entry(parent, textvariable=variable, state="readonly")
         elif isinstance(field_value, bool):
             variable = tk.BooleanVar(value=field_value)
             widget = ttk.Checkbutton(parent, variable=variable)
@@ -973,7 +978,7 @@ class DotsGuiApp:
         script_path = Path(__file__).with_name("visual_test_bouts.py")
         try:
             self.visual_test_bouts_process = subprocess.Popen(
-                [sys.executable, str(script_path)],
+                [sys.executable, str(script_path), "--fish-orientation", self._selected_fish_orientation()],
                 cwd=str(script_path.parent),
             )
         except Exception as exc:
@@ -1086,6 +1091,8 @@ class DotsGuiApp:
         defaults = get_mode_defaults(self.mode_var.get())[group_name]
         result: dict[str, Any] = {}
         for field_name, variable in self.field_vars[group_name].items():
+            if group_name == "metadata" and field_name in DERIVED_METADATA_FIELDS:
+                continue
             raw_value = variable.get()
             default_value = defaults[field_name]
             result[field_name] = self._coerce_value(raw_value, default_value)
@@ -1118,6 +1125,19 @@ class DotsGuiApp:
         self._updating_dynamic_n_trials_per_block = True
         try:
             rest_var.set(f"{float(derived_rest):.6g}")
+        finally:
+            self._updating_dynamic_n_trials_per_block = False
+
+    def _apply_derived_metadata_to_fields(self) -> None:
+        if not self.current_plan:
+            return
+        age_var = self.field_vars.get("metadata", {}).get("fish_age_dpf")
+        if age_var is None:
+            return
+        age_value = self.current_plan.metadata.get("fish_age_dpf")
+        self._updating_dynamic_n_trials_per_block = True
+        try:
+            age_var.set("" if age_value is None else str(age_value))
         finally:
             self._updating_dynamic_n_trials_per_block = False
 
@@ -1161,6 +1181,7 @@ class DotsGuiApp:
                 runtime,
                 stimuli_catalog,
             )
+            self._apply_derived_metadata_to_fields()
             self._apply_derived_rest_to_field()
         except Exception as exc:
             if show_dialog:

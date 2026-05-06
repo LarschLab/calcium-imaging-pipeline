@@ -508,16 +508,46 @@ class DotsGuiLayoutTests(unittest.TestCase):
         self.assertTrue(any("light-path levers" in item for item in checklist_items))
 
     def test_visual_test_bouts_launches_standalone_script(self) -> None:
-        app = self._fake_app_for_visual_test_bouts()
+        app = self._fake_app_for_visual_test_bouts("top-right")
 
         with patch("dots_gui.subprocess.Popen") as popen_mock:
             app._toggle_visual_test_bouts()
 
         args, kwargs = popen_mock.call_args
         self.assertTrue(str(args[0][1]).endswith("visual_test_bouts.py"))
+        self.assertEqual(args[0][2:], ["--fish-orientation", "top-right"])
         self.assertEqual(kwargs["cwd"], str(Path(args[0][1]).parent))
         self.assertEqual(app.status_var.value, "Visual test bouts launched.")
         self.assertEqual(app.visual_test_bouts_button.text, "Stop visual test bouts")
+
+    def test_collect_metadata_values_excludes_derived_fish_age(self) -> None:
+        app = object.__new__(DotsGuiApp)
+
+        class Var:
+            def __init__(self, value: object) -> None:
+                self.value = value
+
+            def get(self) -> object:
+                return self.value
+
+        class Mode:
+            def get(self) -> str:
+                return MODE_LOOP_BLOCKS
+
+        app.mode_var = Mode()
+        app.field_vars = {
+            "metadata": {
+                "fish_ID": Var("L395_f01"),
+                "fish_birth": Var("2025-06-23"),
+                "fish_age_dpf": Var("999"),
+            }
+        }
+
+        values = app._collect_group_values("metadata")
+
+        self.assertEqual(values["fish_ID"], "L395_f01")
+        self.assertEqual(values["fish_birth"], "2025-06-23")
+        self.assertNotIn("fish_age_dpf", values)
 
     def test_visual_test_bouts_second_click_stops_running_process(self) -> None:
         app = self._fake_app_for_visual_test_bouts()
@@ -623,7 +653,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
         return app
 
     @staticmethod
-    def _fake_app_for_visual_test_bouts() -> DotsGuiApp:
+    def _fake_app_for_visual_test_bouts(fish_orientation: str = "bottom-left") -> DotsGuiApp:
         app = object.__new__(DotsGuiApp)
 
         class Root:
@@ -648,10 +678,18 @@ class DotsGuiLayoutTests(unittest.TestCase):
                 if "text" in kwargs:
                     self.text = kwargs["text"]
 
+        class Var:
+            def __init__(self, value: str) -> None:
+                self.value = value
+
+            def get(self) -> str:
+                return self.value
+
         app.root = Root()
         app.status_var = Status()
         app.visual_test_bouts_button = Button()
         app.visual_test_bouts_process = None
+        app.field_vars = {"metadata": {"fish_orientation": Var(fish_orientation)}}
         return app
 
     class _FakeProcess:

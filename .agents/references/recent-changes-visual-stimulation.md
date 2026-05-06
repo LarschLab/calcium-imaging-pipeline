@@ -12,6 +12,20 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-05 - dots GUI test-bouts orientation and fish age
+- Date and label: 2026-05-05, dots GUI test-bouts orientation and fish age
+- Slice goal: Make GUI-launched visual test bouts use the selected fish orientation and keep fish age derived from remembered birth date.
+- Passes completed in this session: GUI launcher update -> visual test helper import-safe CLI refactor -> derived age GUI handling -> tests/reference/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: `Visual test bouts` now launches `visual_test_bouts.py` with `--fish-orientation` from the current metadata form.
+  - `visual_stimulation/dots_gui.py`: `fish_age_dpf` is treated as a derived, non-editable metadata field and refreshed from the prepared plan instead of collected as operator input.
+  - `visual_stimulation/visual_test_bouts.py`: refactored into import-safe helpers with optional CLI orientation; standalone use still asks for orientation when the argument is omitted.
+  - `tests/test_dots_gui_layout.py` and `tests/test_visual_test_bouts.py`: added coverage for forwarded orientation, derived-age collection, and import-safe argument parsing.
+- What remains broken: Manual projector/PsychoPy validation is still needed to confirm full-screen test-bout presentation on the operator machine.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want the test-bouts helper to reuse the selected GUI stimulus folder or timing fields, pass those through the same CLI/helper boundary.
+- Rerun implications: GUI-launched test bouts now match selected fish orientation; experiment metadata output keeps computing fish age from `fish_birth`.
+
 ## 2026-05-05 - dots GUI test-bouts stop toggle
 - Date and label: 2026-05-05, dots GUI test-bouts stop toggle
 - Slice goal: Let operators stop visual test bouts from the dots GUI after confirming fish responsiveness.
