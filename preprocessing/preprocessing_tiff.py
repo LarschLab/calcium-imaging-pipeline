@@ -6,6 +6,7 @@ import time
 import gc
 import re
 import multiprocessing as mp
+import shutil
 
 
 class SingleLineProgress:
@@ -527,6 +528,102 @@ def _write_resonant_session_worker(args):
     )
 
 
+def _scan_resonant_block_worker(args):
+    (
+        job_index,
+        session_label,
+        block_number,
+        tif_file,
+        n_planes,
+        n_frames_per_plane,
+        volume_flyback_frames,
+        remove_first_frame,
+    ) = args
+    print(f"[{session_label} block {block_number}] scanning {Path(tif_file).name}", flush=True)
+    min_value, max_value = scan_resonant_min_max(
+        [Path(tif_file)],
+        n_planes,
+        n_frames_per_plane,
+        volume_flyback_frames=volume_flyback_frames,
+        remove_first_frame=remove_first_frame,
+        progress=False,
+    )
+    return job_index, session_label, block_number, min_value, max_value
+
+
+def _write_resonant_block_worker(args):
+    (
+        job_index,
+        session_label,
+        block_number,
+        tif_file,
+        temp_root,
+        fish_id,
+        n_planes,
+        n_frames_per_plane,
+        offset,
+        volume_flyback_frames,
+        remove_first_frame,
+    ) = args
+    block_output_path = Path(temp_root) / f"block_{job_index:05d}"
+    print(f"[{session_label} block {block_number}] writing temporary planes", flush=True)
+    write_resonant_streaming(
+        [Path(tif_file)],
+        block_output_path,
+        fish_id,
+        n_planes,
+        n_frames_per_plane,
+        offset,
+        volume_flyback_frames=volume_flyback_frames,
+        remove_first_frame=remove_first_frame,
+        progress=False,
+        plane_offset=0,
+    )
+    return job_index
+
+
+def build_resonant_block_jobs(sessions):
+    """
+    Return selected raw TIFFs as ordered per-block work units.
+    """
+    jobs = []
+    for session_index, session in enumerate(sessions):
+        for tif_file in session["tiff_files"]:
+            block_number = extract_block_number(tif_file)
+            jobs.append(
+                {
+                    "job_index": len(jobs),
+                    "session_index": session_index,
+                    "session_label": session["session_label"],
+                    "block_number": block_number,
+                    "tif_file": Path(tif_file),
+                }
+            )
+    return jobs
+
+
+def merge_resonant_block_outputs(block_jobs, temp_root, output_path, fish_id, n_planes):
+    """
+    Merge temporary block outputs into canonical per-session plane TIFFs.
+    """
+    jobs_by_session = {}
+    for job in block_jobs:
+        jobs_by_session.setdefault(job["session_index"], []).append(job)
+
+    for session_index, session_jobs in sorted(jobs_by_session.items()):
+        session_jobs.sort(key=lambda job: job["block_number"])
+        plane_offset = session_index * n_planes
+        for local_plane_idx in range(n_planes):
+            plane_idx = plane_offset + local_plane_idx
+            out_file = output_path / f"{fish_id}_plane{plane_idx}.tif"
+            with tf.TiffWriter(out_file, bigtiff=True) as writer:
+                for job in session_jobs:
+                    block_file = Path(temp_root) / f"block_{job['job_index']:05d}" / f"{fish_id}_plane{local_plane_idx}.tif"
+                    with tf.TiffFile(block_file) as tif:
+                        for page in tif.pages:
+                            writer.write(page.asarray(), photometric="minisblack", contiguous=True)
+
+
 def concatenate_tiff_files(tiff_files, protocol, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """
     Load and concatenate the provided TIFF files.
@@ -711,32 +808,40 @@ def process_fish_streaming(
 
         clear_resonant_plane_outputs(output_path, fish_id)
         sessions = get_functional_tiff_sessions(fish_id, input_base, blocks)
-        worker_count = resolve_worker_count(workers, len(sessions))
-        print(f"Streaming {fish_id}: {sum(len(session['tiff_files']) for session in sessions)} TIFF file(s) across {len(sessions)} session(s)")
+        block_jobs = build_resonant_block_jobs(sessions)
+        worker_count = resolve_worker_count(workers, len(block_jobs))
+        use_block_parallel = worker_count > 1 and any(
+            len(session["tiff_files"]) > 1 for session in sessions
+        )
+        print(f"Streaming {fish_id}: {len(block_jobs)} TIFF file(s) across {len(sessions)} session(s)")
         print(f"Using {worker_count} preprocessing worker(s)")
 
         scan_jobs = [
             (
-                session["session_label"],
-                session["tiff_files"],
+                job["job_index"],
+                job["session_label"],
+                job["block_number"],
+                job["tif_file"],
                 n_planes,
                 n_frames_per_plane,
                 volume_flyback_frames,
                 remove_first_frame,
             )
-            for session in sessions
+            for job in block_jobs
         ]
         if worker_count > 1:
             with mp.Pool(processes=worker_count) as pool:
-                scan_results = pool.map(_scan_resonant_session_worker, scan_jobs)
+                scan_results = pool.map(_scan_resonant_block_worker, scan_jobs)
         else:
             scan_results = []
-            for job in scan_jobs:
+            for scan_job in scan_jobs:
                 scan_results.append(
                     (
-                        job[0],
+                        scan_job[0],
+                        scan_job[1],
+                        scan_job[2],
                         *scan_resonant_min_max(
-                            job[1],
+                            [scan_job[3]],
                             n_planes,
                             n_frames_per_plane,
                             volume_flyback_frames=volume_flyback_frames,
@@ -746,8 +851,8 @@ def process_fish_streaming(
                     )
                 )
 
-        min_value = min(result[1] for result in scan_results)
-        max_value = max(result[2] for result in scan_results)
+        min_value = min(result[3] for result in scan_results)
+        max_value = max(result[4] for result in scan_results)
         offset = abs(min_value) if min_value < 0 else 0
         print(f"  min: {min_value}, max: {max_value}")
         if offset:
@@ -755,25 +860,10 @@ def process_fish_streaming(
         else:
             print("  No negative values to correct.")
 
-        write_jobs = []
         session_metadata = []
         for session_index, session in enumerate(sessions):
             plane_offset = session_index * n_planes
             output_planes = list(range(plane_offset, plane_offset + n_planes))
-            write_jobs.append(
-                (
-                    session["session_label"],
-                    session["tiff_files"],
-                    output_path,
-                    fish_id,
-                    n_planes,
-                    n_frames_per_plane,
-                    offset,
-                    volume_flyback_frames,
-                    remove_first_frame,
-                    plane_offset,
-                )
-            )
             session_metadata.append(
                 {
                     "session_label": session["session_label"],
@@ -784,13 +874,58 @@ def process_fish_streaming(
                 }
             )
 
-        if worker_count > 1:
+        if use_block_parallel:
+            temp_root = output_path / f".{fish_id}_block_parallel_{int(time.time() * 1000)}"
+            if temp_root.exists():
+                shutil.rmtree(temp_root)
+            temp_root.mkdir(parents=True)
+            try:
+                write_jobs = [
+                    (
+                        job["job_index"],
+                        job["session_label"],
+                        job["block_number"],
+                        job["tif_file"],
+                        temp_root,
+                        fish_id,
+                        n_planes,
+                        n_frames_per_plane,
+                        offset,
+                        volume_flyback_frames,
+                        remove_first_frame,
+                    )
+                    for job in block_jobs
+                ]
+                with mp.Pool(processes=worker_count) as pool:
+                    pool.map(_write_resonant_block_worker, write_jobs)
+                print("Merging temporary block outputs into canonical plane TIFFs", flush=True)
+                merge_resonant_block_outputs(block_jobs, temp_root, output_path, fish_id, n_planes)
+            finally:
+                if temp_root.exists():
+                    shutil.rmtree(temp_root)
+        elif worker_count > 1:
+            write_jobs = []
+            for session_index, session in enumerate(sessions):
+                write_jobs.append(
+                    (
+                        session["session_label"],
+                        session["tiff_files"],
+                        output_path,
+                        fish_id,
+                        n_planes,
+                        n_frames_per_plane,
+                        offset,
+                        volume_flyback_frames,
+                        remove_first_frame,
+                        session_index * n_planes,
+                    )
+                )
             with mp.Pool(processes=worker_count) as pool:
                 pool.map(_write_resonant_session_worker, write_jobs)
         else:
-            for job in write_jobs:
+            for session_index, session in enumerate(sessions):
                 write_resonant_streaming(
-                    job[1],
+                    session["tiff_files"],
                     output_path,
                     fish_id,
                     n_planes,
@@ -799,8 +934,15 @@ def process_fish_streaming(
                     volume_flyback_frames=volume_flyback_frames,
                     remove_first_frame=remove_first_frame,
                     progress=progress,
-                    plane_offset=job[9],
+                    plane_offset=session_index * n_planes,
                 )
+
+        if use_block_parallel:
+            parallel_granularity = "tiff_block"
+        elif worker_count > 1:
+            parallel_granularity = "session"
+        else:
+            parallel_granularity = "serial"
 
         metadata = {
             "protocol": "resonant",
@@ -818,6 +960,7 @@ def process_fish_streaming(
             "global_max": int(max_value),
             "negative_offset_applied": int(offset),
             "workers": worker_count,
+            "parallel_granularity": parallel_granularity,
             "photometric": "minisblack",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }

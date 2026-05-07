@@ -19,7 +19,7 @@ Use this file when
    - Owner: `preprocessing/preprocessing_tiff.py`
    - Key functions: `remove_vflyback_frames`, `correct_negative_values_mp_safe`, `process_fish`, `process_fish_streaming`
    - Outputs: `02_reg/00_preprocessing/2p_functional/01_individualPlanes/<fish>_plane*.tif` for resonant or `<fish>_stack.tif` for linear, plus `<fish>_preprocessing_metadata.json`; resonant multi-session outputs assign each session the next plane range.
-   - Low-memory option: `process_fish_streaming` writes the same outputs with two-pass TIFF streaming instead of loading full raw blocks into memory, and can parallelize independent sessions with the `workers` setting.
+   - Low-memory option: `process_fish_streaming` writes the same outputs with two-pass TIFF streaming instead of loading full raw blocks into memory, and can parallelize independent sessions or raw TIFF blocks with the `workers` setting.
    - GUI/CLI orchestration: `preprocessing/preprocessing_gui.py` launches `preprocessing/preprocessing_cli.py preprocess --config <json>` in a separate process; the GUI uses one data root for input and output.
 3. Suite2P motion correction and segmentation
    - Owner: `preprocessing/motion_segmentation_suite2p.py`

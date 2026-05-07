@@ -6,6 +6,7 @@ import time
 import copy
 import re
 import gc
+import inspect
 import tifffile as tf
 
 def get_file_index(path: Path) -> int:
@@ -86,6 +87,25 @@ def move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish
 
     return destination
 
+def _run_s2p_with_runtime_ops(ops):
+    signature = inspect.signature(suite2p.run_s2p)
+    if "ops" in signature.parameters:
+        suite2p.run_s2p(ops=ops)
+        return
+
+    from suite2p.parameters import convert_settings_orig
+
+    db, settings, _unused = convert_settings_orig(
+        copy.deepcopy(ops),
+        db=suite2p.default_db(),
+        settings=suite2p.default_settings(),
+    )
+    settings["io"]["delete_bin"] = True
+    settings["registration"]["reg_tif"] = True
+    settings["registration"]["batch_size"] = 500
+    settings["extraction"]["batch_size"] = 500
+    suite2p.run_s2p(db=db, settings=settings)
+
 def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     """
     Prepare and run Suite2p segmentation on a single TIFF file.
@@ -97,12 +117,15 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     - fps (float) : framerate
     - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
     """
+    plane_file = Path(plane_file)
     ops = copy.deepcopy(global_ops)
     ops['input_format'] = 'tif'
     ops['fs'] = fps
-    ops['tiff_list'] = [plane_file]
+    ops['tiff_list'] = [str(plane_file)]
     ops['data_path'] = [str(plane_file.parent)]
+    ops['file_list'] = [plane_file.name]
     ops['save_path0'] = str(save_path0)
+    ops['save_folder'] = "suite2p"
     ops['keep_movie_raw'] = False
     ops['delete_bin'] = True
 
@@ -111,7 +134,7 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
 
     ops['batch_size'] = 500 #if n_frames > 500 else n_frames
 
-    suite2p.run_s2p(ops=ops)
+    _run_s2p_with_runtime_ops(ops)
     gc.collect()
 
 

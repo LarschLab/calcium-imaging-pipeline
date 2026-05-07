@@ -12,6 +12,36 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-07 - Suite2P run_s2p API adapter
+- Date and label: 2026-05-07, Suite2P run_s2p API adapter
+- Slice goal: Make GUI-launched Suite2P work with the installed Suite2P 1.0.0.1 `run_s2p(db=..., settings=...)` API.
+- Passes completed in this session: Installed API inspection -> stage-owner adapter patch -> old/new API unit coverage -> focused tests and compile check.
+- What changed: `motion_segmentation_suite2p.run_suite2p` now builds both legacy `tiff_list` and current `file_list` inputs, keeps canonical output paths, and adapts flat ops dictionaries through Suite2P's current settings converter when `run_s2p(ops=...)` is unavailable.
+- What remains broken: Full real-data Suite2P completion still needs manual GUI validation after the operator restarts the stage.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: Re-run `Start Suite2P` for the failed fish/plane and inspect whether Suite2P reaches registered TIFF and `.npy` output creation.
+- Rerun implications: Existing preprocessing outputs do not need regeneration; rerun only the failed Suite2P stage.
+
+## 2026-05-07 - Suite2P OpenMP environment repair
+- Date and label: 2026-05-07, Suite2P OpenMP environment repair
+- Slice goal: Repair the existing `2p` conda environment so GUI-launched Suite2P no longer aborts on duplicate `libomp.dylib` initialization.
+- Passes completed in this session: Environment backup -> PyPI numeric/runtime wheel removal -> conda-forge reinstall -> import/unit/compile validation.
+- What changed: Replaced PyPI `torch`, `torchvision`, `scikit-learn`, `scipy`, and `threadpoolctl` in `/Users/ddharmap/miniforge3/envs/2p` with conda-forge builds. No repo code or GUI behavior changed.
+- What remains broken: GUI button click still needs manual validation with the operator's real Suite2P config and data selection.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: Relaunch `preprocessing/preprocessing_gui.py` from the repaired `2p` environment and start Suite2P on a selected plane.
+- Rerun implications: Existing preprocessing outputs do not need regeneration; rerun only the Suite2P stage that previously aborted.
+
+## 2026-05-07 - GUI progress and block workers
+- Date and label: 2026-05-07, GUI progress and block workers
+- Slice goal: Restore GUI progress visibility without log clutter and add per-round parallelism for resonant streaming preprocessing.
+- Passes completed in this session: GUI subprocess output parser -> resonant block worker implementation -> focused tests/docs -> compile checks.
+- What changed: GUI-launched carriage-return progress now updates the status label instead of appending every tick to the stage log. Resonant streaming workers now resolve against selected raw TIFF blocks, keep direct session-parallel writing when sessions are already independent, and use temporary per-block plane outputs plus a merge step when a session has multiple blocks.
+- What remains broken: Real-data throughput still needs benchmarking; block-level parallelism adds temporary output and merge I/O, so the best worker count may depend on storage speed.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: Benchmark representative multi-block rounds with `scripts/benchmark_preprocessing_workers.py --blocks <blocks> --workers 1,2,4` and tune the GUI default if needed.
+- Rerun implications: Re-run stage 2 preprocessing to benefit from block-level worker parallelism; output plane names and Suite2P validation surfaces are unchanged.
+
 ## 2026-05-07 - multi-session plane offsets
 - Date and label: 2026-05-07, multi-session plane offsets
 - Slice goal: Keep repeated 2P imaging sessions separate when preprocessing one fish folder and make the GUI match the single-root experiment layout.

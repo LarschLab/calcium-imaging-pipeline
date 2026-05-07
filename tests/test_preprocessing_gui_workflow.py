@@ -161,6 +161,105 @@ class PreprocessingWorkflowConfigTests(unittest.TestCase):
             self.assertEqual(batch_process.call_args.kwargs["selected_planes_by_fish"], {"fish01": [0]})
 
 
+class Suite2PRunnerTests(unittest.TestCase):
+    def test_run_suite2p_uses_legacy_ops_api_when_available(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        captured = {}
+
+        def run_s2p(*, ops):
+            captured["ops"] = ops
+
+        fake_suite2p = types.SimpleNamespace(run_s2p=run_s2p)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            plane_file = tmp_path / "planes" / "fish01_plane0.tif"
+            plane_file.parent.mkdir()
+            plane_file.write_bytes(b"placeholder")
+            save_path = tmp_path / "suite2p_out"
+
+            with patch.object(motion_segmentation_suite2p, "suite2p", fake_suite2p):
+                motion_segmentation_suite2p.run_suite2p(
+                    plane_file,
+                    {"tau": 3.0},
+                    save_path,
+                    fps=2.0,
+                    fast_disk=tmp_path / "fast",
+                )
+
+        self.assertEqual(captured["ops"]["input_format"], "tif")
+        self.assertEqual(captured["ops"]["fs"], 2.0)
+        self.assertEqual(captured["ops"]["data_path"], [str(plane_file.parent)])
+        self.assertEqual(captured["ops"]["file_list"], [plane_file.name])
+        self.assertEqual(captured["ops"]["tiff_list"], [str(plane_file)])
+        self.assertEqual(captured["ops"]["save_path0"], str(save_path))
+        self.assertEqual(captured["ops"]["save_folder"], "suite2p")
+        self.assertEqual(captured["ops"]["fast_disk"], str(tmp_path / "fast"))
+        self.assertFalse(captured["ops"]["keep_movie_raw"])
+        self.assertTrue(captured["ops"]["delete_bin"])
+        self.assertEqual(captured["ops"]["batch_size"], 500)
+
+    def test_run_suite2p_converts_flat_ops_for_current_suite2p_api(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        captured = {}
+
+        def run_s2p(*, db, settings):
+            captured["db"] = db
+            captured["settings"] = settings
+
+        def convert_settings_orig(settings_in, db, settings):
+            for key in ("input_format", "data_path", "file_list", "save_path0", "save_folder", "keep_movie_raw", "fast_disk"):
+                if key in settings_in:
+                    db[key] = settings_in.pop(key)
+            settings["fs"] = settings_in.pop("fs")
+            settings["io"]["delete_bin"] = settings_in.pop("delete_bin")
+            settings["registration"]["reg_tif"] = settings_in.pop("reg_tif", False)
+            settings["registration"]["batch_size"] = settings_in.pop("batch_size")
+            settings["extraction"]["batch_size"] = settings_in.get("extraction_batch_size", 100)
+            return db, settings, settings_in
+
+        fake_suite2p = types.SimpleNamespace(
+            run_s2p=run_s2p,
+            default_db=lambda: {},
+            default_settings=lambda: {"io": {}, "registration": {}, "extraction": {}},
+        )
+        fake_parameters = types.ModuleType("suite2p.parameters")
+        fake_parameters.convert_settings_orig = convert_settings_orig
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            plane_file = tmp_path / "planes" / "fish01_plane0.tif"
+            plane_file.parent.mkdir()
+            plane_file.write_bytes(b"placeholder")
+            save_path = tmp_path / "suite2p_out"
+
+            with patch.object(motion_segmentation_suite2p, "suite2p", fake_suite2p), patch.dict(
+                sys.modules,
+                {"suite2p.parameters": fake_parameters},
+            ):
+                motion_segmentation_suite2p.run_suite2p(
+                    plane_file,
+                    {"tau": 3.0, "reg_tif": False},
+                    save_path,
+                    fps=2.0,
+                )
+
+        self.assertEqual(captured["db"]["input_format"], "tif")
+        self.assertEqual(captured["db"]["data_path"], [str(plane_file.parent)])
+        self.assertEqual(captured["db"]["file_list"], [plane_file.name])
+        self.assertEqual(captured["db"]["save_path0"], str(save_path))
+        self.assertEqual(captured["db"]["save_folder"], "suite2p")
+        self.assertFalse(captured["db"]["keep_movie_raw"])
+        self.assertNotIn("fast_disk", captured["db"])
+        self.assertEqual(captured["settings"]["fs"], 2.0)
+        self.assertTrue(captured["settings"]["io"]["delete_bin"])
+        self.assertTrue(captured["settings"]["registration"]["reg_tif"])
+        self.assertEqual(captured["settings"]["registration"]["batch_size"], 500)
+        self.assertEqual(captured["settings"]["extraction"]["batch_size"], 500)
+
+
 class PreprocessingCliAndGuiTests(unittest.TestCase):
     def test_gui_defaults_to_streaming_mode(self) -> None:
         self.assertEqual(
@@ -177,6 +276,16 @@ class PreprocessingCliAndGuiTests(unittest.TestCase):
 
         self.assertEqual(preprocess_command[1:], [str(preprocessing_gui.CLI_PATH), "preprocess", "--config", str(config_path)])
         self.assertEqual(suite2p_command[1:], [str(preprocessing_gui.CLI_PATH), "suite2p", "--config", str(config_path)])
+
+    def test_gui_routes_carriage_return_progress_to_status_events(self) -> None:
+        output_queue = preprocessing_gui.queue.Queue()
+        pending = preprocessing_gui.queue_subprocess_output("scan 1/3\rscan 2/3\rDone\n", output_queue)
+
+        self.assertEqual(pending, "")
+        self.assertEqual(output_queue.get_nowait(), ("__STATUS__", "scan 1/3"))
+        self.assertEqual(output_queue.get_nowait(), ("__STATUS__", "scan 2/3"))
+        self.assertEqual(output_queue.get_nowait(), "Done\n")
+        self.assertTrue(output_queue.empty())
 
     def test_cli_dispatches_preprocess_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

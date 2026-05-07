@@ -184,6 +184,90 @@ class StreamingPreprocessingTests(unittest.TestCase):
             self.assertEqual(metadata["preprocessing_mode"], "streaming_two_pass")
             self.assertEqual(metadata["negative_offset_applied"], 28)
 
+    def test_resonant_block_parallel_matches_serial_with_r2(self) -> None:
+        fish_id = "fish04"
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_base = tmp_path / "input"
+            serial_base = tmp_path / "serial"
+            parallel_base = tmp_path / "parallel"
+
+            block_1 = (np.arange(10 * 3 * 4).reshape(10, 3, 4) - 40).astype(np.int16)
+            block_2 = (np.arange(10 * 3 * 4).reshape(10, 3, 4) + 80).astype(np.int16)
+            block_3 = (np.arange(10 * 3 * 4).reshape(10, 3, 4) + 200).astype(np.int16)
+            block_4 = (np.arange(10 * 3 * 4).reshape(10, 3, 4) + 320).astype(np.int16)
+            write_raw_tiff(input_base, fish_id, "fish04_00001.tif", block_1)
+            write_raw_tiff(input_base, fish_id, "fish04_00002.tif", block_2)
+            write_raw_tiff(input_base, fish_id, "fish04_r2_00001.tif", block_3)
+            write_raw_tiff(input_base, fish_id, "fish04_r2_00002.tif", block_4)
+
+            kwargs = {
+                "protocol": "resonant",
+                "blocks": [1, 2],
+                "n_planes": 2,
+                "n_frames_per_plane": 2,
+                "volume_flyback_frames": 1,
+                "remove_first_frame": True,
+                "progress": False,
+            }
+            with redirect_stdout(io.StringIO()):
+                preprocessing_tiff.process_fish_streaming(fish_id, input_base, serial_base, workers=1, **kwargs)
+                preprocessing_tiff.process_fish_streaming(fish_id, input_base, parallel_base, workers=2, **kwargs)
+
+            serial_dir = serial_base / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+            parallel_dir = parallel_base / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+            for plane_idx in range(4):
+                np.testing.assert_array_equal(
+                    read_tiff(parallel_dir / f"{fish_id}_plane{plane_idx}.tif"),
+                    read_tiff(serial_dir / f"{fish_id}_plane{plane_idx}.tif"),
+                )
+
+            metadata = json.loads((parallel_dir / f"{fish_id}_preprocessing_metadata.json").read_text())
+            self.assertEqual(metadata["workers"], 2)
+            self.assertEqual(metadata["parallel_granularity"], "tiff_block")
+            self.assertFalse(list(parallel_dir.glob(".fish04_block_parallel_*")))
+
+    def test_resonant_block_parallel_stitches_blocks_in_block_number_order(self) -> None:
+        fish_id = "fish05"
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            input_base = tmp_path / "input"
+            output_base = tmp_path / "output"
+
+            def stack(values: list[int]) -> np.ndarray:
+                return np.repeat(np.array(values, dtype=np.int16).reshape(4, 1, 1), 2, axis=1).repeat(2, axis=2)
+
+            write_raw_tiff(input_base, fish_id, "fish05_00002.tif", stack([20, 21, 22, 23]))
+            write_raw_tiff(input_base, fish_id, "fish05_00001.tif", stack([-5, -4, -3, -2]))
+            write_raw_tiff(input_base, fish_id, "fish05_r2_00002.tif", stack([120, 121, 122, 123]))
+            write_raw_tiff(input_base, fish_id, "fish05_r2_00001.tif", stack([100, 101, 102, 103]))
+
+            with redirect_stdout(io.StringIO()):
+                preprocessing_tiff.process_fish_streaming(
+                    fish_id,
+                    input_base,
+                    output_base,
+                    protocol="resonant",
+                    blocks=[2, 1],
+                    n_planes=2,
+                    n_frames_per_plane=1,
+                    volume_flyback_frames=0,
+                    remove_first_frame=False,
+                    progress=False,
+                    workers=2,
+                )
+
+            stream_dir = output_base / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+            np.testing.assert_array_equal(read_tiff(stream_dir / "fish05_plane0.tif")[:, 0, 0], np.array([0, 2, 25, 27], dtype=np.uint16))
+            np.testing.assert_array_equal(read_tiff(stream_dir / "fish05_plane1.tif")[:, 0, 0], np.array([1, 3, 26, 28], dtype=np.uint16))
+            np.testing.assert_array_equal(read_tiff(stream_dir / "fish05_plane2.tif")[:, 0, 0], np.array([105, 107, 125, 127], dtype=np.uint16))
+            np.testing.assert_array_equal(read_tiff(stream_dir / "fish05_plane3.tif")[:, 0, 0], np.array([106, 108, 126, 128], dtype=np.uint16))
+
+            metadata = json.loads((stream_dir / f"{fish_id}_preprocessing_metadata.json").read_text())
+            self.assertEqual(metadata["global_min"], -5)
+            self.assertEqual(metadata["negative_offset_applied"], 5)
+            self.assertEqual(metadata["parallel_granularity"], "tiff_block")
+
     def test_linear_streaming_matches_full_memory(self) -> None:
         fish_id = "fish02"
         with TemporaryDirectory() as tmp:

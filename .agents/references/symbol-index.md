@@ -16,7 +16,7 @@ Provide the compact callable surface that other scripts should rely on before ad
   - `correct_negative_values_mp_safe(frames, num_chunks=5)`: shift negative pixel values into `uint16`.
   - `concatenate_blocks(...)`: load and concatenate selected raw blocks.
   - `process_fish(...)`: preprocess one fish and write stage-2 outputs.
-  - `process_fish_streaming(...)`: preprocess one fish with two-pass disk streaming, session-aware plane offsets, and optional session-level workers.
+  - `process_fish_streaming(...)`: preprocess one fish with two-pass disk streaming, session-aware plane offsets, and optional session/block-level workers.
   - `parallel_preprocess(...)`: orchestration entrypoint for multiple fish.
 - `preprocessing/motion_segmentation_suite2p.py`
   - `join_reg_tiffs_to_one(reg_folder, out_tiff)`: join Suite2P `reg_tif` chunks into one BigTIFF.

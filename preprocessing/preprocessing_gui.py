@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import json
 import queue
 import subprocess
@@ -46,6 +47,21 @@ def build_suite2p_subprocess_command(config_path: Path) -> list[str]:
     return [sys.executable, str(CLI_PATH), "suite2p", "--config", str(config_path)]
 
 
+def queue_subprocess_output(text: str, output_queue: queue.Queue, pending: str = "") -> str:
+    for char in text:
+        if char == "\r":
+            if pending:
+                output_queue.put(("__STATUS__", pending.strip()))
+                pending = ""
+        elif char == "\n":
+            if pending:
+                output_queue.put(pending + "\n")
+            pending = ""
+        else:
+            pending += char
+    return pending
+
+
 def default_settings() -> dict[str, Any]:
     return {
         "data_root": "",
@@ -79,8 +95,8 @@ class PreprocessingGuiApp:
         self.vars = {key: tk.StringVar(value=str(value)) for key, value in settings.items() if key != "remove_first_frame"}
         self.remove_first_frame_var = tk.BooleanVar(value=bool(settings.get("remove_first_frame", True)))
         self.status_var = tk.StringVar(value="Ready.")
-        self.process: subprocess.Popen[str] | None = None
-        self.log_queue: queue.Queue[str] = queue.Queue()
+        self.process: subprocess.Popen | None = None
+        self.log_queue: queue.Queue = queue.Queue()
         self.config_paths: list[Path] = []
 
         self._build_ui()
@@ -125,7 +141,7 @@ class PreprocessingGuiApp:
         self._entry_row(form, 5, "Planes", "n_planes", "Required for resonant preprocessing")
         self._entry_row(form, 6, "Frames/plane", "n_frames_per_plane", "Required for resonant preprocessing")
         self._entry_row(form, 7, "Flyback frames", "volume_flyback_frames", "Usually 0 or 1")
-        self._entry_row(form, 8, "Preprocessing workers", "workers", "Use 'auto' for session-level parallelism")
+        self._entry_row(form, 8, "Preprocessing workers", "workers", "Use 'auto' for block/session parallelism")
 
         ttk.Checkbutton(form, text="Remove first frame per plane group", variable=self.remove_first_frame_var).grid(
             row=9, column=0, columnspan=2, sticky="w", pady=4
@@ -246,8 +262,7 @@ class PreprocessingGuiApp:
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            bufsize=0,
         )
         threading.Thread(target=self._read_process_output, args=(self.process, label), daemon=True).start()
 
@@ -260,10 +275,22 @@ class PreprocessingGuiApp:
         self.config_paths.append(config_path)
         return config_path
 
-    def _read_process_output(self, process: subprocess.Popen[str], label: str) -> None:
+    def _read_process_output(self, process: subprocess.Popen, label: str) -> None:
+        pending = ""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         if process.stdout is not None:
-            for line in process.stdout:
-                self.log_queue.put(line)
+            while True:
+                chunk = process.stdout.read(1)
+                if not chunk:
+                    break
+                text = decoder.decode(chunk)
+                if text:
+                    pending = queue_subprocess_output(text, self.log_queue, pending)
+        text = decoder.decode(b"", final=True)
+        if text:
+            pending = queue_subprocess_output(text, self.log_queue, pending)
+        if pending:
+            self.log_queue.put(pending)
         return_code = process.wait()
         self.log_queue.put(f"[{label}] exited with code {return_code}\n")
         self.log_queue.put(("__STAGE_DONE__", label, return_code))
@@ -278,6 +305,10 @@ class PreprocessingGuiApp:
                 _tag, label, return_code = item
                 self.status_var.set(f"{label} finished." if return_code == 0 else f"{label} failed.")
                 self._set_running(False)
+            elif isinstance(item, tuple) and item[0] == "__STATUS__":
+                _tag, status = item
+                if status:
+                    self.status_var.set(status)
             else:
                 self._append_log(str(item))
         self.root.after(100, self._drain_log_queue)
