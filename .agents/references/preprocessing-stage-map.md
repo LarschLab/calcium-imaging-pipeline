@@ -17,12 +17,15 @@ Use this file when
    - Outputs: in-memory stacked frames filtered by protocol and selected blocks
 2. Frame cleanup and plane extraction
    - Owner: `preprocessing/preprocessing_tiff.py`
-   - Key functions: `remove_vflyback_frames`, `correct_negative_values_mp_safe`, `process_fish`
+   - Key functions: `remove_vflyback_frames`, `correct_negative_values_mp_safe`, `process_fish`, `process_fish_streaming`
    - Outputs: `02_reg/00_preprocessing/2p_functional/01_individualPlanes/<fish>_plane*.tif` for resonant or `<fish>_stack.tif` for linear, plus `<fish>_preprocessing_metadata.json`
+   - Low-memory option: `process_fish_streaming` writes the same outputs with two-pass TIFF streaming instead of loading full raw blocks into memory.
+   - GUI/CLI orchestration: `preprocessing/preprocessing_gui.py` launches `preprocessing/preprocessing_cli.py preprocess --config <json>` in a separate process.
 3. Suite2P motion correction and segmentation
    - Owner: `preprocessing/motion_segmentation_suite2p.py`
    - Key functions: `find_plane_file`, `run_suite2p`, `join_reg_tiffs_to_one`, `move_processed_files`, `process_fish`
    - Outputs: `<fish>_plane*_mcorrected.tif` in `02_motionCorrected` and renamed `.npy` artifacts in `03_analysis/functional/suite2P/plane*`
+   - GUI/CLI orchestration: `preprocessing/preprocessing_gui.py` blocks Suite2P until selected plane TIFFs and preprocessing metadata exist, then launches `preprocessing/preprocessing_cli.py suite2p --config <json>` in a separate process.
 4. Fluorescence filtering and dF/F extraction
    - Owner: `preprocessing/dFoF_extraction.py`
    - Key functions: `load_fluorescence_data`, `filter_dim_rois`, `compute_percentile_baseline`, `compute_dff`, `process_suite2p_fluorescence`

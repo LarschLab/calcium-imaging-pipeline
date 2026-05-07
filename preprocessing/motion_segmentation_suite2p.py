@@ -186,7 +186,7 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
         gc.collect()
 
 
-def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None):
+def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None, storage_root=None):
     """
     Process multiple fish folders.
 
@@ -197,6 +197,7 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
     - fish_ids (list[str] or None): List of fish folder names to process (or all if None)
     - selected_planes (list[int]): Plane indices to process
     - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
+    - storage_root (str or Path or None): Optional root folder where outputs will be mirrored/copied
     """
     data_root = Path(data_root)
     global_ops = np.load(ops_path, allow_pickle=True).item()
@@ -230,8 +231,8 @@ if __name__ == "__main__":
     batch_process(
         data_root,
         ops_file_path,
-        storage_root,
         fps,
         fish_ids=fish_to_process,
         selected_planes=planes_to_process,
-        fast_disk=fast_disk_path)
+        fast_disk=fast_disk_path,
+        storage_root=storage_root)

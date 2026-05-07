@@ -7,6 +7,39 @@ import gc
 import re
 import multiprocessing as mp
 
+
+class SingleLineProgress:
+    """Minimal carriage-return progress display for long TIFF scans."""
+
+    def __init__(self, label, total):
+        self.label = label
+        self.total = max(int(total), 1)
+        self.current = 0
+        self.start_time = time.time()
+        self.last_text_len = 0
+
+    def update(self, current=None, detail=""):
+        if current is None:
+            self.current += 1
+        else:
+            self.current = current
+
+        pct = min(100.0, 100.0 * self.current / self.total)
+        elapsed = time.time() - self.start_time
+        text = f"{self.label}: {self.current}/{self.total} ({pct:5.1f}%) elapsed {elapsed:6.1f}s"
+        if detail:
+            text += f" | {detail}"
+
+        padding = " " * max(0, self.last_text_len - len(text))
+        print(f"\r{text}{padding}", end="", flush=True)
+        self.last_text_len = len(text)
+
+    def finish(self):
+        if self.current < self.total:
+            self.update(self.total)
+        print()
+
+
 def correct_chunk_int16_to_uint16(chunk, offset):
     """
     Correct one chunk of frames by shifting negative values to positive.
@@ -145,6 +178,223 @@ def extract_block_number(tif_file):
         return None
 
 
+def get_functional_tiffs(fish_id, input_base, blocks=None):
+    """
+    Return selected non-anatomy functional TIFF files for one fish.
+    """
+    raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
+    tiffs = []
+
+    for tif_file in sorted(raw_folder.glob("*.tif")):
+        if "anatomy" in tif_file.name:
+            continue
+
+        block_number = extract_block_number(tif_file)
+        if blocks is not None and block_number not in blocks:
+            continue
+
+        tiffs.append(tif_file)
+
+    if not tiffs:
+        raise ValueError("No matching TIFF files found for selected blocks.")
+
+    return tiffs
+
+
+def count_tiff_pages(tiff_files):
+    """
+    Count pages in selected TIFF files without reading image data.
+    """
+    total = 0
+    for tif_file in tiff_files:
+        with tf.TiffFile(tif_file) as tif:
+            total += len(tif.pages)
+    return total
+
+
+def corrected_uint16_frame(frame, offset):
+    """
+    Apply the pipeline's negative-value offset correction to one frame.
+    """
+    if offset <= 0:
+        return frame.astype(np.uint16, copy=False)
+
+    corrected = frame.astype(np.int32)
+    corrected += offset
+    np.clip(corrected, 0, 65535, out=corrected)
+    return corrected.astype(np.uint16)
+
+
+def update_min_max(frame, min_value, max_value):
+    """
+    Update scalar min/max values from one frame.
+    """
+    frame_min = int(np.min(frame))
+    frame_max = int(np.max(frame))
+
+    if min_value is None or frame_min < min_value:
+        min_value = frame_min
+    if max_value is None or frame_max > max_value:
+        max_value = frame_max
+
+    return min_value, max_value
+
+
+def scan_resonant_min_max(tiff_files, n_planes, n_frames_per_plane, volume_flyback_frames=1, remove_first_frame=False, progress=True):
+    """
+    Stream resonant TIFFs once and compute min/max after frame filtering.
+    """
+    frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
+    total_pages = count_tiff_pages(tiff_files)
+    progress_line = SingleLineProgress("Pass 1/2 scan", total_pages) if progress else None
+    min_value = None
+    max_value = None
+    raw_pages_seen = 0
+    kept_group = []
+
+    try:
+        for tif_file in tiff_files:
+            with tf.TiffFile(tif_file) as tif:
+                for page_idx, page in enumerate(tif.pages):
+                    raw_pages_seen += 1
+                    if progress_line:
+                        progress_line.update(raw_pages_seen, tif_file.name)
+
+                    if volume_flyback_frames > 0 and (page_idx % frames_per_volume) >= (frames_per_volume - volume_flyback_frames):
+                        continue
+
+                    kept_group.append(page.asarray())
+                    if len(kept_group) != n_frames_per_plane:
+                        continue
+
+                    frames_to_scan = kept_group[1:] if remove_first_frame else kept_group
+                    if not frames_to_scan:
+                        raise ValueError("remove_first_frame=True leaves no frames to average.")
+
+                    for frame in frames_to_scan:
+                        min_value, max_value = update_min_max(frame, min_value, max_value)
+                    kept_group = []
+
+            if kept_group:
+                raise ValueError(f"{tif_file.name}: kept frame count is not divisible by n_frames_per_plane.")
+    finally:
+        if progress_line:
+            progress_line.finish()
+
+    if min_value is None:
+        raise ValueError("No frames remained after flyback/first-frame filtering.")
+
+    return min_value, max_value
+
+
+def write_resonant_streaming(tiff_files, output_path, fish_id, n_planes, n_frames_per_plane, offset, volume_flyback_frames=1, remove_first_frame=False, progress=True):
+    """
+    Stream resonant TIFFs and append averaged frames directly to per-plane TIFFs.
+    """
+    frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
+    total_pages = count_tiff_pages(tiff_files)
+    progress_line = SingleLineProgress("Pass 2/2 write", total_pages) if progress else None
+    writers = []
+    raw_pages_seen = 0
+    group_index = 0
+    kept_group = []
+
+    output_path.mkdir(parents=True, exist_ok=True)
+    for plane_idx in range(n_planes):
+        out_file = output_path / f"{fish_id}_plane{plane_idx}.tif"
+        if out_file.exists():
+            out_file.unlink()
+        writers.append(tf.TiffWriter(out_file, bigtiff=True))
+
+    try:
+        for tif_file in tiff_files:
+            with tf.TiffFile(tif_file) as tif:
+                for page_idx, page in enumerate(tif.pages):
+                    raw_pages_seen += 1
+                    if progress_line:
+                        progress_line.update(raw_pages_seen, tif_file.name)
+
+                    if volume_flyback_frames > 0 and (page_idx % frames_per_volume) >= (frames_per_volume - volume_flyback_frames):
+                        continue
+
+                    kept_group.append(page.asarray())
+                    if len(kept_group) != n_frames_per_plane:
+                        continue
+
+                    frames_to_average = kept_group[1:] if remove_first_frame else kept_group
+                    if not frames_to_average:
+                        raise ValueError("remove_first_frame=True leaves no frames to average.")
+
+                    corrected = [corrected_uint16_frame(frame, offset).astype(np.float64) for frame in frames_to_average]
+                    avg_frame = np.round(np.mean(corrected, axis=0)).astype(np.uint16)
+                    plane_idx = group_index % n_planes
+                    writers[plane_idx].write(avg_frame, photometric="minisblack", contiguous=True)
+                    group_index += 1
+                    kept_group = []
+
+            if kept_group:
+                raise ValueError(f"{tif_file.name}: kept frame count is not divisible by n_frames_per_plane.")
+    finally:
+        for writer in writers:
+            writer.close()
+        if progress_line:
+            progress_line.finish()
+
+
+def scan_linear_min_max(tiff_files, progress=True):
+    """
+    Stream linear TIFFs once and compute min/max across all selected frames.
+    """
+    total_pages = count_tiff_pages(tiff_files)
+    progress_line = SingleLineProgress("Pass 1/2 scan", total_pages) if progress else None
+    min_value = None
+    max_value = None
+    pages_seen = 0
+
+    try:
+        for tif_file in tiff_files:
+            with tf.TiffFile(tif_file) as tif:
+                for page in tif.pages:
+                    pages_seen += 1
+                    if progress_line:
+                        progress_line.update(pages_seen, tif_file.name)
+                    min_value, max_value = update_min_max(page.asarray(), min_value, max_value)
+    finally:
+        if progress_line:
+            progress_line.finish()
+
+    if min_value is None:
+        raise ValueError("No readable frames found.")
+
+    return min_value, max_value
+
+
+def write_linear_streaming(tiff_files, output_path, fish_id, offset, progress=True):
+    """
+    Stream linear TIFFs and append corrected frames directly to one TIFF stack.
+    """
+    total_pages = count_tiff_pages(tiff_files)
+    progress_line = SingleLineProgress("Pass 2/2 write", total_pages) if progress else None
+    output_path.mkdir(parents=True, exist_ok=True)
+    out_file = output_path / f"{fish_id}_stack.tif"
+    if out_file.exists():
+        out_file.unlink()
+
+    pages_seen = 0
+    try:
+        with tf.TiffWriter(out_file, bigtiff=True) as writer:
+            for tif_file in tiff_files:
+                with tf.TiffFile(tif_file) as tif:
+                    for page in tif.pages:
+                        pages_seen += 1
+                        if progress_line:
+                            progress_line.update(pages_seen, tif_file.name)
+                        writer.write(corrected_uint16_frame(page.asarray(), offset), photometric="minisblack", contiguous=True)
+    finally:
+        if progress_line:
+            progress_line.finish()
+
+
 def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """
     Load and concatenate selected blocks. For resonant protocol, also remove flyback and reshape.
@@ -259,6 +509,102 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
         json.dump(metadata, f, indent=4)
 
     print(f"✅ Finished processing {fish_id}")
+
+
+def process_fish_streaming(fish_id, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False, progress=True):
+    """
+    Process one fish by streaming TIFF pages from disk instead of loading full blocks.
+
+    This writes the same canonical outputs as process_fish while keeping memory
+    proportional to a small frame group rather than the selected raw TIFF size.
+    """
+    tiff_files = get_functional_tiffs(fish_id, input_base, blocks)
+    output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    print(f"Streaming {fish_id}: {len(tiff_files)} TIFF file(s)")
+
+    if protocol == "resonant":
+        if n_planes is None or n_frames_per_plane is None:
+            raise ValueError("n_planes and n_frames_per_plane are required for resonant streaming preprocessing.")
+
+        min_value, max_value = scan_resonant_min_max(
+            tiff_files,
+            n_planes,
+            n_frames_per_plane,
+            volume_flyback_frames=volume_flyback_frames,
+            remove_first_frame=remove_first_frame,
+            progress=progress,
+        )
+        offset = abs(min_value) if min_value < 0 else 0
+        print(f"  min: {min_value}, max: {max_value}")
+        if offset:
+            print(f"  Correcting negative values by adding offset {offset}.")
+        else:
+            print("  No negative values to correct.")
+
+        write_resonant_streaming(
+            tiff_files,
+            output_path,
+            fish_id,
+            n_planes,
+            n_frames_per_plane,
+            offset,
+            volume_flyback_frames=volume_flyback_frames,
+            remove_first_frame=remove_first_frame,
+            progress=progress,
+        )
+
+        metadata = {
+            "protocol": "resonant",
+            "preprocessing_mode": "streaming_two_pass",
+            "n_planes": n_planes,
+            "n_frames_per_plane": n_frames_per_plane,
+            "blocks": blocks,
+            "volume_flyback_frames": volume_flyback_frames,
+            "remove_first_frame": remove_first_frame,
+            "fish_id": fish_id,
+            "output_path": str(output_path),
+            "selected_tiffs": [str(path) for path in tiff_files],
+            "global_min": int(min_value),
+            "global_max": int(max_value),
+            "negative_offset_applied": int(offset),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    elif protocol == "linear":
+        min_value, max_value = scan_linear_min_max(tiff_files, progress=progress)
+        offset = abs(min_value) if min_value < 0 else 0
+        print(f"  min: {min_value}, max: {max_value}")
+        if offset:
+            print(f"  Correcting negative values by adding offset {offset}.")
+        else:
+            print("  No negative values to correct.")
+
+        write_linear_streaming(tiff_files, output_path, fish_id, offset, progress=progress)
+
+        metadata = {
+            "protocol": "linear",
+            "preprocessing_mode": "streaming_two_pass",
+            "blocks": blocks,
+            "fish_id": fish_id,
+            "output_path": str(output_path),
+            "selected_tiffs": [str(path) for path in tiff_files],
+            "global_min": int(min_value),
+            "global_max": int(max_value),
+            "negative_offset_applied": int(offset),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+
+    else:
+        raise ValueError(f"Unknown protocol type: {protocol}")
+
+    with open(output_path / f"{fish_id}_preprocessing_metadata.json", "w") as f:
+        json.dump(metadata, f, indent=4)
+
+    gc.collect()
+    print(f"✅ Finished streaming preprocessing for {fish_id}")
+
 
 def parallel_preprocess(fish_ids, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """

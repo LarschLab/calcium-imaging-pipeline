@@ -11,3 +11,23 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Remaining in-slice work:
 - Next likely breakpoint:
 - Rerun implications:
+
+## 2026-05-07 - streaming preprocessing entrypoint
+- Date and label: 2026-05-07, streaming preprocessing entrypoint
+- Slice goal: Add a low-memory raw TIFF preprocessing path that streams pages from disk and reports progress on one updating terminal line.
+- Passes completed in this session: Added implementation, tests, and reference updates.
+- What changed: `preprocessing_tiff.py` now has `process_fish_streaming(...)` plus two-pass streaming helpers for exact negative-value correction, resonant plane writers, linear stack writing, and stdlib carriage-return progress. Added focused synthetic TIFF tests.
+- What remains broken: Nothing known in this slice.
+- Remaining in-slice work: None.
+- Next likely breakpoint: Real-data trial on a large local TIFF block to confirm throughput and terminal progress behavior on macOS.
+- Rerun implications: Re-run stage 2 preprocessing with `process_fish_streaming(...)` to generate the same canonical plane/stack TIFF outputs without loading full blocks into memory.
+
+## 2026-05-07 - preprocessing workflow GUI
+- Date and label: 2026-05-07, preprocessing workflow GUI
+- Slice goal: Add a GUI workflow that keeps TIFF preprocessing and Suite2P as separate operator actions and separate subprocesses.
+- Passes completed in this session: Added workflow config helpers, CLI subprocess entrypoint, Tkinter GUI, Suite2P preflight validation, and focused tests.
+- What changed: `preprocessing_workflow.py` now parses stage configs, validates selected preprocessing plane outputs, and delegates to the owning stage modules. `preprocessing_cli.py` exposes `preprocess` and `suite2p` JSON-config commands. `preprocessing_gui.py` provides separate Start Preprocessing and Start Suite2P buttons with streaming mode as the default. `motion_segmentation_suite2p.batch_process` now accepts `storage_root` explicitly.
+- What remains broken: Full Suite2P execution still needs manual/integration validation with a real Suite2P environment and real preprocessed plane TIFFs.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: Real-data GUI trial: run streaming preprocessing for one fish, confirm output validation, then run Suite2P on one selected plane.
+- Rerun implications: GUI-launched preprocessing writes the same stage-2 outputs; GUI-launched Suite2P writes the same stage-3 outputs after validation passes.
