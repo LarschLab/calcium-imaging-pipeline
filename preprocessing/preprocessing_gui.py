@@ -48,8 +48,7 @@ def build_suite2p_subprocess_command(config_path: Path) -> list[str]:
 
 def default_settings() -> dict[str, Any]:
     return {
-        "input_base": "",
-        "output_base": "",
+        "data_root": "",
         "fish_ids": "",
         "protocol": "resonant",
         "mode": PREPROCESSING_MODE_STREAMING,
@@ -57,10 +56,11 @@ def default_settings() -> dict[str, Any]:
         "n_planes": "5",
         "n_frames_per_plane": "3",
         "volume_flyback_frames": "0",
+        "workers": "auto",
         "remove_first_frame": True,
         "ops_path": "",
         "fps": "2",
-        "selected_planes": "0,1,2,3,4",
+        "selected_planes": "all",
         "fast_disk": "",
         "storage_root": "",
     }
@@ -74,6 +74,8 @@ class PreprocessingGuiApp:
 
         settings = default_settings()
         settings.update(load_gui_settings())
+        if not settings.get("data_root"):
+            settings["data_root"] = settings.get("output_base") or settings.get("input_base") or ""
         self.vars = {key: tk.StringVar(value=str(value)) for key, value in settings.items() if key != "remove_first_frame"}
         self.remove_first_frame_var = tk.BooleanVar(value=bool(settings.get("remove_first_frame", True)))
         self.status_var = tk.StringVar(value="Ready.")
@@ -94,16 +96,15 @@ class PreprocessingGuiApp:
         for col in range(4):
             form.columnconfigure(col, weight=1)
 
-        self._path_row(form, 0, "Input root", "input_base")
-        self._path_row(form, 1, "Output root", "output_base")
-        self._entry_row(form, 2, "Fish IDs", "fish_ids", "Comma-separated fish folder names")
+        self._path_row(form, 0, "Data root", "data_root")
+        self._entry_row(form, 1, "Fish IDs", "fish_ids", "Comma-separated fish folder names")
 
-        ttk.Label(form, text="Protocol").grid(row=3, column=0, sticky="w", pady=4)
+        ttk.Label(form, text="Protocol").grid(row=2, column=0, sticky="w", pady=4)
         protocol = ttk.Combobox(form, textvariable=self.vars["protocol"], values=("resonant", "linear"), state="readonly", width=16)
-        protocol.grid(row=3, column=1, sticky="ew", pady=4)
+        protocol.grid(row=2, column=1, sticky="ew", pady=4)
         protocol.bind("<<ComboboxSelected>>", lambda _event: self._update_stage_state())
 
-        ttk.Label(form, text="Preprocessing mode").grid(row=3, column=2, sticky="w", pady=4)
+        ttk.Label(form, text="Preprocessing mode").grid(row=2, column=2, sticky="w", pady=4)
         mode = ttk.Combobox(
             form,
             textvariable=self.vars["mode"],
@@ -111,19 +112,20 @@ class PreprocessingGuiApp:
             state="readonly",
             width=20,
         )
-        mode.grid(row=3, column=3, sticky="ew", pady=4)
+        mode.grid(row=2, column=3, sticky="ew", pady=4)
 
         self.streaming_note = ttk.Label(
             form,
             text="Low-memory streaming is the default. It has unit fixture coverage; validate on real large TIFFs before relying on it unattended.",
             foreground="#8a5a00",
         )
-        self.streaming_note.grid(row=4, column=0, columnspan=4, sticky="w", pady=(0, 8))
+        self.streaming_note.grid(row=3, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
-        self._entry_row(form, 5, "Blocks", "blocks", "Optional comma-separated block numbers")
-        self._entry_row(form, 6, "Planes", "n_planes", "Required for resonant preprocessing")
-        self._entry_row(form, 7, "Frames/plane", "n_frames_per_plane", "Required for resonant preprocessing")
-        self._entry_row(form, 8, "Flyback frames", "volume_flyback_frames", "Usually 0 or 1")
+        self._entry_row(form, 4, "Blocks", "blocks", "Optional comma-separated block numbers")
+        self._entry_row(form, 5, "Planes", "n_planes", "Required for resonant preprocessing")
+        self._entry_row(form, 6, "Frames/plane", "n_frames_per_plane", "Required for resonant preprocessing")
+        self._entry_row(form, 7, "Flyback frames", "volume_flyback_frames", "Usually 0 or 1")
+        self._entry_row(form, 8, "Preprocessing workers", "workers", "Use 'auto' for session-level parallelism")
 
         ttk.Checkbutton(form, text="Remove first frame per plane group", variable=self.remove_first_frame_var).grid(
             row=9, column=0, columnspan=2, sticky="w", pady=4
@@ -132,7 +134,7 @@ class PreprocessingGuiApp:
         ttk.Separator(form).grid(row=10, column=0, columnspan=4, sticky="ew", pady=10)
         self._path_row(form, 11, "Suite2P ops .npy", "ops_path", file_mode=True)
         self._entry_row(form, 12, "FPS", "fps", "Suite2P fs")
-        self._entry_row(form, 13, "Suite2P planes", "selected_planes", "Comma-separated plane indices")
+        self._entry_row(form, 13, "Suite2P planes", "selected_planes", "Use 'all' or comma-separated plane indices")
         self._path_row(form, 14, "Fast disk", "fast_disk")
         self._path_row(form, 15, "Mirror root", "storage_root")
 
@@ -179,8 +181,7 @@ class PreprocessingGuiApp:
 
     def collect_preprocessing_config(self) -> dict[str, Any]:
         return {
-            "input_base": self.vars["input_base"].get(),
-            "output_base": self.vars["output_base"].get(),
+            "data_root": self.vars["data_root"].get(),
             "fish_ids": self.vars["fish_ids"].get(),
             "protocol": self.vars["protocol"].get(),
             "mode": self.vars["mode"].get(),
@@ -188,13 +189,14 @@ class PreprocessingGuiApp:
             "n_planes": self.vars["n_planes"].get(),
             "n_frames_per_plane": self.vars["n_frames_per_plane"].get(),
             "volume_flyback_frames": self.vars["volume_flyback_frames"].get(),
+            "workers": self.vars["workers"].get(),
             "remove_first_frame": self.remove_first_frame_var.get(),
             "progress": True,
         }
 
     def collect_suite2p_config(self) -> dict[str, Any]:
         return {
-            "data_root": self.vars["output_base"].get(),
+            "data_root": self.vars["data_root"].get(),
             "fish_ids": self.vars["fish_ids"].get(),
             "ops_path": self.vars["ops_path"].get(),
             "fps": self.vars["fps"].get(),

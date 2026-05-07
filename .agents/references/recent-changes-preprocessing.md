@@ -12,6 +12,16 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-07 - multi-session plane offsets
+- Date and label: 2026-05-07, multi-session plane offsets
+- Slice goal: Keep repeated 2P imaging sessions separate when preprocessing one fish folder and make the GUI match the single-root experiment layout.
+- Passes completed in this session: Session parser and writer update -> workflow/GUI/Suite2P validation update -> benchmark utility -> focused regression tests/docs -> compile checks.
+- What changed: Resonant preprocessing now detects implicit `r1` and explicit `_rN` raw TIFF sessions, writes each session into the next global plane range, records session-to-plane metadata, and keeps output TIFFs grayscale via `photometric=minisblack`. The GUI now uses one data root, defaults Suite2P planes to `all`, and exposes preprocessing workers. Suite2P config expands `all` to available preprocessed plane TIFFs per fish.
+- What remains broken: Full Suite2P execution still needs manual/integration validation with a real Suite2P environment and real preprocessed plane TIFFs.
+- Remaining in-slice work: None known for preprocessing. Optional: repeat the benchmark on all selected blocks before an unattended full experiment batch.
+- Next likely breakpoint: If operators need different session naming beyond `_rN`, update `parse_functional_tiff_name` and its tests at the preprocessing writer stage.
+- Rerun implications: Re-run stage 2 preprocessing for fish with `_r2` raw TIFFs to generate separate output plane ranges before running Suite2P with `selected_planes=all`. On `L758_f02` block 1, `scripts/benchmark_preprocessing_workers.py --workers 1,2` measured `workers=2` at 71.77s vs `workers=1` at 116.39s, a 1.62x speedup.
+
 ## 2026-05-07 - streaming preprocessing entrypoint
 - Date and label: 2026-05-07, streaming preprocessing entrypoint
 - Slice goal: Add a low-memory raw TIFF preprocessing path that streams pages from disk and reports progress on one updating terminal line.

@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import re
 
 
 PREPROCESSING_MODE_STREAMING = "streaming_two_pass"
@@ -25,6 +26,7 @@ class PreprocessingConfig:
     volume_flyback_frames: int = 1
     remove_first_frame: bool = False
     progress: bool = True
+    workers: int | str = 1
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,7 @@ class Suite2PConfig:
     ops_path: Path
     fps: float
     fish_ids: list[str]
-    selected_planes: list[int]
+    selected_planes: list[int] | None
     fast_disk: Path | None = None
     storage_root: Path | None = None
 
@@ -91,6 +93,23 @@ def parse_required_int_list(value: Any, label: str) -> list[int]:
     return parsed
 
 
+def parse_selected_planes(value: Any) -> list[int] | None:
+    if isinstance(value, str) and value.strip().lower() == "all":
+        return None
+    return parse_required_int_list(value, "selected_planes")
+
+
+def parse_workers(value: Any) -> int | str:
+    if value in (None, ""):
+        return 1
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        return "auto"
+    workers = int(value)
+    if workers <= 0:
+        raise ValueError("workers must be positive or 'auto'.")
+    return workers
+
+
 def parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -123,8 +142,9 @@ def preprocessing_config_from_dict(data: dict[str, Any]) -> PreprocessingConfig:
     if mode not in VALID_PREPROCESSING_MODES:
         raise ValueError(f"mode must be one of: {', '.join(sorted(VALID_PREPROCESSING_MODES))}.")
 
-    input_base = optional_path(data.get("input_base"))
-    output_base = optional_path(data.get("output_base"))
+    data_root = optional_path(data.get("data_root"))
+    input_base = optional_path(data.get("input_base")) or data_root
+    output_base = optional_path(data.get("output_base")) or data_root
     if input_base is None:
         raise ValueError("input_base is required.")
     if output_base is None:
@@ -159,6 +179,7 @@ def preprocessing_config_from_dict(data: dict[str, Any]) -> PreprocessingConfig:
         volume_flyback_frames=volume_flyback_frames,
         remove_first_frame=parse_bool(data.get("remove_first_frame", False)),
         progress=parse_bool(data.get("progress", True)),
+        workers=parse_workers(data.get("workers", 1)),
     )
 
 
@@ -167,7 +188,7 @@ def suite2p_config_from_dict(data: dict[str, Any]) -> Suite2PConfig:
     if not fish_ids:
         raise ValueError("At least one fish ID is required.")
 
-    data_root = optional_path(data.get("data_root"))
+    data_root = optional_path(data.get("data_root")) or optional_path(data.get("output_base"))
     ops_path = optional_path(data.get("ops_path"))
     if data_root is None:
         raise ValueError("data_root is required.")
@@ -183,7 +204,7 @@ def suite2p_config_from_dict(data: dict[str, Any]) -> Suite2PConfig:
         ops_path=ops_path,
         fps=fps,
         fish_ids=fish_ids,
-        selected_planes=parse_required_int_list(data.get("selected_planes"), "selected_planes"),
+        selected_planes=parse_selected_planes(data.get("selected_planes", "all")),
         fast_disk=optional_path(data.get("fast_disk")),
         storage_root=optional_path(data.get("storage_root")),
     )
@@ -193,7 +214,27 @@ def individual_planes_dir(base: str | Path, fish_id: str) -> Path:
     return Path(base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
 
 
-def validate_preprocessing_outputs(data_root: str | Path, fish_ids: list[str], selected_planes: list[int]) -> list[FishValidationResult]:
+def discover_preprocessed_planes(data_root: str | Path, fish_id: str) -> list[int]:
+    pre_dir = individual_planes_dir(data_root, fish_id)
+    planes = []
+    pattern = re.compile(rf"^{re.escape(fish_id)}_plane(\d+)\.tif$")
+    for path in pre_dir.glob(f"{fish_id}_plane*.tif"):
+        match = pattern.match(path.name)
+        if match:
+            planes.append(int(match.group(1)))
+    return sorted(planes)
+
+
+def selected_planes_for_fish(data_root: str | Path, fish_id: str, selected_planes: list[int] | None) -> list[int]:
+    if selected_planes is not None:
+        return selected_planes
+    planes = discover_preprocessed_planes(data_root, fish_id)
+    if not planes:
+        raise ValueError(f"No preprocessed plane TIFFs found for {fish_id}.")
+    return planes
+
+
+def validate_preprocessing_outputs(data_root: str | Path, fish_ids: list[str], selected_planes: list[int] | None) -> list[FishValidationResult]:
     results = []
     for fish_id in fish_ids:
         errors = []
@@ -206,7 +247,13 @@ def validate_preprocessing_outputs(data_root: str | Path, fish_ids: list[str], s
         if not metadata.exists():
             errors.append(f"Missing preprocessing metadata: {metadata}")
 
-        for plane_idx in selected_planes:
+        try:
+            planes_to_check = selected_planes_for_fish(data_root, fish_id, selected_planes)
+        except ValueError as exc:
+            errors.append(str(exc))
+            planes_to_check = []
+
+        for plane_idx in planes_to_check:
             expected = pre_dir / f"{fish_id}_plane{plane_idx}.tif"
             if not expected.exists():
                 errors.append(f"Missing plane TIFF for plane {plane_idx}: {expected}")
@@ -254,6 +301,7 @@ def run_preprocessing_config(config: PreprocessingConfig) -> None:
                 volume_flyback_frames=config.volume_flyback_frames,
                 remove_first_frame=config.remove_first_frame,
                 progress=config.progress,
+                workers=config.workers,
             )
         elif config.mode == PREPROCESSING_MODE_FULL_MEMORY:
             preprocessing_tiff.process_fish(
@@ -277,12 +325,18 @@ def run_suite2p_config(config: Suite2PConfig) -> None:
 
     import motion_segmentation_suite2p
 
+    selected_planes_by_fish = {
+        fish_id: selected_planes_for_fish(config.data_root, fish_id, config.selected_planes)
+        for fish_id in config.fish_ids
+    }
+
     motion_segmentation_suite2p.batch_process(
         config.data_root,
         config.ops_path,
         config.fps,
         fish_ids=config.fish_ids,
         selected_planes=config.selected_planes,
+        selected_planes_by_fish=selected_planes_by_fish,
         fast_disk=config.fast_disk,
         storage_root=config.storage_root,
     )

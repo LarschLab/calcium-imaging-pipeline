@@ -186,7 +186,7 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
         gc.collect()
 
 
-def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None, storage_root=None):
+def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None, storage_root=None, selected_planes_by_fish=None):
     """
     Process multiple fish folders.
 
@@ -210,7 +210,10 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
 
         start_time = time.time()
         print(f"\n📂 Processing fish: {fish_folder.name}")
-        process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk, storage_root=storage_root)
+        planes_for_fish = selected_planes
+        if selected_planes_by_fish is not None:
+            planes_for_fish = selected_planes_by_fish.get(fish_folder.name, selected_planes)
+        process_fish(fish_folder, global_ops, planes_for_fish, fps, fast_disk, storage_root=storage_root)
         elapsed = time.time() - start_time
         print(f"⏱️ Finished processing {fish_folder.name} in {elapsed / 60:.2f} min.\n")
 

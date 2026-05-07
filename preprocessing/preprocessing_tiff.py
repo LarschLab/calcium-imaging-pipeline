@@ -158,7 +158,16 @@ def save_stack(output_path, filename, stack):
     - stack (np.ndarray): Image stack to save.
     """
     output_path.mkdir(parents=True, exist_ok=True)
-    tf.imwrite(output_path / filename, stack, photometric='minisblack')
+    tf.imwrite(output_path / filename, stack, photometric="minisblack")
+
+
+def clear_resonant_plane_outputs(output_path, fish_id):
+    """
+    Remove existing stage-2 plane TIFFs for one fish before rewriting them.
+    """
+    output_path.mkdir(parents=True, exist_ok=True)
+    for path in output_path.glob(f"{fish_id}_plane*.tif"):
+        path.unlink()
 
 
 def extract_block_number(tif_file):
@@ -178,27 +187,70 @@ def extract_block_number(tif_file):
         return None
 
 
-def get_functional_tiffs(fish_id, input_base, blocks=None):
+def parse_functional_tiff_name(fish_id, tif_file):
     """
-    Return selected non-anatomy functional TIFF files for one fish.
+    Parse raw functional TIFF names into session label and block number.
+
+    Expected names are either `<fish>_00001.tif` for the first session or
+    `<fish>_r2_00001.tif` for later sessions.
+    """
+    pattern = rf"^{re.escape(fish_id)}(?:_r(?P<session>\d+))?_(?P<block>\d{{5}})\.tif$"
+    match = re.match(pattern, tif_file.name)
+    if not match:
+        return None
+
+    session_number = int(match.group("session") or 1)
+    block_number = int(match.group("block"))
+    return {
+        "session_label": f"r{session_number}",
+        "session_number": session_number,
+        "block_number": block_number,
+    }
+
+
+def get_functional_tiff_sessions(fish_id, input_base, blocks=None):
+    """
+    Return selected functional TIFF files grouped by detected imaging session.
     """
     raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
-    tiffs = []
+    sessions = {}
 
     for tif_file in sorted(raw_folder.glob("*.tif")):
         if "anatomy" in tif_file.name:
             continue
 
-        block_number = extract_block_number(tif_file)
-        if blocks is not None and block_number not in blocks:
+        parsed = parse_functional_tiff_name(fish_id, tif_file)
+        if parsed is None:
+            continue
+        if blocks is not None and parsed["block_number"] not in blocks:
             continue
 
-        tiffs.append(tif_file)
+        session_label = parsed["session_label"]
+        sessions.setdefault(
+            session_label,
+            {
+                "session_label": session_label,
+                "session_number": parsed["session_number"],
+                "tiff_files": [],
+            },
+        )
+        sessions[session_label]["tiff_files"].append(tif_file)
 
-    if not tiffs:
+    if not sessions:
         raise ValueError("No matching TIFF files found for selected blocks.")
 
-    return tiffs
+    grouped = sorted(sessions.values(), key=lambda session: session["session_number"])
+    for session in grouped:
+        session["tiff_files"].sort(key=lambda path: parse_functional_tiff_name(fish_id, path)["block_number"])
+    return grouped
+
+
+def get_functional_tiffs(fish_id, input_base, blocks=None):
+    """
+    Return selected non-anatomy functional TIFF files for one fish.
+    """
+    sessions = get_functional_tiff_sessions(fish_id, input_base, blocks)
+    return [tif_file for session in sessions for tif_file in session["tiff_files"]]
 
 
 def count_tiff_pages(tiff_files):
@@ -220,6 +272,18 @@ def corrected_uint16_frame(frame, offset):
         return frame.astype(np.uint16, copy=False)
 
     corrected = frame.astype(np.int32)
+    corrected += offset
+    np.clip(corrected, 0, 65535, out=corrected)
+    return corrected.astype(np.uint16)
+
+
+def correct_stack_with_offset(frames, offset):
+    """
+    Apply a known negative-value offset to an in-memory stack.
+    """
+    if offset <= 0:
+        return frames.astype(np.uint16)
+    corrected = frames.astype(np.int32)
     corrected += offset
     np.clip(corrected, 0, 65535, out=corrected)
     return corrected.astype(np.uint16)
@@ -287,20 +351,32 @@ def scan_resonant_min_max(tiff_files, n_planes, n_frames_per_plane, volume_flyba
     return min_value, max_value
 
 
-def write_resonant_streaming(tiff_files, output_path, fish_id, n_planes, n_frames_per_plane, offset, volume_flyback_frames=1, remove_first_frame=False, progress=True):
+def write_resonant_streaming(
+    tiff_files,
+    output_path,
+    fish_id,
+    n_planes,
+    n_frames_per_plane,
+    offset,
+    volume_flyback_frames=1,
+    remove_first_frame=False,
+    progress=True,
+    plane_offset=0,
+):
     """
     Stream resonant TIFFs and append averaged frames directly to per-plane TIFFs.
     """
     frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
     total_pages = count_tiff_pages(tiff_files)
-    progress_line = SingleLineProgress("Pass 2/2 write", total_pages) if progress else None
+    progress_line = SingleLineProgress(f"Pass 2/2 write planes {plane_offset}-{plane_offset + n_planes - 1}", total_pages) if progress else None
     writers = []
     raw_pages_seen = 0
     group_index = 0
     kept_group = []
 
     output_path.mkdir(parents=True, exist_ok=True)
-    for plane_idx in range(n_planes):
+    for local_plane_idx in range(n_planes):
+        plane_idx = plane_offset + local_plane_idx
         out_file = output_path / f"{fish_id}_plane{plane_idx}.tif"
         if out_file.exists():
             out_file.unlink()
@@ -327,8 +403,8 @@ def write_resonant_streaming(tiff_files, output_path, fish_id, n_planes, n_frame
 
                     corrected = [corrected_uint16_frame(frame, offset).astype(np.float64) for frame in frames_to_average]
                     avg_frame = np.round(np.mean(corrected, axis=0)).astype(np.uint16)
-                    plane_idx = group_index % n_planes
-                    writers[plane_idx].write(avg_frame, photometric="minisblack", contiguous=True)
+                    local_plane_idx = group_index % n_planes
+                    writers[local_plane_idx].write(avg_frame, photometric="minisblack", contiguous=True)
                     group_index += 1
                     kept_group = []
 
@@ -395,6 +471,92 @@ def write_linear_streaming(tiff_files, output_path, fish_id, offset, progress=Tr
             progress_line.finish()
 
 
+def resolve_worker_count(workers, task_count):
+    """
+    Resolve a user worker setting against available independent tasks.
+    """
+    task_count = max(int(task_count), 1)
+    if workers in (None, "", "auto"):
+        requested = min(mp.cpu_count(), task_count)
+    else:
+        requested = int(workers)
+    if requested <= 0:
+        raise ValueError("workers must be positive or 'auto'.")
+    return max(1, min(requested, task_count))
+
+
+def _scan_resonant_session_worker(args):
+    session_label, tiff_files, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame = args
+    print(f"[{session_label}] scanning {len(tiff_files)} TIFF file(s)", flush=True)
+    min_value, max_value = scan_resonant_min_max(
+        tiff_files,
+        n_planes,
+        n_frames_per_plane,
+        volume_flyback_frames=volume_flyback_frames,
+        remove_first_frame=remove_first_frame,
+        progress=False,
+    )
+    return session_label, min_value, max_value
+
+
+def _write_resonant_session_worker(args):
+    (
+        session_label,
+        tiff_files,
+        output_path,
+        fish_id,
+        n_planes,
+        n_frames_per_plane,
+        offset,
+        volume_flyback_frames,
+        remove_first_frame,
+        plane_offset,
+    ) = args
+    print(f"[{session_label}] writing output planes {plane_offset}-{plane_offset + n_planes - 1}", flush=True)
+    write_resonant_streaming(
+        tiff_files,
+        output_path,
+        fish_id,
+        n_planes,
+        n_frames_per_plane,
+        offset,
+        volume_flyback_frames=volume_flyback_frames,
+        remove_first_frame=remove_first_frame,
+        progress=False,
+        plane_offset=plane_offset,
+    )
+
+
+def concatenate_tiff_files(tiff_files, protocol, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
+    """
+    Load and concatenate the provided TIFF files.
+    """
+    all_blocks = []
+    for tif_file in tiff_files:
+        print(f"  Loading {tif_file.name}")
+        frames = load_tiff_file(tif_file, n_planes, n_frames_per_plane)
+
+        if protocol == "resonant":
+            frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
+            if volume_flyback_frames > 0:
+                print(f"  Removing {volume_flyback_frames} flyback frames per volume.")
+                frames = remove_vflyback_frames(frames, frames_per_volume, volume_flyback_frames)
+
+            frames = frames.reshape(-1, n_frames_per_plane, frames.shape[1], frames.shape[2])
+
+            if remove_first_frame:
+                frames = frames[:, 1:, :, :]
+
+        all_blocks.append(frames)
+
+    if not all_blocks:
+        raise ValueError("No matching TIFF files found for selected blocks.")
+
+    full_stack = np.concatenate(all_blocks, axis=0)
+    print(f"  Full concatenated stack shape: {full_stack.shape}")
+    return full_stack
+
+
 def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """
     Load and concatenate selected blocks. For resonant protocol, also remove flyback and reshape.
@@ -411,40 +573,8 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     Returns:
     - np.ndarray: Full concatenated image stack.
     """
-    raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
-    tiffs = sorted(raw_folder.glob("*.tif"))
-
-    all_blocks = []
-    for tif_file in tiffs:
-        if 'anatomy' not in tif_file.name:
-            block_number = extract_block_number(tif_file)
-            if blocks is not None and block_number not in blocks:
-                continue
-
-            print(f"  Loading {tif_file.name}")
-            frames = load_tiff_file(tif_file, n_planes, n_frames_per_plane)
-
-            if protocol == "resonant":
-                frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
-                if volume_flyback_frames > 0:
-                    print(f"  Removing {volume_flyback_frames} flyback frames per volume.")
-                    # Remove flyback frames and reshape for plane extraction
-                    frames = remove_vflyback_frames(frames, frames_per_volume, volume_flyback_frames)
-
-                frames = frames.reshape(-1, n_frames_per_plane, frames.shape[1], frames.shape[2]) # Reshape to (volumes, frames_per_plane, H, W)
-
-                if remove_first_frame:
-                    frames = frames[:, 1:, :, :]
-
-            all_blocks.append(frames)
-
-    if not all_blocks:
-        raise ValueError("No matching TIFF files found for selected blocks.")
-
-    # Concatenate all loaded blocks into single array
-    full_stack = np.concatenate(all_blocks, axis=0)
-    print(f"  Full concatenated stack shape: {full_stack.shape}")
-    return full_stack
+    tiffs = get_functional_tiffs(fish_id, input_base, blocks)
+    return concatenate_tiff_files(tiffs, protocol, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
 
 def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """
@@ -461,34 +591,76 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
     - volume_flyback_frames (int): Volume flyback frames (only resonant).
     - remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
     """
-    full_stack = concatenate_blocks(fish_id, input_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
-    full_stack = correct_negative_values_mp_safe(full_stack)
     output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     output_path.mkdir(parents=True, exist_ok=True)
 
     if protocol == "resonant":
-        for plane_idx in range(n_planes):
-            # Extract one plane across all volumes
-            avg_plane = np.mean(full_stack, axis=1)[plane_idx::n_planes]
-            avg_plane = np.round(avg_plane).astype(np.uint16)
-            save_stack(output_path, f"{fish_id}_plane{plane_idx}.tif", avg_plane)
-            print(f"  Saved plane {plane_idx}")
-            del avg_plane
+        clear_resonant_plane_outputs(output_path, fish_id)
+        sessions = get_functional_tiff_sessions(fish_id, input_base, blocks)
+        session_stacks = []
+        global_min = None
+        global_max = None
+        for session_index, session in enumerate(sessions):
+            full_stack = concatenate_tiff_files(
+                session["tiff_files"],
+                protocol,
+                n_planes,
+                n_frames_per_plane,
+                volume_flyback_frames,
+                remove_first_frame,
+            )
+            global_min, global_max = update_min_max(full_stack, global_min, global_max)
+            session_stacks.append((session_index, session, full_stack))
+
+        offset = abs(global_min) if global_min < 0 else 0
+        session_metadata = []
+        for session_index, session, full_stack in session_stacks:
+            full_stack = correct_stack_with_offset(full_stack, offset)
+            plane_offset = session_index * n_planes
+            output_planes = []
+            for local_plane_idx in range(n_planes):
+                plane_idx = plane_offset + local_plane_idx
+                avg_plane = np.mean(full_stack, axis=1)[local_plane_idx::n_planes]
+                avg_plane = np.round(avg_plane).astype(np.uint16)
+                save_stack(output_path, f"{fish_id}_plane{plane_idx}.tif", avg_plane)
+                output_planes.append(plane_idx)
+                print(f"  Saved plane {plane_idx}")
+                del avg_plane
+                gc.collect()
+            session_metadata.append(
+                {
+                    "session_label": session["session_label"],
+                    "session_number": session["session_number"],
+                    "plane_offset": plane_offset,
+                    "output_planes": output_planes,
+                    "selected_tiffs": [str(path) for path in session["tiff_files"]],
+                }
+            )
+            del full_stack
             gc.collect()
 
         metadata = {
             "protocol": "resonant",
+            "preprocessing_mode": "full_memory",
             "n_planes": n_planes,
+            "total_output_planes": n_planes * len(sessions),
             "n_frames_per_plane": n_frames_per_plane,
             "blocks": blocks,
             "volume_flyback_frames": volume_flyback_frames,
             "remove_first_frame": remove_first_frame,
             "fish_id": fish_id,
             "output_path": str(output_path),
+            "sessions": session_metadata,
+            "global_min": int(global_min),
+            "global_max": int(global_max),
+            "negative_offset_applied": int(offset),
+            "photometric": "minisblack",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
     elif protocol == "linear":
+        full_stack = concatenate_blocks(fish_id, input_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
+        full_stack = correct_negative_values_mp_safe(full_stack)
         save_stack(output_path, f"{fish_id}_stack.tif", full_stack)
 
         metadata = {
@@ -496,14 +668,14 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
             "blocks": blocks,
             "fish_id": fish_id,
             "output_path": str(output_path),
+            "photometric": "minisblack",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
+        del full_stack
+        gc.collect()
 
     else:
         raise ValueError(f"Unknown protocol type: {protocol}")
-
-    del full_stack
-    gc.collect()
 
     with open(output_path / f"{fish_id}_preprocessing_metadata.json", "w") as f:
         json.dump(metadata, f, indent=4)
@@ -511,31 +683,71 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
     print(f"✅ Finished processing {fish_id}")
 
 
-def process_fish_streaming(fish_id, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False, progress=True):
+def process_fish_streaming(
+    fish_id,
+    input_base,
+    output_base,
+    protocol="resonant",
+    blocks=None,
+    n_planes=None,
+    n_frames_per_plane=None,
+    volume_flyback_frames=1,
+    remove_first_frame=False,
+    progress=True,
+    workers=1,
+):
     """
     Process one fish by streaming TIFF pages from disk instead of loading full blocks.
 
     This writes the same canonical outputs as process_fish while keeping memory
     proportional to a small frame group rather than the selected raw TIFF size.
     """
-    tiff_files = get_functional_tiffs(fish_id, input_base, blocks)
     output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     output_path.mkdir(parents=True, exist_ok=True)
-
-    print(f"Streaming {fish_id}: {len(tiff_files)} TIFF file(s)")
 
     if protocol == "resonant":
         if n_planes is None or n_frames_per_plane is None:
             raise ValueError("n_planes and n_frames_per_plane are required for resonant streaming preprocessing.")
 
-        min_value, max_value = scan_resonant_min_max(
-            tiff_files,
-            n_planes,
-            n_frames_per_plane,
-            volume_flyback_frames=volume_flyback_frames,
-            remove_first_frame=remove_first_frame,
-            progress=progress,
-        )
+        clear_resonant_plane_outputs(output_path, fish_id)
+        sessions = get_functional_tiff_sessions(fish_id, input_base, blocks)
+        worker_count = resolve_worker_count(workers, len(sessions))
+        print(f"Streaming {fish_id}: {sum(len(session['tiff_files']) for session in sessions)} TIFF file(s) across {len(sessions)} session(s)")
+        print(f"Using {worker_count} preprocessing worker(s)")
+
+        scan_jobs = [
+            (
+                session["session_label"],
+                session["tiff_files"],
+                n_planes,
+                n_frames_per_plane,
+                volume_flyback_frames,
+                remove_first_frame,
+            )
+            for session in sessions
+        ]
+        if worker_count > 1:
+            with mp.Pool(processes=worker_count) as pool:
+                scan_results = pool.map(_scan_resonant_session_worker, scan_jobs)
+        else:
+            scan_results = []
+            for job in scan_jobs:
+                scan_results.append(
+                    (
+                        job[0],
+                        *scan_resonant_min_max(
+                            job[1],
+                            n_planes,
+                            n_frames_per_plane,
+                            volume_flyback_frames=volume_flyback_frames,
+                            remove_first_frame=remove_first_frame,
+                            progress=progress,
+                        ),
+                    )
+                )
+
+        min_value = min(result[1] for result in scan_results)
+        max_value = max(result[2] for result in scan_results)
         offset = abs(min_value) if min_value < 0 else 0
         print(f"  min: {min_value}, max: {max_value}")
         if offset:
@@ -543,36 +755,76 @@ def process_fish_streaming(fish_id, input_base, output_base, protocol="resonant"
         else:
             print("  No negative values to correct.")
 
-        write_resonant_streaming(
-            tiff_files,
-            output_path,
-            fish_id,
-            n_planes,
-            n_frames_per_plane,
-            offset,
-            volume_flyback_frames=volume_flyback_frames,
-            remove_first_frame=remove_first_frame,
-            progress=progress,
-        )
+        write_jobs = []
+        session_metadata = []
+        for session_index, session in enumerate(sessions):
+            plane_offset = session_index * n_planes
+            output_planes = list(range(plane_offset, plane_offset + n_planes))
+            write_jobs.append(
+                (
+                    session["session_label"],
+                    session["tiff_files"],
+                    output_path,
+                    fish_id,
+                    n_planes,
+                    n_frames_per_plane,
+                    offset,
+                    volume_flyback_frames,
+                    remove_first_frame,
+                    plane_offset,
+                )
+            )
+            session_metadata.append(
+                {
+                    "session_label": session["session_label"],
+                    "session_number": session["session_number"],
+                    "plane_offset": plane_offset,
+                    "output_planes": output_planes,
+                    "selected_tiffs": [str(path) for path in session["tiff_files"]],
+                }
+            )
+
+        if worker_count > 1:
+            with mp.Pool(processes=worker_count) as pool:
+                pool.map(_write_resonant_session_worker, write_jobs)
+        else:
+            for job in write_jobs:
+                write_resonant_streaming(
+                    job[1],
+                    output_path,
+                    fish_id,
+                    n_planes,
+                    n_frames_per_plane,
+                    offset,
+                    volume_flyback_frames=volume_flyback_frames,
+                    remove_first_frame=remove_first_frame,
+                    progress=progress,
+                    plane_offset=job[9],
+                )
 
         metadata = {
             "protocol": "resonant",
             "preprocessing_mode": "streaming_two_pass",
             "n_planes": n_planes,
+            "total_output_planes": n_planes * len(sessions),
             "n_frames_per_plane": n_frames_per_plane,
             "blocks": blocks,
             "volume_flyback_frames": volume_flyback_frames,
             "remove_first_frame": remove_first_frame,
             "fish_id": fish_id,
             "output_path": str(output_path),
-            "selected_tiffs": [str(path) for path in tiff_files],
+            "sessions": session_metadata,
             "global_min": int(min_value),
             "global_max": int(max_value),
             "negative_offset_applied": int(offset),
+            "workers": worker_count,
+            "photometric": "minisblack",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
     elif protocol == "linear":
+        tiff_files = get_functional_tiffs(fish_id, input_base, blocks)
+        print(f"Streaming {fish_id}: {len(tiff_files)} TIFF file(s)")
         min_value, max_value = scan_linear_min_max(tiff_files, progress=progress)
         offset = abs(min_value) if min_value < 0 else 0
         print(f"  min: {min_value}, max: {max_value}")
@@ -593,6 +845,7 @@ def process_fish_streaming(fish_id, input_base, output_base, protocol="resonant"
             "global_min": int(min_value),
             "global_max": int(max_value),
             "negative_offset_applied": int(offset),
+            "photometric": "minisblack",
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 

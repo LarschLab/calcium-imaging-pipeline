@@ -10,11 +10,13 @@ Provide the compact callable surface that other scripts should rely on before ad
 ## Preprocessing surface
 - `preprocessing/preprocessing_tiff.py`
   - `load_tiff_file(filepath, n_planes, n_frames_per_plane)`: read multi-page TIFFs into memory with partial-read fallback.
+  - `parse_functional_tiff_name(fish_id, tif_file)`: detect implicit `r1` and explicit `_rN` raw TIFF sessions plus block number.
+  - `get_functional_tiff_sessions(fish_id, input_base, blocks=None)`: return selected raw TIFFs grouped by imaging session.
   - `remove_vflyback_frames(frames, frames_per_volume, vflyback_frames=1)`: drop volume flyback frames.
   - `correct_negative_values_mp_safe(frames, num_chunks=5)`: shift negative pixel values into `uint16`.
   - `concatenate_blocks(...)`: load and concatenate selected raw blocks.
   - `process_fish(...)`: preprocess one fish and write stage-2 outputs.
-  - `process_fish_streaming(...)`: preprocess one fish with two-pass disk streaming and write the same stage-2 outputs.
+  - `process_fish_streaming(...)`: preprocess one fish with two-pass disk streaming, session-aware plane offsets, and optional session-level workers.
   - `parallel_preprocess(...)`: orchestration entrypoint for multiple fish.
 - `preprocessing/motion_segmentation_suite2p.py`
   - `join_reg_tiffs_to_one(reg_folder, out_tiff)`: join Suite2P `reg_tif` chunks into one BigTIFF.
@@ -22,10 +24,12 @@ Provide the compact callable surface that other scripts should rely on before ad
   - `run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None)`: run Suite2P on one plane TIFF.
   - `find_plane_file(pre_dir, plane_idx)`: locate the source TIFF for one plane.
   - `process_fish(...)`: stage-3 owner for one fish.
-  - `batch_process(..., storage_root=None)`: orchestration entrypoint for multiple fish with optional mirrored outputs.
+  - `batch_process(..., storage_root=None, selected_planes_by_fish=None)`: orchestration entrypoint for multiple fish with optional mirrored outputs and per-fish plane lists.
 - `preprocessing/preprocessing_workflow.py`
   - `preprocessing_config_from_dict(data)`: parse GUI/CLI preprocessing config.
   - `suite2p_config_from_dict(data)`: parse GUI/CLI Suite2P config.
+  - `discover_preprocessed_planes(data_root, fish_id)`: list available stage-2 plane TIFF indices.
+  - `selected_planes_for_fish(data_root, fish_id, selected_planes)`: expand `all`/`None` to available stage-2 plane indices.
   - `validate_preprocessing_outputs(data_root, fish_ids, selected_planes)`: check selected plane TIFFs and preprocessing metadata before Suite2P.
   - `run_preprocessing_config(config)`: run stage 2 for one or more fish.
   - `run_suite2p_config(config)`: validate stage 2 outputs and run stage 3.

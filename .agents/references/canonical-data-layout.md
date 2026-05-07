@@ -26,7 +26,7 @@ Authoritative owner
 
 ## Writer-stage ownership
 - Visual stimulation acquisition scripts own CSV logs, planned block summaries, and run metadata written into `01_raw/2p/metadata`.
-- `preprocessing/preprocessing_tiff.py` owns plane TIFFs and preprocessing metadata JSONs in `02_reg/00_preprocessing/2p_functional/01_individualPlanes`.
+- `preprocessing/preprocessing_tiff.py` owns plane TIFFs and preprocessing metadata JSONs in `02_reg/00_preprocessing/2p_functional/01_individualPlanes`. Multi-session raw TIFFs use one global plane index range per fish: implicit `r1` writes planes `0..n-1`, `r2` writes `n..2n-1`, and so on.
 - `preprocessing/motion_segmentation_suite2p.py` owns joined motion-corrected TIFFs in `02_motionCorrected` and plane-specific Suite2P outputs under `03_analysis/functional/suite2P/plane*`.
 - `preprocessing/dFoF_extraction.py` owns `*_dFoF.npy`, filtered ROI index arrays, and dF/F metadata JSONs in each plane folder.
 
