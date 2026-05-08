@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import types
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import tifffile as tf
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -162,7 +164,32 @@ class PreprocessingWorkflowConfigTests(unittest.TestCase):
 
 
 class Suite2PRunnerTests(unittest.TestCase):
-    def test_run_suite2p_uses_legacy_ops_api_when_available(self) -> None:
+    @classmethod
+    def setUpClass(cls) -> None:
+        if "suite2p" not in sys.modules:
+            fake_suite2p = types.ModuleType("suite2p")
+            fake_suite2p.run_s2p = lambda **_kwargs: None
+            sys.modules["suite2p"] = fake_suite2p
+
+    def test_join_reg_tiffs_accepts_current_suite2p_chunk_names(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            reg_dir = tmp_path / "reg_tif"
+            reg_dir.mkdir()
+            tf.imwrite(reg_dir / "file 0001.tif", np.full((1, 2, 2), 2, dtype=np.int16))
+            tf.imwrite(reg_dir / "file 0000.tif", np.full((1, 2, 2), 1, dtype=np.int16))
+
+            out_tiff = tmp_path / "joined.tif"
+            motion_segmentation_suite2p.join_reg_tiffs_to_one(reg_dir, out_tiff)
+
+            joined = tf.imread(out_tiff)
+            self.assertEqual(joined.shape, (2, 2, 2))
+            np.testing.assert_array_equal(joined[0], np.full((2, 2), 1, dtype=np.int16))
+            np.testing.assert_array_equal(joined[1], np.full((2, 2), 2, dtype=np.int16))
+
+    def test_run_suite2p_legacy_ops_api_preserves_legacy_values(self) -> None:
         import motion_segmentation_suite2p  # noqa: E402
 
         captured = {}
@@ -182,7 +209,7 @@ class Suite2PRunnerTests(unittest.TestCase):
             with patch.object(motion_segmentation_suite2p, "suite2p", fake_suite2p):
                 motion_segmentation_suite2p.run_suite2p(
                     plane_file,
-                    {"tau": 3.0},
+                    {"tau": 3.0, "do_bidiphase": True, "bidiphase": 0.0, "diameter": 0},
                     save_path,
                     fps=2.0,
                     fast_disk=tmp_path / "fast",
@@ -191,6 +218,7 @@ class Suite2PRunnerTests(unittest.TestCase):
         self.assertEqual(captured["ops"]["input_format"], "tif")
         self.assertEqual(captured["ops"]["fs"], 2.0)
         self.assertEqual(captured["ops"]["data_path"], [str(plane_file.parent)])
+        self.assertEqual(captured["ops"]["filelist"], [str(plane_file)])
         self.assertEqual(captured["ops"]["file_list"], [plane_file.name])
         self.assertEqual(captured["ops"]["tiff_list"], [str(plane_file)])
         self.assertEqual(captured["ops"]["save_path0"], str(save_path))
@@ -199,6 +227,164 @@ class Suite2PRunnerTests(unittest.TestCase):
         self.assertFalse(captured["ops"]["keep_movie_raw"])
         self.assertTrue(captured["ops"]["delete_bin"])
         self.assertEqual(captured["ops"]["batch_size"], 500)
+        self.assertTrue(captured["ops"]["do_bidiphase"])
+        self.assertEqual(captured["ops"]["bidiphase"], 0.0)
+        self.assertEqual(captured["ops"]["diameter"], 0)
+        self.assertNotIn("torch_device", captured["ops"])
+
+    def test_legacy_ops_api_force_cpu_patches_cellpose_without_ops_device(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        captured = {}
+
+        def run_s2p(*, ops):
+            captured["ops"] = ops
+
+        fake_suite2p = types.SimpleNamespace(run_s2p=run_s2p)
+        fake_core = types.SimpleNamespace(use_gpu=lambda *args, **kwargs: True)
+        fake_cellpose = types.ModuleType("cellpose")
+        fake_cellpose.core = fake_core
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            plane_file = tmp_path / "planes" / "fish01_plane0.tif"
+            plane_file.parent.mkdir()
+            plane_file.write_bytes(b"placeholder")
+
+            with patch.object(motion_segmentation_suite2p, "suite2p", fake_suite2p), patch.dict(
+                sys.modules,
+                {"cellpose": fake_cellpose, "cellpose.core": fake_core},
+            ), patch.dict(
+                "os.environ",
+                {motion_segmentation_suite2p.FORCE_CPU_ENV_VAR: "1"},
+            ):
+                motion_segmentation_suite2p.run_suite2p(
+                    plane_file,
+                    {"tau": 3.0},
+                    tmp_path / "suite2p_out",
+                    fps=2.0,
+                )
+
+        self.assertNotIn("torch_device", captured["ops"])
+        self.assertFalse(fake_core.use_gpu())
+
+    def test_runtime_ops_disable_zero_bidiphase_shift(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        ops = {"do_bidiphase": True, "bidiphase": 0.0, "two_step_registration": 0.0, "diameter": 0}
+
+        with patch.object(motion_segmentation_suite2p, "best_available_torch_device", return_value="mps"):
+            normalized = motion_segmentation_suite2p.normalize_runtime_ops(ops)
+
+        self.assertIs(normalized, ops)
+        self.assertFalse(normalized["do_bidiphase"])
+        self.assertIs(normalized["two_step_registration"], False)
+        self.assertEqual(normalized["diameter"], [12.0, 12.0])
+        self.assertEqual(normalized["torch_device"], "mps")
+
+    def test_runtime_ops_respect_explicit_cpu_device(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        ops = {"torch_device": "cpu"}
+
+        with patch.object(motion_segmentation_suite2p, "best_available_torch_device", return_value="mps"):
+            normalized = motion_segmentation_suite2p.normalize_runtime_ops(ops)
+
+        self.assertEqual(normalized["torch_device"], "cpu")
+
+    def test_current_suite2p_maps_legacy_cellpose_settings(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        settings = {"detection": {"cellpose_settings": {}}}
+        ops = {
+            "anatomical_only": 2,
+            "pretrained_model": "/models/custom_cp",
+            "flow_threshold": 0.5,
+            "cellprob_threshold": 0.4,
+            "spatial_hp_cp": 0.0,
+        }
+
+        returned = motion_segmentation_suite2p.apply_legacy_cellpose_settings_to_current(settings, ops)
+
+        self.assertIs(returned, settings)
+        self.assertEqual(settings["detection"]["algorithm"], "cellpose")
+        self.assertEqual(settings["detection"]["cellpose_settings"]["img"], "meanImg")
+        self.assertEqual(settings["detection"]["cellpose_settings"]["cellpose_model"], "/models/custom_cp")
+        self.assertEqual(settings["detection"]["cellpose_settings"]["flow_threshold"], 0.5)
+        self.assertEqual(settings["detection"]["cellpose_settings"]["cellprob_threshold"], 0.4)
+        self.assertEqual(settings["detection"]["cellpose_settings"]["highpass_spatial"], 0.0)
+
+    def test_current_ops_api_force_cpu_patches_cellpose(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        captured = {}
+
+        def run_s2p(*, db, settings):
+            captured["settings"] = settings
+
+        def convert_settings_orig(settings_in, db, settings):
+            settings["torch_device"] = settings_in.pop("torch_device")
+            settings["fs"] = settings_in.pop("fs")
+            settings["io"]["delete_bin"] = settings_in.pop("delete_bin")
+            return db, settings, settings_in
+
+        fake_suite2p = types.SimpleNamespace(
+            run_s2p=run_s2p,
+            default_db=lambda: {},
+            default_settings=lambda: {"io": {}, "registration": {}, "extraction": {}, "detection": {"cellpose_settings": {}}},
+        )
+        fake_parameters = types.ModuleType("suite2p.parameters")
+        fake_parameters.convert_settings_orig = convert_settings_orig
+        fake_core = types.SimpleNamespace(use_gpu=lambda *args, **kwargs: True)
+        fake_cellpose = types.ModuleType("cellpose")
+        fake_cellpose.core = fake_core
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            plane_file = tmp_path / "planes" / "fish01_plane0.tif"
+            plane_file.parent.mkdir()
+            plane_file.write_bytes(b"placeholder")
+
+            with patch.object(motion_segmentation_suite2p, "suite2p", fake_suite2p), patch.dict(
+                sys.modules,
+                {"suite2p.parameters": fake_parameters, "cellpose": fake_cellpose, "cellpose.core": fake_core},
+            ), patch.dict(
+                "os.environ",
+                {motion_segmentation_suite2p.FORCE_CPU_ENV_VAR: "1"},
+            ):
+                motion_segmentation_suite2p.run_suite2p(
+                    plane_file,
+                    {"tau": 3.0},
+                    tmp_path / "suite2p_out",
+                    fps=2.0,
+                )
+
+        self.assertEqual(captured["settings"]["torch_device"], "cpu")
+        self.assertFalse(fake_core.use_gpu())
+
+    def test_mps_spatial_taper_patch_uses_float32(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        fake_utils = types.SimpleNamespace()
+        fake_rigid = types.SimpleNamespace()
+        fake_registration = types.SimpleNamespace(rigid=fake_rigid, utils=fake_utils)
+        fake_suite2p = types.ModuleType("suite2p")
+        fake_suite2p.registration = fake_registration
+
+        with patch.dict(
+            sys.modules,
+            {
+                "suite2p": fake_suite2p,
+                "suite2p.registration": fake_registration,
+                "suite2p.registration.rigid": fake_rigid,
+                "suite2p.registration.utils": fake_utils,
+            },
+        ):
+            motion_segmentation_suite2p.patch_suite2p_mps_float64_ops()
+
+        mask = fake_utils.spatial_taper(3.45, 8, 8)
+        self.assertEqual(str(mask.dtype), "torch.float32")
+        self.assertIs(fake_utils.spatial_taper, fake_rigid.spatial_taper)
 
     def test_run_suite2p_converts_flat_ops_for_current_suite2p_api(self) -> None:
         import motion_segmentation_suite2p  # noqa: E402
@@ -223,7 +409,7 @@ class Suite2PRunnerTests(unittest.TestCase):
         fake_suite2p = types.SimpleNamespace(
             run_s2p=run_s2p,
             default_db=lambda: {},
-            default_settings=lambda: {"io": {}, "registration": {}, "extraction": {}},
+            default_settings=lambda: {"io": {}, "registration": {}, "extraction": {}, "detection": {"cellpose_settings": {}}},
         )
         fake_parameters = types.ModuleType("suite2p.parameters")
         fake_parameters.convert_settings_orig = convert_settings_orig
@@ -275,7 +461,71 @@ class PreprocessingCliAndGuiTests(unittest.TestCase):
         suite2p_command = preprocessing_gui.build_suite2p_subprocess_command(config_path)
 
         self.assertEqual(preprocess_command[1:], [str(preprocessing_gui.CLI_PATH), "preprocess", "--config", str(config_path)])
+        self.assertEqual(preprocess_command[0], sys.executable)
+        self.assertEqual(suite2p_command[0], str(preprocessing_gui.LEGACY_SUITE2P_PYTHON))
         self.assertEqual(suite2p_command[1:], [str(preprocessing_gui.CLI_PATH), "suite2p", "--config", str(config_path)])
+
+    def test_suite2p_subprocess_env_clears_force_cpu(self) -> None:
+        env = preprocessing_gui.build_suite2p_subprocess_env(
+            {
+                preprocessing_gui.FORCE_CPU_ENV_VAR: "1",
+                "KEEP_ME": "yes",
+            }
+        )
+
+        self.assertNotIn(preprocessing_gui.FORCE_CPU_ENV_VAR, env)
+        self.assertEqual(env["KEEP_ME"], "yes")
+
+    def test_find_default_suite2p_ops_prefers_legacy_mps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            (tmp_path / "suite2p_ops_legacy_cpu.npy").write_bytes(b"cpu")
+            (tmp_path / "suite2p_ops_legacy_mps.npy").write_bytes(b"mps")
+
+            self.assertEqual(
+                preprocessing_gui.find_default_suite2p_ops_path(tmp_path),
+                tmp_path / "suite2p_ops_legacy_mps.npy",
+            )
+
+    def test_find_default_suite2p_ops_returns_none_for_empty_root(self) -> None:
+        self.assertIsNone(preprocessing_gui.find_default_suite2p_ops_path(""))
+
+    def test_legacy_suite2p_preflight_success(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python"],
+            returncode=0,
+            stdout=(
+                "extra import output\n"
+                'CALCIUM_SUITE2P_PREFLIGHT {"cellpose": "4.0.6", "cellpose_gpu": true, '
+                '"mps": true, "suite2p": "0.14.6", "torch": "2.11.0"}\n'
+            ),
+            stderr="",
+        )
+
+        with patch.object(Path, "exists", return_value=True), patch("preprocessing_gui.subprocess.run", return_value=completed):
+            payload = preprocessing_gui.check_legacy_suite2p_mps_runtime(Path("/legacy/python"))
+
+        self.assertEqual(payload["suite2p"], "0.14.6")
+        self.assertTrue(payload["mps"])
+
+    def test_legacy_suite2p_preflight_blocks_missing_python(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not exist"):
+            preprocessing_gui.check_legacy_suite2p_mps_runtime(Path("/missing/python"))
+
+    def test_legacy_suite2p_preflight_blocks_missing_mps(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=["python"],
+            returncode=0,
+            stdout=(
+                'CALCIUM_SUITE2P_PREFLIGHT {"cellpose": "4.0.6", "cellpose_gpu": true, '
+                '"mps": false, "suite2p": "0.14.6", "torch": "2.11.0"}\n'
+            ),
+            stderr="",
+        )
+
+        with patch.object(Path, "exists", return_value=True), patch("preprocessing_gui.subprocess.run", return_value=completed):
+            with self.assertRaisesRegex(ValueError, "MPS is unavailable"):
+                preprocessing_gui.check_legacy_suite2p_mps_runtime(Path("/legacy/python"))
 
     def test_gui_routes_carriage_return_progress_to_status_events(self) -> None:
         output_queue = preprocessing_gui.queue.Queue()

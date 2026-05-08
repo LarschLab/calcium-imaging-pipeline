@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -25,6 +26,15 @@ from preprocessing_workflow import (
 
 GUI_SETTINGS_PATH = Path.home() / ".calcium_imaging_pipeline" / "preprocessing_gui_settings.json"
 CLI_PATH = Path(__file__).resolve().with_name("preprocessing_cli.py")
+LEGACY_SUITE2P_PYTHON = Path("/Users/ddharmap/miniforge3/envs/suite2p0146_cpu/bin/python")
+EXPECTED_LEGACY_SUITE2P_VERSION = "0.14.6"
+EXPECTED_LEGACY_CELLPOSE_VERSION = "4.0.6"
+FORCE_CPU_ENV_VAR = "CALCIUM_SUITE2P_FORCE_CPU"
+LEGACY_OPS_FILENAMES = (
+    "suite2p_ops_legacy_mps.npy",
+    "suite2p_ops_legacy_cpu.npy",
+    "suite2p_ops_sep_2025_cp.npy",
+)
 
 
 def load_gui_settings(settings_path: Path = GUI_SETTINGS_PATH) -> dict[str, Any]:
@@ -43,8 +53,81 @@ def build_preprocessing_subprocess_command(config_path: Path) -> list[str]:
     return [sys.executable, str(CLI_PATH), "preprocess", "--config", str(config_path)]
 
 
-def build_suite2p_subprocess_command(config_path: Path) -> list[str]:
-    return [sys.executable, str(CLI_PATH), "suite2p", "--config", str(config_path)]
+def build_suite2p_subprocess_command(config_path: Path, python_path: Path = LEGACY_SUITE2P_PYTHON) -> list[str]:
+    return [str(python_path), str(CLI_PATH), "suite2p", "--config", str(config_path)]
+
+
+def build_suite2p_subprocess_env(base_env: dict[str, str] | None = None) -> dict[str, str]:
+    env = dict(os.environ if base_env is None else base_env)
+    env.pop(FORCE_CPU_ENV_VAR, None)
+    return env
+
+
+def find_default_suite2p_ops_path(data_root: str | Path) -> Path | None:
+    root_text = str(data_root).strip()
+    if not root_text:
+        return None
+    root = Path(root_text)
+    for filename in LEGACY_OPS_FILENAMES:
+        candidate = root / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def check_legacy_suite2p_mps_runtime(python_path: Path = LEGACY_SUITE2P_PYTHON) -> dict[str, Any]:
+    if not python_path.exists():
+        raise ValueError(f"Legacy Suite2P Python does not exist: {python_path}")
+
+    probe = """
+import importlib.metadata as md
+import json
+import torch
+from cellpose import core
+
+payload = {
+    "suite2p": md.version("suite2p"),
+    "cellpose": md.version("cellpose"),
+    "torch": md.version("torch"),
+    "mps": bool(getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()),
+    "cellpose_gpu": bool(core.use_gpu()),
+}
+print("CALCIUM_SUITE2P_PREFLIGHT " + json.dumps(payload, sort_keys=True))
+"""
+    try:
+        result = subprocess.run(
+            [str(python_path), "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except OSError as exc:
+        raise ValueError(f"Could not run legacy Suite2P Python: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("Legacy Suite2P preflight timed out.") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise ValueError(f"Legacy Suite2P preflight failed: {detail}")
+
+    payload = None
+    for line in result.stdout.splitlines():
+        if line.startswith("CALCIUM_SUITE2P_PREFLIGHT "):
+            payload = json.loads(line.split(" ", 1)[1])
+            break
+    if payload is None:
+        raise ValueError("Legacy Suite2P preflight did not return version/device information.")
+
+    if payload["suite2p"] != EXPECTED_LEGACY_SUITE2P_VERSION:
+        raise ValueError(f"Expected Suite2P {EXPECTED_LEGACY_SUITE2P_VERSION}, found {payload['suite2p']}.")
+    if payload["cellpose"] != EXPECTED_LEGACY_CELLPOSE_VERSION:
+        raise ValueError(f"Expected Cellpose {EXPECTED_LEGACY_CELLPOSE_VERSION}, found {payload['cellpose']}.")
+    if not payload["mps"]:
+        raise ValueError("MPS is unavailable in the legacy Suite2P environment.")
+    if not payload["cellpose_gpu"]:
+        raise ValueError("Cellpose does not report GPU/MPS availability in the legacy Suite2P environment.")
+    return payload
 
 
 def queue_subprocess_output(text: str, output_queue: queue.Queue, pending: str = "") -> str:
@@ -153,6 +236,11 @@ class PreprocessingGuiApp:
         self._entry_row(form, 13, "Suite2P planes", "selected_planes", "Use 'all' or comma-separated plane indices")
         self._path_row(form, 14, "Fast disk", "fast_disk")
         self._path_row(form, 15, "Mirror root", "storage_root")
+        ttk.Label(
+            form,
+            text=f"Suite2P runs with legacy MPS runtime: {LEGACY_SUITE2P_PYTHON}",
+            foreground="#4b6f00",
+        ).grid(row=16, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
         actions = ttk.Frame(self.root, padding=(12, 0, 12, 8))
         actions.grid(row=2, column=0, sticky="ew")
@@ -194,6 +282,8 @@ class PreprocessingGuiApp:
             path = filedialog.askdirectory(title=f"Select {key}")
         if path:
             self.vars[key].set(path)
+            if key == "data_root":
+                self._maybe_autofill_suite2p_ops_path()
 
     def collect_preprocessing_config(self) -> dict[str, Any]:
         return {
@@ -232,22 +322,33 @@ class PreprocessingGuiApp:
         self._start_stage("preprocessing", config, build_preprocessing_subprocess_command)
 
     def start_suite2p(self) -> None:
+        self._maybe_autofill_suite2p_ops_path()
         config = self.collect_suite2p_config()
         try:
             parsed = suite2p_config_from_dict(config)
             raise_for_invalid_suite2p_inputs(parsed)
+            preflight = check_legacy_suite2p_mps_runtime()
         except Exception as exc:
             messagebox.showerror("Suite2P blocked", str(exc))
             return
+        self._append_log(
+            "\n[Suite2P] legacy MPS runtime: "
+            f"Suite2P {preflight['suite2p']}, Cellpose {preflight['cellpose']}, Torch {preflight['torch']}\n"
+        )
         self._save_settings()
-        self._start_stage("Suite2P", config, build_suite2p_subprocess_command)
+        self._start_stage(
+            "Suite2P",
+            config,
+            build_suite2p_subprocess_command,
+            env=build_suite2p_subprocess_env(),
+        )
 
     def cancel_stage(self) -> None:
         if self.process is not None and self.process.poll() is None:
             self.status_var.set("Cancelling running stage...")
             self.process.terminate()
 
-    def _start_stage(self, label: str, config: dict[str, Any], command_builder) -> None:
+    def _start_stage(self, label: str, config: dict[str, Any], command_builder, env: dict[str, str] | None = None) -> None:
         if self.process is not None and self.process.poll() is None:
             messagebox.showwarning("Stage already running", "Cancel or wait for the current stage before starting another.")
             return
@@ -263,6 +364,7 @@ class PreprocessingGuiApp:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
+            env=env,
         )
         threading.Thread(target=self._read_process_output, args=(self.process, label), daemon=True).start()
 
@@ -332,6 +434,14 @@ class PreprocessingGuiApp:
             save_gui_settings(settings)
         except OSError as exc:
             self.status_var.set(f"Settings were not saved: {exc}")
+
+    def _maybe_autofill_suite2p_ops_path(self) -> None:
+        if self.vars["ops_path"].get().strip():
+            return
+        default_ops = find_default_suite2p_ops_path(self.vars["data_root"].get())
+        if default_ops is not None:
+            self.vars["ops_path"].set(str(default_ops))
+            self.status_var.set(f"Using Suite2P ops: {default_ops.name}")
 
     def _update_stage_state(self) -> None:
         is_resonant = self.vars["protocol"].get() == "resonant"
