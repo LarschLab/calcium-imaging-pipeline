@@ -26,8 +26,22 @@ DEFAULT_COMPARISON_ROOT = Path("/Users/ddharmap/dataProcessing/2p_processing_sui
 DEFAULT_OUTPUT_ROOT = Path(
     "/Users/ddharmap/dataProcessing/2p_processing_suite2p_legacy_mps/comparison_vs_baseline/L395_f11"
 )
+DEFAULT_MULTI_OUTPUT_ROOT = Path(
+    "/Users/ddharmap/dataProcessing/2p_processing/roi_retention_comparison/L395_f11"
+)
 DEFAULT_FISH_ID = "L395_f11"
 DEFAULT_PLANES = [0, 1, 2, 3, 4]
+
+BUILT_IN_COMPARISON_MANIFESTS: dict[str, dict[str, Path]] = {
+    "all_l395_conditions": {
+        "legacy_cpu": Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_legacy_cpu/L395_f11"),
+        "legacy_mps": Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_legacy_mps/L395_f11"),
+        "current_gui_mps_sparsery": Path("/Users/ddharmap/dataProcessing/2p_processing_gui_workflowtest/L395_f11"),
+        "current_cpu_sparsery": Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_current_cpu/L395_f11"),
+        "current_mps_custom_cellpose": Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_current_mps_model/L395_f11"),
+        "current_cpu_custom_cellpose": Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_current_cpu_model/L395_f11"),
+    }
+}
 
 
 @dataclass(frozen=True)
@@ -48,8 +62,52 @@ class TracePanel:
     trace: np.ndarray
 
 
+BASELINE_FIELDS = [
+    "plane",
+    "baseline_roi_id",
+    "category",
+    "comparison_roi_id",
+    "comparison_iscell_score",
+    "centroid_distance_px",
+    "iou",
+    "baseline_med_y",
+    "baseline_med_x",
+    "baseline_npix",
+]
+
+NEW_ACCEPTED_FIELDS = [
+    "plane",
+    "comparison_roi_id",
+    "comparison_iscell_score",
+    "comparison_med_y",
+    "comparison_med_x",
+    "comparison_npix",
+]
+
+SUMMARY_FIELDS = [
+    "plane",
+    "baseline_accepted_count",
+    "comparison_total_roi_count",
+    "comparison_accepted_count",
+    "matched_accepted",
+    "matched_rejected",
+    "unmatched",
+    "new_accepted",
+    "median_matched_iou",
+    "median_matched_centroid_distance_px",
+]
+
+
 def parse_int_csv(value: str) -> list[int]:
     return [int(part.strip()) for part in value.split(",") if part.strip()]
+
+
+def resolve_comparison_manifest(name: str) -> dict[str, Path]:
+    try:
+        return BUILT_IN_COMPARISON_MANIFESTS[name]
+    except KeyError as exc:
+        options = ", ".join(sorted(BUILT_IN_COMPARISON_MANIFESTS))
+        raise ValueError(f"Unknown comparison manifest {name!r}. Available manifests: {options}") from exc
 
 
 def plane_dir(run_root: Path, plane: int) -> Path:
@@ -192,6 +250,22 @@ def metric_columns(prefix: str) -> list[str]:
     ]
 
 
+def baseline_fields() -> list[str]:
+    return [
+        *BASELINE_FIELDS,
+        *metric_columns("baseline"),
+        *metric_columns("comparison"),
+        *metric_columns("comparison_baseline_mask"),
+    ]
+
+
+def new_accepted_fields() -> list[str]:
+    return [
+        *NEW_ACCEPTED_FIELDS,
+        *metric_columns("comparison"),
+    ]
+
+
 def prefixed_metrics(prefix: str, metrics: dict[str, float | int] | None) -> dict[str, float | int | str]:
     if metrics is None:
         return {column: "" for column in metric_columns(prefix)}
@@ -279,6 +353,7 @@ def analyze_plane(
     plane: int,
     max_centroid_distance: float,
     min_iou: float,
+    extract_unmatched_mask_metrics: bool = True,
 ) -> tuple[list[dict], list[dict], dict]:
     baseline_stat, baseline_iscell, baseline_f = load_plane_outputs(baseline_root, plane)
     comparison_stat, comparison_iscell, comparison_f = load_plane_outputs(comparison_root, plane)
@@ -312,7 +387,7 @@ def analyze_plane(
             comparison_score = ""
             centroid_distance = ""
             iou = ""
-            if comparison_tiff.exists():
+            if extract_unmatched_mask_metrics and comparison_tiff.exists():
                 comparison_mask_metrics = trace_quality_metrics(weighted_trace_from_tiff(comparison_tiff, ref_entry))
         else:
             comparison_idx = match.comparison_index
@@ -379,6 +454,113 @@ def analyze_plane(
         else math.nan,
     }
     return baseline_rows, new_accepted_rows, summary
+
+
+def percent(numerator: int | float, denominator: int | float) -> float:
+    if denominator == 0:
+        return math.nan
+    return float(numerator) / float(denominator) * 100.0
+
+
+def condition_summary_row(condition: str, summary_rows: list[dict]) -> dict:
+    totals = {
+        "condition": condition,
+        "plane": "all",
+        "baseline_accepted_count": int(sum(row["baseline_accepted_count"] for row in summary_rows)),
+        "comparison_total_roi_count": int(sum(row["comparison_total_roi_count"] for row in summary_rows)),
+        "comparison_accepted_count": int(sum(row["comparison_accepted_count"] for row in summary_rows)),
+        "matched_accepted": int(sum(row["matched_accepted"] for row in summary_rows)),
+        "matched_rejected": int(sum(row["matched_rejected"] for row in summary_rows)),
+        "unmatched": int(sum(row["unmatched"] for row in summary_rows)),
+        "new_accepted": int(sum(row["new_accepted"] for row in summary_rows)),
+    }
+    add_summary_percentages(totals)
+    return totals
+
+
+def condition_plane_summary_rows(condition: str, summary_rows: list[dict]) -> list[dict]:
+    rows = []
+    for row in summary_rows:
+        plane_row = {
+            "condition": condition,
+            "plane": row["plane"],
+            "baseline_accepted_count": row["baseline_accepted_count"],
+            "comparison_total_roi_count": row["comparison_total_roi_count"],
+            "comparison_accepted_count": row["comparison_accepted_count"],
+            "matched_accepted": row["matched_accepted"],
+            "matched_rejected": row["matched_rejected"],
+            "unmatched": row["unmatched"],
+            "new_accepted": row["new_accepted"],
+        }
+        add_summary_percentages(plane_row)
+        rows.append(plane_row)
+    return rows
+
+
+def add_summary_percentages(row: dict) -> None:
+    baseline_total = row["baseline_accepted_count"]
+    comparison_accepted = row["comparison_accepted_count"]
+    row["matched_accepted_percent"] = percent(row["matched_accepted"], baseline_total)
+    row["matched_rejected_percent"] = percent(row["matched_rejected"], baseline_total)
+    row["unmatched_percent"] = percent(row["unmatched"], baseline_total)
+    row["new_accepted_percent_of_comparison_accepted"] = percent(row["new_accepted"], comparison_accepted)
+
+
+def aggregate_summary_fields() -> list[str]:
+    return [
+        "condition",
+        "plane",
+        "baseline_accepted_count",
+        "comparison_total_roi_count",
+        "comparison_accepted_count",
+        "matched_accepted",
+        "matched_rejected",
+        "unmatched",
+        "new_accepted",
+        "matched_accepted_percent",
+        "matched_rejected_percent",
+        "unmatched_percent",
+        "new_accepted_percent_of_comparison_accepted",
+    ]
+
+
+def analyze_comparison(
+    baseline_root: Path,
+    comparison_root: Path,
+    fish_id: str,
+    planes: list[int],
+    max_centroid_distance: float,
+    min_iou: float,
+    extract_unmatched_mask_metrics: bool = True,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    all_baseline_rows: list[dict] = []
+    all_new_accepted_rows: list[dict] = []
+    summary_rows: list[dict] = []
+    for plane in planes:
+        baseline_rows, new_accepted_rows, summary = analyze_plane(
+            baseline_root,
+            comparison_root,
+            fish_id,
+            plane,
+            max_centroid_distance=max_centroid_distance,
+            min_iou=min_iou,
+            extract_unmatched_mask_metrics=extract_unmatched_mask_metrics,
+        )
+        all_baseline_rows.extend(baseline_rows)
+        all_new_accepted_rows.extend(new_accepted_rows)
+        summary_rows.append(summary)
+    return all_baseline_rows, all_new_accepted_rows, summary_rows
+
+
+def write_comparison_outputs(
+    output_root: Path,
+    baseline_rows: list[dict],
+    new_accepted_rows: list[dict],
+    summary_rows: list[dict],
+) -> None:
+    write_csv(output_root / "baseline_cell_match_table.csv", baseline_rows, baseline_fields())
+    write_csv(output_root / "legacy_new_accepted_table.csv", new_accepted_rows, new_accepted_fields())
+    write_csv(output_root / "roi_match_summary.csv", summary_rows, SUMMARY_FIELDS)
 
 
 def plot_remainder_traces(
@@ -497,6 +679,7 @@ def plot_outputs(
     summary_rows: list[dict],
     baseline_root: Path,
     comparison_root: Path,
+    include_activity_trace_plots: bool = True,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -552,38 +735,107 @@ def plot_outputs(
         fig.savefig(output_root / f"plane{plane}_match_overlay.png", dpi=160)
         plt.close(fig)
 
-    strongest = sorted(
-        [row for row in baseline_rows if row["category"] == "unmatched"],
-        key=lambda row: safe_float(row["baseline_max_robust_z"]),
-        reverse=True,
-    )[:12]
-    if strongest:
-        fig, axes = plt.subplots(len(strongest), 1, figsize=(10, max(3, 1.5 * len(strongest))), sharex=True)
-        if len(strongest) == 1:
-            axes = [axes]
-        for ax, row in zip(axes, strongest):
-            plane = int(row["plane"])
-            roi_id = int(row["baseline_roi_id"])
-            _stat, _iscell, baseline_f = load_plane_outputs(baseline_root, plane)
-            trace = baseline_f[roi_id]
-            ax.plot(trace, linewidth=0.8)
-            ax.set_ylabel(f"p{plane} r{roi_id}")
-        axes[-1].set_xlabel("Frame")
-        fig.suptitle("Strongest unmatched baseline traces")
-        fig.tight_layout()
-        fig.savefig(output_root / "strongest_unmatched_baseline_traces.png", dpi=160)
-        plt.close(fig)
+    if include_activity_trace_plots:
+        strongest = sorted(
+            [row for row in baseline_rows if row["category"] == "unmatched"],
+            key=lambda row: safe_float(row["baseline_max_robust_z"]),
+            reverse=True,
+        )[:12]
+        if strongest:
+            fig, axes = plt.subplots(len(strongest), 1, figsize=(10, max(3, 1.5 * len(strongest))), sharex=True)
+            if len(strongest) == 1:
+                axes = [axes]
+            for ax, row in zip(axes, strongest):
+                plane = int(row["plane"])
+                roi_id = int(row["baseline_roi_id"])
+                _stat, _iscell, baseline_f = load_plane_outputs(baseline_root, plane)
+                trace = baseline_f[roi_id]
+                ax.plot(trace, linewidth=0.8)
+                ax.set_ylabel(f"p{plane} r{roi_id}")
+            axes[-1].set_xlabel("Frame")
+            fig.suptitle("Strongest unmatched baseline traces")
+            fig.tight_layout()
+            fig.savefig(output_root / "strongest_unmatched_baseline_traces.png", dpi=160)
+            plt.close(fig)
 
-    plot_remainder_traces(output_root, baseline_rows, new_accepted_rows, summary_rows, baseline_root, comparison_root)
+        plot_remainder_traces(output_root, baseline_rows, new_accepted_rows, summary_rows, baseline_root, comparison_root)
+
+
+def plot_multi_condition_outputs(
+    output_root: Path,
+    condition_rows: list[dict],
+    plane_rows: list[dict],
+) -> None:
+    import matplotlib.pyplot as plt
+
+    if not condition_rows:
+        return
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    conditions = [row["condition"] for row in condition_rows]
+    x_positions = np.arange(len(conditions))
+
+    fig, ax = plt.subplots(figsize=(max(8, 1.6 * len(conditions)), 4))
+    retention = [row["matched_accepted_percent"] for row in condition_rows]
+    ax.bar(x_positions, retention, color="#4878a8")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(conditions, rotation=35, ha="right")
+    ax.set_ylabel("Baseline accepted retained as accepted (%)")
+    ax.set_ylim(0, 100)
+    ax.set_title("Baseline ROI retention by Suite2P condition")
+    fig.tight_layout()
+    fig.savefig(output_root / "condition_retention_percent_bar.png", dpi=160)
+    plt.close(fig)
+
+    categories = ["matched_accepted", "matched_rejected", "unmatched"]
+    colors = ["#4c9f70", "#e0a43a", "#c65f5f"]
+    bottoms = np.zeros(len(conditions))
+    fig, ax = plt.subplots(figsize=(max(8, 1.6 * len(conditions)), 4))
+    for category, color in zip(categories, colors):
+        values = np.asarray([row[category] for row in condition_rows])
+        ax.bar(x_positions, values, bottom=bottoms, label=category, color=color)
+        bottoms += values
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(conditions, rotation=35, ha="right")
+    ax.set_ylabel("Baseline accepted ROIs")
+    ax.set_title("Baseline ROI match categories by condition")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_root / "condition_match_category_stacked_bar.png", dpi=160)
+    plt.close(fig)
+
+    planes = sorted({int(row["plane"]) for row in plane_rows})
+    heatmap = np.full((len(planes), len(conditions)), np.nan)
+    row_by_key = {(row["condition"], int(row["plane"])): row for row in plane_rows}
+    for condition_idx, condition in enumerate(conditions):
+        for plane_idx, plane in enumerate(planes):
+            row = row_by_key.get((condition, plane))
+            if row is not None:
+                heatmap[plane_idx, condition_idx] = row["matched_accepted_percent"]
+
+    fig, ax = plt.subplots(figsize=(max(8, 1.6 * len(conditions)), max(3, 0.6 * len(planes) + 1.5)))
+    image = ax.imshow(heatmap, vmin=0, vmax=100, cmap="viridis", aspect="auto")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(conditions, rotation=35, ha="right")
+    ax.set_yticks(np.arange(len(planes)))
+    ax.set_yticklabels([f"plane {plane}" for plane in planes])
+    ax.set_title("Per-plane baseline ROI retention by condition")
+    cbar = fig.colorbar(image, ax=ax)
+    cbar.set_label("Retained as accepted (%)")
+    fig.tight_layout()
+    fig.savefig(output_root / "condition_plane_retention_percent_heatmap.png", dpi=160)
+    plt.close(fig)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare Suite2P ROI sets across two runs.")
     parser.add_argument("--baseline-root", default=str(DEFAULT_BASELINE_ROOT))
     parser.add_argument("--comparison-root", default=str(DEFAULT_COMPARISON_ROOT))
+    parser.add_argument("--comparison-manifest", choices=sorted(BUILT_IN_COMPARISON_MANIFESTS))
     parser.add_argument("--fish-id", default=DEFAULT_FISH_ID)
     parser.add_argument("--planes", default="0,1,2,3,4")
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+    parser.add_argument("--multi-output-root", default=str(DEFAULT_MULTI_OUTPUT_ROOT))
     parser.add_argument("--max-centroid-distance", type=float, default=5.0)
     parser.add_argument("--min-iou", type=float, default=0.05)
     parser.add_argument("--skip-plots", action="store_true")
@@ -593,65 +845,70 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     baseline_root = Path(args.baseline_root)
-    comparison_root = Path(args.comparison_root)
-    output_root = Path(args.output_root)
     planes = parse_int_csv(args.planes)
 
-    all_baseline_rows: list[dict] = []
-    all_new_accepted_rows: list[dict] = []
-    summary_rows: list[dict] = []
-    for plane in planes:
-        baseline_rows, new_accepted_rows, summary = analyze_plane(
-            baseline_root,
-            comparison_root,
-            args.fish_id,
-            plane,
-            max_centroid_distance=args.max_centroid_distance,
-            min_iou=args.min_iou,
-        )
-        all_baseline_rows.extend(baseline_rows)
-        all_new_accepted_rows.extend(new_accepted_rows)
-        summary_rows.append(summary)
+    if args.comparison_manifest:
+        output_root = Path(args.multi_output_root)
+        condition_rows: list[dict] = []
+        condition_plane_rows: list[dict] = []
+        manifest = resolve_comparison_manifest(args.comparison_manifest)
+        for condition, comparison_root in manifest.items():
+            condition_output_root = output_root / condition
+            baseline_rows, new_accepted_rows, summary_rows = analyze_comparison(
+                baseline_root,
+                comparison_root,
+                args.fish_id,
+                planes,
+                max_centroid_distance=args.max_centroid_distance,
+                min_iou=args.min_iou,
+                extract_unmatched_mask_metrics=False,
+            )
+            write_comparison_outputs(condition_output_root, baseline_rows, new_accepted_rows, summary_rows)
+            if not args.skip_plots:
+                plot_outputs(
+                    condition_output_root,
+                    baseline_rows,
+                    new_accepted_rows,
+                    summary_rows,
+                    baseline_root,
+                    comparison_root,
+                    include_activity_trace_plots=False,
+                )
 
-    baseline_fields = [
-        "plane",
-        "baseline_roi_id",
-        "category",
-        "comparison_roi_id",
-        "comparison_iscell_score",
-        "centroid_distance_px",
-        "iou",
-        "baseline_med_y",
-        "baseline_med_x",
-        "baseline_npix",
-        *metric_columns("baseline"),
-        *metric_columns("comparison"),
-        *metric_columns("comparison_baseline_mask"),
-    ]
-    new_fields = [
-        "plane",
-        "comparison_roi_id",
-        "comparison_iscell_score",
-        "comparison_med_y",
-        "comparison_med_x",
-        "comparison_npix",
-        *metric_columns("comparison"),
-    ]
-    summary_fields = [
-        "plane",
-        "baseline_accepted_count",
-        "comparison_total_roi_count",
-        "comparison_accepted_count",
-        "matched_accepted",
-        "matched_rejected",
-        "unmatched",
-        "new_accepted",
-        "median_matched_iou",
-        "median_matched_centroid_distance_px",
-    ]
-    write_csv(output_root / "baseline_cell_match_table.csv", all_baseline_rows, baseline_fields)
-    write_csv(output_root / "legacy_new_accepted_table.csv", all_new_accepted_rows, new_fields)
-    write_csv(output_root / "roi_match_summary.csv", summary_rows, summary_fields)
+            condition_rows.append(condition_summary_row(condition, summary_rows))
+            condition_plane_rows.extend(condition_plane_summary_rows(condition, summary_rows))
+
+        write_csv(output_root / "condition_roi_retention_summary.csv", condition_rows, aggregate_summary_fields())
+        write_csv(
+            output_root / "condition_plane_roi_retention_summary.csv",
+            condition_plane_rows,
+            aggregate_summary_fields(),
+        )
+        if not args.skip_plots:
+            plot_multi_condition_outputs(output_root, condition_rows, condition_plane_rows)
+
+        print(f"Wrote multi-condition ROI comparison outputs to {output_root}")
+        for row in condition_rows:
+            print(
+                f"{row['condition']}: matched_accepted={row['matched_accepted']}, "
+                f"matched_rejected={row['matched_rejected']}, unmatched={row['unmatched']}, "
+                f"new_accepted={row['new_accepted']}, "
+                f"retained={row['matched_accepted_percent']:.2f}%"
+            )
+        return 0
+
+    comparison_root = Path(args.comparison_root)
+    output_root = Path(args.output_root)
+    all_baseline_rows, all_new_accepted_rows, summary_rows = analyze_comparison(
+        baseline_root,
+        comparison_root,
+        args.fish_id,
+        planes,
+        max_centroid_distance=args.max_centroid_distance,
+        min_iou=args.min_iou,
+    )
+
+    write_comparison_outputs(output_root, all_baseline_rows, all_new_accepted_rows, summary_rows)
 
     if not args.skip_plots:
         plot_outputs(output_root, all_baseline_rows, all_new_accepted_rows, summary_rows, baseline_root, comparison_root)

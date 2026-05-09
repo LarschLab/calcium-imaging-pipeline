@@ -111,6 +111,96 @@ class PlaneClassificationTests(unittest.TestCase):
         self.assertEqual(summary["matched_rejected"], 1)
         self.assertEqual(summary["unmatched"], 1)
 
+    def test_built_in_l395_manifest_resolves_expected_conditions(self) -> None:
+        manifest = compare.resolve_comparison_manifest("all_l395_conditions")
+
+        self.assertEqual(
+            list(manifest),
+            [
+                "legacy_cpu",
+                "legacy_mps",
+                "current_gui_mps_sparsery",
+                "current_cpu_sparsery",
+                "current_mps_custom_cellpose",
+                "current_cpu_custom_cellpose",
+            ],
+        )
+        self.assertEqual(
+            manifest["legacy_mps"],
+            Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_legacy_mps/L395_f11"),
+        )
+        self.assertEqual(
+            manifest["current_cpu_custom_cellpose"],
+            Path("/Users/ddharmap/dataProcessing/2p_processing_suite2p_current_cpu_model/L395_f11"),
+        )
+
+    def test_aggregate_summary_percentages(self) -> None:
+        summary_rows = [
+            {
+                "plane": 0,
+                "baseline_accepted_count": 10,
+                "comparison_total_roi_count": 15,
+                "comparison_accepted_count": 12,
+                "matched_accepted": 8,
+                "matched_rejected": 1,
+                "unmatched": 1,
+                "new_accepted": 4,
+            },
+            {
+                "plane": 1,
+                "baseline_accepted_count": 30,
+                "comparison_total_roi_count": 35,
+                "comparison_accepted_count": 28,
+                "matched_accepted": 22,
+                "matched_rejected": 3,
+                "unmatched": 5,
+                "new_accepted": 6,
+            },
+        ]
+
+        row = compare.condition_summary_row("condition_a", summary_rows)
+
+        self.assertEqual(row["baseline_accepted_count"], 40)
+        self.assertEqual(row["matched_accepted"], 30)
+        self.assertEqual(row["matched_rejected"], 4)
+        self.assertEqual(row["unmatched"], 6)
+        self.assertEqual(row["new_accepted"], 10)
+        self.assertAlmostEqual(row["matched_accepted_percent"], 75.0)
+        self.assertAlmostEqual(row["matched_rejected_percent"], 10.0)
+        self.assertAlmostEqual(row["unmatched_percent"], 15.0)
+        self.assertAlmostEqual(row["new_accepted_percent_of_comparison_accepted"], 25.0)
+
+    def test_multi_condition_output_preserves_single_comparison_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            baseline = tmp_path / "baseline"
+            comparison = tmp_path / "comparison"
+            baseline_stat = np.array([make_roi(1, 1), make_roi(10, 10), make_roi(20, 20)], dtype=object)
+            comparison_stat = np.array([make_roi(1, 1), make_roi(10, 10), make_roi(30, 30)], dtype=object)
+            baseline_iscell = np.array([[1.0, 0.9], [1.0, 0.8], [1.0, 0.7]])
+            comparison_iscell = np.array([[1.0, 0.9], [0.0, 0.2], [1.0, 0.6]])
+            baseline_f = np.tile(np.arange(10, dtype=float), (3, 1))
+            comparison_f = np.tile(np.arange(10, dtype=float), (3, 1))
+            self._write_plane(baseline, baseline_stat, baseline_iscell, baseline_f)
+            self._write_plane(comparison, comparison_stat, comparison_iscell, comparison_f)
+
+            single_rows, single_new_rows, single_summary_rows = compare.analyze_comparison(
+                baseline,
+                comparison,
+                "fish",
+                [0],
+                max_centroid_distance=5.0,
+                min_iou=0.05,
+            )
+            condition_row = compare.condition_summary_row("condition_a", single_summary_rows)
+
+        self.assertEqual([row["category"] for row in single_rows], ["matched_accepted", "matched_rejected", "unmatched"])
+        self.assertEqual(len(single_new_rows), 1)
+        self.assertEqual(condition_row["matched_accepted"], 1)
+        self.assertEqual(condition_row["matched_rejected"], 1)
+        self.assertEqual(condition_row["unmatched"], 1)
+        self.assertEqual(condition_row["new_accepted"], 1)
+
 
 class RemainderTraceDiagnosticTests(unittest.TestCase):
     def test_zscore_trace_normalizes_each_trace_to_itself(self) -> None:

@@ -12,6 +12,16 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-09 - Multi-condition Suite2P ROI retention comparison
+- Date and label: 2026-05-09, Multi-condition Suite2P ROI retention comparison
+- Slice goal: Extend the `L395_f11` baseline ROI-retention analysis across all tested Suite2P condition roots.
+- Passes completed in this session: Built-in manifest and aggregate output implementation -> focused unit tests -> compile check -> real six-condition `L395_f11` comparison with CSV/plot output verification.
+- What changed: `scripts/compare_suite2p_roi_sets.py` now supports `--comparison-manifest all_l395_conditions` and `--multi-output-root` with default `/Users/ddharmap/dataProcessing/2p_processing/roi_retention_comparison/L395_f11`. Manifest runs reuse the existing centroid-distance <= 5 px and mask-IoU >= 0.05 matching/classification logic, write per-condition detailed CSVs/plots in condition subfolders, write `condition_roi_retention_summary.csv` and `condition_plane_roi_retention_summary.csv`, and generate cross-condition retention bar, category stacked-bar, and per-plane heatmap plots. Multi-condition runs skip activity trace plots and skip unmatched-mask TIFF trace extraction.
+- What remains broken: This is still a spatial ROI-retention comparison, not a stimulus-locked response analysis.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: If adopting a non-legacy Suite2P condition, inspect whether low retained-baseline ROI counts are acceptable for the downstream biological analysis rather than relying on total accepted-cell counts.
+- Rerun implications: Output was written to `/Users/ddharmap/dataProcessing/2p_processing/roi_retention_comparison/L395_f11`. Condition-level retained-as-accepted counts: legacy CPU 3034/3132 (96.87%), legacy MPS 3018/3132 (96.36%), current GUI MPS sparsery 1962/3132 (62.64%), current CPU sparsery 1984/3132 (63.35%), current MPS custom Cellpose 660/3132 (21.07%), current CPU custom Cellpose 653/3132 (20.85%). Legacy MPS reproduced the known aggregate: 3018 matched accepted, 61 matched rejected, 53 unmatched, 102 new accepted. Validation: `python3 -m unittest tests/test_compare_suite2p_roi_sets.py` passed, `python3 -m py_compile scripts/compare_suite2p_roi_sets.py` passed, and `python3 scripts/compare_suite2p_roi_sets.py --comparison-manifest all_l395_conditions` completed. Interpretation note: legacy MPS should remain the default if it preserves baseline ROIs substantially better than current Suite2P Cellpose.
+
 ## 2026-05-09 - Remainder ROI activity trace diagnostic
 - Date and label: 2026-05-09, Remainder ROI activity trace diagnostic
 - Slice goal: Add an activity-trace view for the baseline-vs-legacy-MPS ROI remainder.
