@@ -12,6 +12,36 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-09 - Local Cellpose model path resolution
+- Date and label: 2026-05-09, Local Cellpose model path resolution
+- Slice goal: Stop Cellpose from falling back to `~/.cellpose/models/cpsam` when the ops template carries the historical Windows custom-model path.
+- Passes completed in this session: Runtime warning investigation -> Suite2P owner resolver patch -> focused regression tests -> compile check -> reference/log update.
+- What changed: `motion_segmentation_suite2p.py` now resolves default model name `2pf_cpsam_20250915_134652` to an existing local model file before invoking Suite2P. Resolution checks `cellpose/models/<model>` under ancestors of the plane TIFF path, then the known processing-root candidate `/Users/ddharmap/dataProcessing/2p_processing/cellpose/models/2pf_cpsam_20250915_134652`, and only falls back to the historical `D:\cellpose\models\2pf_cpsam_20250915_134652` string if no local file exists. `run_suite2p(...)` prints the resolved model path before dispatch, making future GUI logs explicit. Tests cover data-root model resolution, historical fallback, and propagation into legacy/current Suite2P paths.
+- What remains broken: None known for local custom-model selection on this workstation.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: If the data root changes, place the custom model under `<data_root>/cellpose/models/2pf_cpsam_20250915_134652` or add that workstation's processing-root candidate deliberately.
+- Rerun implications: Restart/re-run Suite2P from the GUI; the log should show `[Suite2P] Cellpose model: /Users/ddharmap/dataProcessing/2p_processing/cellpose/models/2pf_cpsam_20250915_134652` before ROI detection, and the previous `cpsam not found` fallback warning should not appear for the custom model. Validation: `python3 -m unittest tests/test_preprocessing_gui_workflow.py` passed; `python3 -m py_compile preprocessing/*.py utils.py old2new_migration_no_docstrings.py` passed.
+
+## 2026-05-09 - GUI repo-local Suite2P ops fallback
+- Date and label: 2026-05-09, GUI repo-local Suite2P ops fallback
+- Slice goal: Make the preprocessing GUI find the committed Suite2P ops template when data-root-local ops files are absent or saved settings point at a missing file.
+- Passes completed in this session: GUI ops resolver patch -> focused GUI workflow tests -> compile check -> reference/log update.
+- What changed: `preprocessing_gui.py` now defines `REPO_DEFAULT_SUITE2P_OPS_PATH` for `preprocessing/suite2p_ops_sep_2025_cp.npy`, lets `find_default_suite2p_ops_path(...)` fall back to that file after checking known ops filenames in the selected data root, and uses `resolve_suite2p_ops_path(...)` so `_maybe_autofill_suite2p_ops_path()` keeps existing saved ops paths but replaces stale/missing ones with the best available default. Tests cover data-root precedence, repo fallback, stale saved path replacement, and existing saved path preservation.
+- What remains broken: None known for ops-path discovery; Suite2P still validates that selected fish preprocessing outputs exist before launching.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: If operators need multiple ops presets, add an explicit GUI preset selector instead of adding more implicit search rules.
+- Rerun implications: Opening or starting Suite2P from the GUI with a missing saved ops path should now populate the committed `suite2p_ops_sep_2025_cp.npy` when no preferred data-root ops file exists. Validation: `python3 -m unittest tests/test_preprocessing_gui_workflow.py` passed; `python3 -m py_compile preprocessing/*.py utils.py old2new_migration_no_docstrings.py` passed.
+
+## 2026-05-09 - Suite2P default Cellpose model enforcement
+- Date and label: 2026-05-09, Suite2P default Cellpose model enforcement
+- Slice goal: Ensure GUI/CLI Suite2P runs always use the intended default custom Cellpose model.
+- Passes completed in this session: Suite2P owner patch -> focused regression tests -> compile check -> reference/log update.
+- What changed: `motion_segmentation_suite2p.py` now defines `DEFAULT_CELLPOSE_MODEL = D:\cellpose\models\2pf_cpsam_20250915_134652` and stamps every per-plane ops dict with that model plus `anatomical_only=2` before dispatching to legacy or current Suite2P. Current Suite2P mapping therefore receives the same model under nested `detection.cellpose_settings.cellpose_model`; legacy `run_s2p(ops=...)` receives it directly in flat ops. Tests now cover default override and model propagation.
+- What remains broken: The saved GUI settings currently may still point at a missing ops file; this change controls the model after a valid ops file is loaded, not ops-file discovery.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: If the model file must be runnable on non-Windows machines, decide whether to map the Windows model string to a local model path or keep exact historical ops text.
+- Rerun implications: Re-run Suite2P for any fish whose existing outputs were created without this custom model. Validation: `python3 -m unittest tests/test_preprocessing_gui_workflow.py` passed; `python3 -m py_compile preprocessing/*.py utils.py old2new_migration_no_docstrings.py` passed.
+
 ## 2026-05-09 - Multi-condition Suite2P ROI retention comparison
 - Date and label: 2026-05-09, Multi-condition Suite2P ROI retention comparison
 - Slice goal: Extend the `L395_f11` baseline ROI-retention analysis across all tested Suite2P condition roots.

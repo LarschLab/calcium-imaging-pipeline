@@ -230,6 +230,8 @@ class Suite2PRunnerTests(unittest.TestCase):
         self.assertTrue(captured["ops"]["do_bidiphase"])
         self.assertEqual(captured["ops"]["bidiphase"], 0.0)
         self.assertEqual(captured["ops"]["diameter"], 0)
+        self.assertEqual(captured["ops"]["pretrained_model"], motion_segmentation_suite2p.resolve_default_cellpose_model())
+        self.assertEqual(captured["ops"]["anatomical_only"], motion_segmentation_suite2p.DEFAULT_CELLPOSE_ANATOMICAL_ONLY)
         self.assertNotIn("torch_device", captured["ops"])
 
     def test_legacy_ops_api_force_cpu_patches_cellpose_without_ops_device(self) -> None:
@@ -298,7 +300,7 @@ class Suite2PRunnerTests(unittest.TestCase):
         settings = {"detection": {"cellpose_settings": {}}}
         ops = {
             "anatomical_only": 2,
-            "pretrained_model": "/models/custom_cp",
+            "pretrained_model": motion_segmentation_suite2p.DEFAULT_CELLPOSE_MODEL,
             "flow_threshold": 0.5,
             "cellprob_threshold": 0.4,
             "spatial_hp_cp": 0.0,
@@ -309,10 +311,53 @@ class Suite2PRunnerTests(unittest.TestCase):
         self.assertIs(returned, settings)
         self.assertEqual(settings["detection"]["algorithm"], "cellpose")
         self.assertEqual(settings["detection"]["cellpose_settings"]["img"], "meanImg")
-        self.assertEqual(settings["detection"]["cellpose_settings"]["cellpose_model"], "/models/custom_cp")
+        self.assertEqual(
+            settings["detection"]["cellpose_settings"]["cellpose_model"],
+            motion_segmentation_suite2p.DEFAULT_CELLPOSE_MODEL,
+        )
         self.assertEqual(settings["detection"]["cellpose_settings"]["flow_threshold"], 0.5)
         self.assertEqual(settings["detection"]["cellpose_settings"]["cellprob_threshold"], 0.4)
         self.assertEqual(settings["detection"]["cellpose_settings"]["highpass_spatial"], 0.0)
+
+    def test_default_cellpose_model_overrides_runtime_ops(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        ops = {"pretrained_model": "cyto", "anatomical_only": 0}
+
+        returned = motion_segmentation_suite2p.apply_default_cellpose_model(ops)
+
+        self.assertIs(returned, ops)
+        self.assertEqual(ops["pretrained_model"], motion_segmentation_suite2p.resolve_default_cellpose_model())
+        self.assertEqual(ops["anatomical_only"], motion_segmentation_suite2p.DEFAULT_CELLPOSE_ANATOMICAL_ONLY)
+
+    def test_default_cellpose_model_resolves_from_plane_data_root(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_root = Path(tmpdir)
+            local_model = data_root / "cellpose/models" / motion_segmentation_suite2p.DEFAULT_CELLPOSE_MODEL_NAME
+            local_model.parent.mkdir(parents=True)
+            local_model.write_bytes(b"model")
+            plane_file = (
+                data_root
+                / "fish01/02_reg/00_preprocessing/2p_functional/01_individualPlanes/fish01_plane0.tif"
+            )
+            plane_file.parent.mkdir(parents=True)
+            plane_file.write_bytes(b"placeholder")
+
+            self.assertEqual(
+                motion_segmentation_suite2p.resolve_default_cellpose_model(plane_file),
+                str(local_model.resolve()),
+            )
+
+    def test_default_cellpose_model_falls_back_to_historical_path(self) -> None:
+        import motion_segmentation_suite2p  # noqa: E402
+
+        with patch.object(motion_segmentation_suite2p, "DEFAULT_CELLPOSE_MODEL_LOCAL_CANDIDATES", ()):
+            self.assertEqual(
+                motion_segmentation_suite2p.resolve_default_cellpose_model("/tmp/not/in/data/root/fish_plane0.tif"),
+                motion_segmentation_suite2p.DEFAULT_CELLPOSE_MODEL,
+            )
 
     def test_current_ops_api_force_cpu_patches_cellpose(self) -> None:
         import motion_segmentation_suite2p  # noqa: E402
@@ -444,6 +489,10 @@ class Suite2PRunnerTests(unittest.TestCase):
         self.assertTrue(captured["settings"]["registration"]["reg_tif"])
         self.assertEqual(captured["settings"]["registration"]["batch_size"], 500)
         self.assertEqual(captured["settings"]["extraction"]["batch_size"], 500)
+        self.assertEqual(
+            captured["settings"]["detection"]["cellpose_settings"]["cellpose_model"],
+            motion_segmentation_suite2p.resolve_default_cellpose_model(plane_file),
+        )
 
 
 class PreprocessingCliAndGuiTests(unittest.TestCase):
@@ -485,6 +534,33 @@ class PreprocessingCliAndGuiTests(unittest.TestCase):
             self.assertEqual(
                 preprocessing_gui.find_default_suite2p_ops_path(tmp_path),
                 tmp_path / "suite2p_ops_legacy_mps.npy",
+            )
+
+    def test_find_default_suite2p_ops_falls_back_to_repo_template(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(
+                preprocessing_gui.find_default_suite2p_ops_path(tmpdir),
+                preprocessing_gui.REPO_DEFAULT_SUITE2P_OPS_PATH,
+            )
+
+    def test_resolve_suite2p_ops_replaces_missing_saved_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_saved_path = Path(tmpdir) / "missing_ops.npy"
+
+            self.assertEqual(
+                preprocessing_gui.resolve_suite2p_ops_path(missing_saved_path, tmpdir),
+                preprocessing_gui.REPO_DEFAULT_SUITE2P_OPS_PATH,
+            )
+
+    def test_resolve_suite2p_ops_keeps_existing_saved_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            saved_path = tmp_path / "custom_ops.npy"
+            saved_path.write_bytes(b"ops")
+
+            self.assertEqual(
+                preprocessing_gui.resolve_suite2p_ops_path(saved_path, tmpdir),
+                saved_path,
             )
 
     def test_find_default_suite2p_ops_returns_none_for_empty_root(self) -> None:

@@ -1,5 +1,5 @@
 import suite2p
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import numpy as np
 import shutil
 import time
@@ -11,6 +11,12 @@ import os
 import tifffile as tf
 
 FORCE_CPU_ENV_VAR = "CALCIUM_SUITE2P_FORCE_CPU"
+DEFAULT_CELLPOSE_MODEL = r"D:\cellpose\models\2pf_cpsam_20250915_134652"
+DEFAULT_CELLPOSE_MODEL_NAME = PureWindowsPath(DEFAULT_CELLPOSE_MODEL).name
+DEFAULT_CELLPOSE_MODEL_LOCAL_CANDIDATES = (
+    Path.home() / "dataProcessing/2p_processing/cellpose/models" / DEFAULT_CELLPOSE_MODEL_NAME,
+)
+DEFAULT_CELLPOSE_ANATOMICAL_ONLY = 2
 
 def force_cpu_requested():
     """
@@ -176,6 +182,30 @@ def apply_legacy_cellpose_settings_to_current(settings, ops):
         cellpose_settings["highpass_spatial"] = ops["spatial_hp_cp"]
     return settings
 
+def resolve_default_cellpose_model(plane_file=None):
+    """
+    Resolve the historical default model name to a local Cellpose model file.
+    """
+    candidates = []
+    if plane_file is not None:
+        for parent in Path(plane_file).resolve().parents:
+            candidates.append(parent / "cellpose/models" / DEFAULT_CELLPOSE_MODEL_NAME)
+    candidates.extend(DEFAULT_CELLPOSE_MODEL_LOCAL_CANDIDATES)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return DEFAULT_CELLPOSE_MODEL
+
+
+def apply_default_cellpose_model(ops, plane_file=None):
+    """
+    Force the pipeline's default Cellpose model before Suite2P receives ops.
+    """
+    ops["pretrained_model"] = resolve_default_cellpose_model(plane_file)
+    ops["anatomical_only"] = DEFAULT_CELLPOSE_ANATOMICAL_ONLY
+    return ops
+
 def get_file_index(path: Path) -> int:
     """Extract numeric index from filenames like 'file005000_chan0.tif'."""
     match = re.search(r"file\s*(\d+)", path.name)
@@ -322,6 +352,8 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     ops['save_folder'] = "suite2p"
     ops['keep_movie_raw'] = False
     ops['delete_bin'] = True
+    apply_default_cellpose_model(ops, plane_file)
+    print(f"[Suite2P] Cellpose model: {ops['pretrained_model']}", flush=True)
 
     if fast_disk is not None:
         ops['fast_disk'] = str(fast_disk)

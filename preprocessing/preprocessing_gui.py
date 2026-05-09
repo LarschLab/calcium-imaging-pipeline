@@ -30,6 +30,7 @@ LEGACY_SUITE2P_PYTHON = Path("/Users/ddharmap/miniforge3/envs/suite2p0146_cpu/bi
 EXPECTED_LEGACY_SUITE2P_VERSION = "0.14.6"
 EXPECTED_LEGACY_CELLPOSE_VERSION = "4.0.6"
 FORCE_CPU_ENV_VAR = "CALCIUM_SUITE2P_FORCE_CPU"
+REPO_DEFAULT_SUITE2P_OPS_PATH = Path(__file__).resolve().with_name("suite2p_ops_sep_2025_cp.npy")
 LEGACY_OPS_FILENAMES = (
     "suite2p_ops_legacy_mps.npy",
     "suite2p_ops_legacy_cpu.npy",
@@ -72,7 +73,18 @@ def find_default_suite2p_ops_path(data_root: str | Path) -> Path | None:
         candidate = root / filename
         if candidate.exists():
             return candidate
+    if REPO_DEFAULT_SUITE2P_OPS_PATH.exists():
+        return REPO_DEFAULT_SUITE2P_OPS_PATH
     return None
+
+
+def resolve_suite2p_ops_path(current_ops_path: str | Path, data_root: str | Path) -> Path | None:
+    current_text = str(current_ops_path).strip()
+    if current_text:
+        current = Path(current_text)
+        if current.exists():
+            return current
+    return find_default_suite2p_ops_path(data_root)
 
 
 def check_legacy_suite2p_mps_runtime(python_path: Path = LEGACY_SUITE2P_PYTHON) -> dict[str, Any]:
@@ -436,9 +448,7 @@ class PreprocessingGuiApp:
             self.status_var.set(f"Settings were not saved: {exc}")
 
     def _maybe_autofill_suite2p_ops_path(self) -> None:
-        if self.vars["ops_path"].get().strip():
-            return
-        default_ops = find_default_suite2p_ops_path(self.vars["data_root"].get())
+        default_ops = resolve_suite2p_ops_path(self.vars["ops_path"].get(), self.vars["data_root"].get())
         if default_ops is not None:
             self.vars["ops_path"].set(str(default_ops))
             self.status_var.set(f"Using Suite2P ops: {default_ops.name}")
