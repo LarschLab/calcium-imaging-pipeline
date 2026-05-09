@@ -12,6 +12,26 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-09 - Remainder ROI activity trace diagnostic
+- Date and label: 2026-05-09, Remainder ROI activity trace diagnostic
+- Slice goal: Add an activity-trace view for the baseline-vs-legacy-MPS ROI remainder.
+- Passes completed in this session: Helper/plot implementation -> focused unit tests -> real `L395_f11` comparison reruns -> visual inspection of the generated plot.
+- What changed: `scripts/compare_suite2p_roi_sets.py` now writes `remainder_zscored_dff_traces_by_plane.png`, a large wide-panel inspection grid with at most five traces per row/panel. Baseline accepted-only cells (`matched_rejected` plus `unmatched`) are shown first, followed by legacy-MPS new accepted cells; each row overlays up to five differently colored traces with a legend naming plane, ROI, category, and trace-strength metric. The plot computes dF/F transiently from Suite2P `F.npy` with the existing percentile-baseline method, then z-scores each trace to itself. Added tests for z-scoring, remainder ROI selection, and the max-five-traces-per-panel layout. Updated the preprocessing stage map.
+- What remains broken: This remains a non-stimulus-locked diagnostic and does not prove whether remainder ROIs are behaviorally or visually responsive.
+- Remaining in-slice work: None known.
+- Next likely breakpoint: If the remainder traces look biologically meaningful, add stimulus-aligned summaries using the raw metadata timing files.
+- Rerun implications: Re-run `scripts/compare_suite2p_roi_sets.py` without `--skip-plots` to regenerate the new PNG for an existing comparison output root. No canonical stage-4 `*_dFoF.npy` artifacts are written.
+
+## 2026-05-09 - Legacy MPS ROI retention comparison
+- Date and label: 2026-05-09, Legacy MPS ROI retention comparison
+- Slice goal: Test whether the selected legacy MPS Suite2P run loses biologically relevant accepted cells compared with the historical `L395_f11` baseline.
+- Passes completed in this session: ROI matching script implementation -> synthetic unit tests -> real baseline-vs-legacy-MPS run -> CSV/plot output generation -> aggregate retention summary.
+- What changed: Added `scripts/compare_suite2p_roi_sets.py` and `tests/test_compare_suite2p_roi_sets.py`. The script uses baseline accepted `iscell` ROIs as reference, matches to comparison ROIs by centroid distance and mask IoU, classifies baseline cells as `matched_accepted`, `matched_rejected`, or `unmatched`, reports new accepted comparison cells, computes trace-quality metrics, and extracts comparison-run traces from motion-corrected TIFFs for unmatched baseline masks. Updated the preprocessing stage map to mention this support script.
+- What remains broken: This is a trace-quality screen, not a stimulus-locked response analysis. Some unmatched baseline cells have strong baseline trace metrics, so follow-up review of the generated plots/CSV is still needed before concluding they are biologically irrelevant.
+- Remaining in-slice work: Review generated overlay plots and strongest-unmatched traces; optionally add stimulus-locked summaries once metadata alignment is in scope.
+- Next likely breakpoint: If unmatched or rejected cells appear biologically important, test whether changing the `iscell` threshold/classifier treatment or preserving baseline masks for downstream extraction is preferable.
+- Rerun implications: Real-data output was written to `/Users/ddharmap/dataProcessing/2p_processing_suite2p_legacy_mps/comparison_vs_baseline/L395_f11`. Across five planes, baseline accepted cells totaled 3132; legacy MPS accepted cells totaled 3120. Baseline accepted cells matched as accepted in legacy MPS: 3018 (96.36%); spatially matched but rejected: 61 (1.95%); unmatched: 53 (1.69%); new accepted legacy MPS cells: 102. Validation: `python3 -m unittest tests/test_compare_suite2p_roi_sets.py` passed, `python3 -m py_compile scripts/compare_suite2p_roi_sets.py` passed, and the real run reproduced expected baseline accepted counts `[659, 664, 666, 621, 522]` and legacy MPS accepted counts `[651, 663, 665, 630, 511]`.
+
 ## 2026-05-08 - GUI default legacy MPS Suite2P runtime
 - Date and label: 2026-05-08, GUI default legacy MPS Suite2P runtime
 - Slice goal: Make the preprocessing GUI default to the practical legacy Suite2P 0.14.6 + Cellpose 4.0.6 MPS runtime for Suite2P segmentation.
