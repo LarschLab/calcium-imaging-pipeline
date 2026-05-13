@@ -60,6 +60,22 @@ class PreprocessingWorkflowConfigTests(unittest.TestCase):
         self.assertIsNone(config.n_planes)
         self.assertIsNone(config.n_frames_per_plane)
 
+    def test_preprocessing_blocks_all_processes_all_blocks(self) -> None:
+        for blocks_value in ("all", "ALL", " all "):
+            with self.subTest(blocks=blocks_value):
+                config = preprocessing_workflow.preprocessing_config_from_dict(
+                    {
+                        "fish_ids": "fish01",
+                        "data_root": "/data",
+                        "protocol": "resonant",
+                        "n_planes": "5",
+                        "n_frames_per_plane": "3",
+                        "blocks": blocks_value,
+                    }
+                )
+
+                self.assertIsNone(config.blocks)
+
     def test_suite2p_validation_blocks_missing_plane_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)

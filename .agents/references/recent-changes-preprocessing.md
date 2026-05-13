@@ -12,6 +12,16 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-11 - GUI blocks all alias
+- Date and label: 2026-05-11, GUI blocks all alias
+- Slice goal: Let the preprocessing GUI Blocks field accept `all` as an explicit request to process every matching raw TIFF block.
+- Passes completed in this session: Workflow parser patch -> GUI hint update -> focused GUI workflow test -> compile check -> log update.
+- What changed: `parse_optional_int_list(...)` now treats blank strings and case-insensitive `all` as `None`, preserving the existing internal all-blocks behavior. The GUI Blocks field hint now says comma-separated block numbers or `all`. Added regression coverage for `all`, `ALL`, and whitespace-padded `all`.
+- What remains broken: None known for the Blocks field alias.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators need mixed expressions such as `1,2,all`, define that behavior explicitly before expanding the parser.
+- Rerun implications: Existing preprocessing outputs are unchanged. Operators can enter `all` in the GUI Blocks field instead of leaving it blank. Validation: `python3 -m unittest tests/test_preprocessing_gui_workflow.py` passed; `python3 -m py_compile preprocessing/*.py utils.py old2new_migration_no_docstrings.py` passed.
+
 ## 2026-05-09 - Local Cellpose model path resolution
 - Date and label: 2026-05-09, Local Cellpose model path resolution
 - Slice goal: Stop Cellpose from falling back to `~/.cellpose/models/cpsam` when the ops template carries the historical Windows custom-model path.

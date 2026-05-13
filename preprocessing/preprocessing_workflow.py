@@ -76,8 +76,10 @@ def parse_csv_strings(value: Any) -> list[str]:
 def parse_optional_int_list(value: Any) -> list[int] | None:
     if value is None:
         return None
-    if isinstance(value, str) and not value.strip():
-        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() == "all":
+            return None
     values = parse_csv_strings(value) if isinstance(value, str) else value
     try:
         parsed = [int(item) for item in values]

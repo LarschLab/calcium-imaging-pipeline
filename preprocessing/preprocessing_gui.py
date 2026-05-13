@@ -232,7 +232,7 @@ class PreprocessingGuiApp:
         )
         self.streaming_note.grid(row=3, column=0, columnspan=4, sticky="w", pady=(0, 8))
 
-        self._entry_row(form, 4, "Blocks", "blocks", "Optional comma-separated block numbers")
+        self._entry_row(form, 4, "Blocks", "blocks", "Optional comma-separated block numbers or 'all'")
         self._entry_row(form, 5, "Planes", "n_planes", "Required for resonant preprocessing")
         self._entry_row(form, 6, "Frames/plane", "n_frames_per_plane", "Required for resonant preprocessing")
         self._entry_row(form, 7, "Flyback frames", "volume_flyback_frames", "Usually 0 or 1")
