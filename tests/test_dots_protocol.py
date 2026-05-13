@@ -19,6 +19,7 @@ from dots_protocol import (  # noqa: E402
     derive_functional_framerate,
     get_mode_defaults,
     load_stimuli_catalog,
+    normalize_session,
     plan_to_planned_block_rows,
     plan_to_schedule_rows,
     prepare_run_config,
@@ -110,6 +111,28 @@ class DotsProtocolTests(unittest.TestCase):
                 [trial.stimulus_name for trial in first_plan.trials],
                 [trial.stimulus_name for trial in second_plan.trials],
             )
+
+    def test_prepare_run_config_preserves_valid_session_number(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            defaults = get_mode_defaults(MODE_LOOP_BLOCKS)
+            defaults["metadata"]["session"] = "2"
+
+            metadata, _, _, _ = prepare_run_config(
+                MODE_LOOP_BLOCKS,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                tmpdir,
+            )
+
+        self.assertEqual(metadata["session"], 2)
+
+    def test_normalize_session_rejects_invalid_values(self) -> None:
+        for value in ("", "two", 0, -1):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "session must be an integer"):
+                    normalize_session(value)
 
     def test_block_mode_keeps_underscore_stems_as_distinct_stimuli(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -385,6 +408,47 @@ class DotsProtocolTests(unittest.TestCase):
             self.assertEqual(len(planned_blocks_df), plan.planned_block_count)
             self.assertEqual(list(planned_blocks_df["acquisition_frame_count"]), plan.planned_block_frame_counts)
             self.assertEqual(planned_blocks_df.to_dict("records"), plan_to_planned_block_rows(plan))
+
+    def test_mock_run_session_two_writes_suffix_files_in_same_fish_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            stimuli_dir = tmp_path / "stimuli"
+            stimuli_dir.mkdir()
+            self._write_stimulus(stimuli_dir / "stim1.csv", frames=60)
+
+            defaults = get_mode_defaults(MODE_LOOP_STIMULI)
+            defaults["metadata"]["fish_ID"] = "L758_f02"
+            defaults["metadata"]["session"] = 2
+            defaults["stimuli_params"]["pre_stim_resting_sec"] = 0
+            defaults["stimuli_params"]["pre_stim_pause_sec"] = 0
+            defaults["stimuli_params"]["post_stim_pause_sec"] = 0
+            defaults["runtime"]["mock_mode"] = True
+            defaults["runtime"]["mock_output_root"] = str(tmp_path / "mock_runs")
+
+            metadata, functional, stimuli_params, runtime = prepare_run_config(
+                MODE_LOOP_STIMULI,
+                defaults["metadata"],
+                defaults["functional_params"],
+                defaults["stimuli_params"],
+                defaults["runtime"],
+                stimuli_dir,
+            )
+            catalog = load_stimuli_catalog(stimuli_dir, MODE_LOOP_STIMULI)
+            plan = build_run_plan(MODE_LOOP_STIMULI, metadata, functional, stimuli_params, runtime, catalog)
+
+            meta_dir = run_planned_experiment(plan)
+
+            expected_meta_dir = Path(runtime["mock_output_root"]) / "L758_f02" / "01_raw" / "2p" / "metadata"
+            self.assertEqual(meta_dir, expected_meta_dir)
+            written_files = {path.name for path in meta_dir.iterdir()}
+            self.assertTrue(any(name.endswith("_fL758_f02_r2_experiment_log.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_fL758_f02_r2_block_log.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_fL758_f02_r2_trial_sequence.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_fL758_f02_r2_planned_blocks.csv") for name in written_files))
+            self.assertTrue(any(name.endswith("_fL758_f02_r2_planned_schedule.csv") for name in written_files))
+            metadata_file = next(path for path in meta_dir.iterdir() if path.name.endswith("_fL758_f02_r2_metadata.csv"))
+            metadata_map = dict(zip(pd.read_csv(metadata_file)["parameter"], pd.read_csv(metadata_file)["value"]))
+            self.assertEqual(int(metadata_map["session"]), 2)
 
     def test_mock_run_accepts_mp4_stimulus(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

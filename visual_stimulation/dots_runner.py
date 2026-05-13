@@ -542,6 +542,14 @@ def _resolve_metadata_dir(metadata: dict[str, Any], runtime: dict[str, Any]) -> 
     return paths["raw_2p_metadata"]
 
 
+def _session_output_stem(current_date: str, metadata: dict[str, Any]) -> str:
+    stem = f"{current_date}_f{metadata['fish_ID']}"
+    session = int(metadata.get("session", 1))
+    if session > 1:
+        stem = f"{stem}_r{session}"
+    return stem
+
+
 def _save_outputs(
     meta_dir: Path,
     current_date: str,
@@ -554,23 +562,23 @@ def _save_outputs(
     block_event_log: list[dict[str, Any]],
     trial_sequence: list[Any],
 ) -> None:
-    fish_id = metadata["fish_ID"]
+    output_stem = _session_output_stem(current_date, metadata)
 
-    pd.DataFrame(exp_event_log).to_csv(meta_dir / f"{current_date}_f{fish_id}_experiment_log.csv", index=False)
-    pd.DataFrame(block_event_log).to_csv(meta_dir / f"{current_date}_f{fish_id}_block_log.csv", index=False)
+    pd.DataFrame(exp_event_log).to_csv(meta_dir / f"{output_stem}_experiment_log.csv", index=False)
+    pd.DataFrame(block_event_log).to_csv(meta_dir / f"{output_stem}_block_log.csv", index=False)
     pd.DataFrame(trial_sequence, columns=["stimulus"]).to_csv(
-        meta_dir / f"{current_date}_f{fish_id}_trial_sequence.csv", index=False
+        meta_dir / f"{output_stem}_trial_sequence.csv", index=False
     )
     pd.DataFrame(plan_to_planned_block_rows(plan)).to_csv(
-        meta_dir / f"{current_date}_f{fish_id}_planned_blocks.csv", index=False
+        meta_dir / f"{output_stem}_planned_blocks.csv", index=False
     )
     pd.DataFrame(plan_to_schedule_rows(plan)).to_csv(
-        meta_dir / f"{current_date}_f{fish_id}_planned_schedule.csv", index=False
+        meta_dir / f"{output_stem}_planned_schedule.csv", index=False
     )
 
     metadata_rows = _build_metadata_rows(metadata, stimuli_params, functional_params, runtime, plan)
     pd.DataFrame(metadata_rows, columns=["parameter", "value"]).to_csv(
-        meta_dir / f"{current_date}_f{fish_id}_metadata.csv", index=False
+        meta_dir / f"{output_stem}_metadata.csv", index=False
     )
 
 
@@ -597,7 +605,7 @@ def _append_post_run_metadata(
 
     all_data = _build_metadata_rows(metadata, stimuli_params, functional_params, runtime, plan, anatomy_params)
     pd.DataFrame(all_data, columns=["parameter", "value"]).to_csv(
-        meta_dir / f"{current_date}_f{metadata['fish_ID']}_metadata.csv", index=False
+        meta_dir / f"{_session_output_stem(current_date, metadata)}_metadata.csv", index=False
     )
 
 
@@ -620,7 +628,7 @@ def _append_mock_metadata(
         _default_anatomy_params(),
     )
     pd.DataFrame(all_data, columns=["parameter", "value"]).to_csv(
-        meta_dir / f"{current_date}_f{metadata['fish_ID']}_metadata.csv", index=False
+        meta_dir / f"{_session_output_stem(current_date, metadata)}_metadata.csv", index=False
     )
 
 

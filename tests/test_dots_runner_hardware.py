@@ -239,12 +239,45 @@ class DotsRunnerHardwareTests(unittest.TestCase):
         self.assertEqual(str(metadata_map["fish_died"]).lower(), "false")
         self.assertEqual(int(metadata_map["frames_per_slice_anatomy"]), 90)
 
+    def test_post_run_metadata_session_two_uses_session_suffix(self) -> None:
+        psychopy = types.ModuleType("psychopy")
+        core = types.ModuleType("psychopy.core")
+        gui = types.ModuleType("psychopy.gui")
+
+        class Dialog:
+            def __init__(self, _: dict[str, object], title: str, sortKeys: bool = False) -> None:
+                self.OK = True
+
+        gui.DlgFromDict = Dialog
+        core.quit = lambda: None
+        psychopy.core = core
+        psychopy.gui = gui
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            meta_dir = Path(tmpdir)
+            plan = self._minimal_plan(tmpdir)
+            plan.metadata["session"] = 2
+            with patch.dict(sys.modules, {"psychopy": psychopy, "psychopy.core": core, "psychopy.gui": gui}):
+                _append_post_run_metadata(
+                    meta_dir,
+                    "2026-04-30-1200",
+                    dict(plan.metadata),
+                    {},
+                    {},
+                    plan.runtime,
+                    plan,
+                )
+
+            self.assertTrue((meta_dir / "2026-04-30-1200_fF001_r2_metadata.csv").exists())
+            self.assertFalse((meta_dir / "2026-04-30-1200_fF001_metadata.csv").exists())
+
     def _minimal_plan(self, output_root: str) -> DotsRunPlan:
         return DotsRunPlan(
             mode=MODE_LOOP_STIMULI,
             metadata={
                 "experimenter": "Tester",
                 "fish_ID": "F001",
+                "session": 1,
                 "fish_orientation": "bottom-left",
             },
             functional_params={},

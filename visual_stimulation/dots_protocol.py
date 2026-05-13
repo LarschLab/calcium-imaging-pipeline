@@ -139,6 +139,20 @@ def derive_functional_framerate(functional_params: dict[str, Any]) -> float:
     return MICROSCOPE_BASE_FRAME_RATE_HZ / n_frames / n_slices
 
 
+def normalize_session(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("session must be an integer greater than or equal to 1")
+    if isinstance(value, int):
+        session = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        session = int(value)
+    else:
+        raise ValueError("session must be an integer greater than or equal to 1")
+    if session < 1:
+        raise ValueError("session must be an integer greater than or equal to 1")
+    return session
+
+
 def get_mode_defaults(mode: str) -> dict[str, Any]:
     if mode == MODE_LOOP_STIMULI:
         metadata = {
@@ -146,6 +160,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "experimenter": "Lukas",
             "experiment_date": None,
             "fish_ID": "L587_f03",
+            "session": 1,
             "fish_birth": "2026-01-20",
             "fish_age_dpf": 14,
             "genotype": "huc:H2B-GCamp6s",
@@ -210,6 +225,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "experimenter": "Matilde",
             "experiment_date": None,
             "fish_ID": "L395_f01",
+            "session": 1,
             "fish_birth": "2025-06-23",
             "fish_age_dpf": None,
             "genotype": "huc:H2B-GCamp6s",
@@ -273,6 +289,7 @@ def get_mode_defaults(mode: str) -> dict[str, Any]:
             "experimenter": "Matilde",
             "experiment_date": None,
             "fish_ID": "L395_f01",
+            "session": 1,
             "fish_birth": "2025-06-23",
             "fish_age_dpf": None,
             "genotype": "huc:H2B-GCamp6s",
@@ -411,6 +428,7 @@ def prepare_run_config(
     prepared_runtime = copy.deepcopy(runtime)
 
     prepared_metadata["experiment_date"] = prepared_metadata.get("experiment_date") or dt.datetime.now().strftime("%Y-%m-%d-%H%M")
+    prepared_metadata["session"] = normalize_session(prepared_metadata.get("session", 1))
     prepared_metadata["fish_orientation"] = prepared_metadata.get("fish_orientation") or "bottom-left"
     prepared_metadata["path_to_stimuli"] = str(Path(stimuli_dir))
     prepared_metadata["fish_age_dpf"] = compute_fish_age_days(prepared_metadata.get("fish_birth"))

@@ -12,6 +12,34 @@ Append-only handoff log for PsychoPy run scripts, triggers, metadata logging, an
 - Next likely breakpoint:
 - Rerun implications:
 
+## 2026-05-13 - dots GUI session metadata and output suffixes
+- Date and label: 2026-05-13, dots GUI session metadata and output suffixes
+- Slice goal: Add fish session metadata and write session 2+ visual-stimulation artifacts with `_r<session>` filename suffixes in the same fish metadata folder.
+- Passes completed in this session: Owner/routing verification -> protocol metadata update -> runner filename stem update -> GUI/settings update -> regression/reference/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_protocol.py`: dots metadata defaults now include integer `session`, and preview/run preparation rejects invalid session values.
+  - `visual_stimulation/dots_gui.py`: the metadata form now shows and remembers `Session`.
+  - `visual_stimulation/dots_runner.py`: all run artifacts keep the canonical `fish_ID` metadata directory, with session 1 filenames unchanged and session 2+ filenames using `_r<session>`.
+  - Tests cover session validation, GUI collection/remembering, mock output paths, and post-run metadata suffix rewriting.
+- What remains broken: Manual GUI/hardware validation is still needed for actual operator use.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If preprocessing consumes session metadata directly, verify it treats `fish_ID` as the base fish folder and `session` as run metadata, not as part of the fish folder name.
+- Rerun implications: Session 2+ output filenames change; session 1 filenames and metadata directories remain unchanged.
+
+## 2026-05-13 - dots GUI remembered fish orientation and wheel-safe inputs
+- Date and label: 2026-05-13, dots GUI remembered fish orientation and wheel-safe inputs
+- Slice goal: Remember the selected fish orientation in the visual stimulation GUI and prevent mouse-wheel input from changing field values.
+- Passes completed in this session: Owner/routing verification -> GUI settings and wheel-event update -> regression/reference/log update -> lightweight validation.
+- What changed:
+  - `visual_stimulation/dots_gui.py`: remembered metadata now includes `fish_orientation`, so valid previews persist the selected orientation with the existing GUI settings file.
+  - `visual_stimulation/dots_gui.py`: form inputs now consume mouse-wheel events after scrolling the form canvas, and non-scrollable setup inputs consume wheel events without changing values.
+  - `tests/test_dots_gui_layout.py`: added regression coverage for remembered fish orientation and wheel-event consumption.
+  - `.agents/references/visual-stimulation-script-index.md`: documented remembered fish orientation and mouse-wheel-safe input behavior.
+- What remains broken: Manual GUI confirmation on the operator machine remains useful for platform-specific mouse/trackpad behavior.
+- Remaining in-slice work: None.
+- Next likely breakpoint: If operators want keyboard-only or trackpad gesture customization, keep it GUI-local and preserve saved metadata/output keys.
+- Rerun implications: GUI settings behavior changes; experiment metadata CSV schema and stimulus execution are unchanged.
+
 ## 2026-05-05 - dots GUI test-bouts orientation and fish age
 - Date and label: 2026-05-05, dots GUI test-bouts orientation and fish age
 - Slice goal: Make GUI-launched visual test bouts use the selected fish orientation and keep fish age derived from remembered birth date.

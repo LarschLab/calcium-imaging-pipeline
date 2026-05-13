@@ -135,7 +135,9 @@ class DotsGuiLayoutTests(unittest.TestCase):
                 "experiment_name": "exp",
                 "experimenter": "operator",
                 "fish_ID": "F001",
+                "session": 2,
                 "fish_birth": "2026-01-20",
+                "fish_orientation": "top-right",
                 "genotype": "huc:H2B-GCamp6s",
                 "fish_age_dpf": 100,
                 "path_to_stimuli": "/ignored",
@@ -150,12 +152,38 @@ class DotsGuiLayoutTests(unittest.TestCase):
                     "experiment_name": "exp",
                     "experimenter": "operator",
                     "fish_ID": "F001",
+                    "session": 2,
                     "fish_birth": "2026-01-20",
+                    "fish_orientation": "top-right",
                     "genotype": "huc:H2B-GCamp6s",
                 },
                 "stimuli_dir": "/stimuli",
             },
         )
+
+    def test_forms_mousewheel_scrolls_canvas_and_consumes_event(self) -> None:
+        app = self._fake_app_for_forms_mousewheel()
+
+        result = app._on_forms_mousewheel(type("Event", (), {"delta": -120})())
+
+        self.assertEqual(result, "break")
+        self.assertEqual(app.forms_canvas.scrolls, [(1, "units")])
+
+    def test_form_input_mousewheel_scrolls_canvas_and_consumes_event(self) -> None:
+        app = self._fake_app_for_forms_mousewheel()
+
+        result = app._on_form_input_mousewheel(type("Event", (), {"num": 4})())
+
+        self.assertEqual(result, "break")
+        self.assertEqual(app.forms_canvas.scrolls, [(-1, "units")])
+
+    def test_non_scrollable_input_mousewheel_consumes_event_without_scrolling(self) -> None:
+        app = self._fake_app_for_forms_mousewheel()
+
+        result = app._on_non_scrollable_input_mousewheel(type("Event", (), {})())
+
+        self.assertEqual(result, "break")
+        self.assertEqual(app.forms_canvas.scrolls, [])
 
     def test_block_mode_fish_id_defaults_are_string_typed(self) -> None:
         self.assertIsInstance(get_mode_defaults(MODE_LOOP_BLOCKS)["metadata"]["fish_ID"], str)
@@ -256,6 +284,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
 
     def test_metadata_and_functional_field_labels_use_operator_friendly_text(self) -> None:
         self.assertEqual(format_field_label("metadata", "fish_ID"), "Fish ID")
+        self.assertEqual(format_field_label("metadata", "session"), "Session")
         self.assertEqual(format_field_label("metadata", "fish_age_dpf"), "Fish age (dpf)")
         self.assertEqual(format_field_label("metadata", "respond_to_omr"), "Responds to OMR")
         self.assertEqual(format_field_label("functional_params", "n_frames"), "Frames / plane")
@@ -538,6 +567,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
         app.field_vars = {
             "metadata": {
                 "fish_ID": Var("L395_f01"),
+                "session": Var("2"),
                 "fish_birth": Var("2025-06-23"),
                 "fish_age_dpf": Var("999"),
             }
@@ -546,6 +576,7 @@ class DotsGuiLayoutTests(unittest.TestCase):
         values = app._collect_group_values("metadata")
 
         self.assertEqual(values["fish_ID"], "L395_f01")
+        self.assertEqual(values["session"], 2)
         self.assertEqual(values["fish_birth"], "2025-06-23")
         self.assertNotIn("fish_age_dpf", values)
 
@@ -690,6 +721,20 @@ class DotsGuiLayoutTests(unittest.TestCase):
         app.visual_test_bouts_button = Button()
         app.visual_test_bouts_process = None
         app.field_vars = {"metadata": {"fish_orientation": Var(fish_orientation)}}
+        return app
+
+    @staticmethod
+    def _fake_app_for_forms_mousewheel() -> DotsGuiApp:
+        app = object.__new__(DotsGuiApp)
+
+        class Canvas:
+            def __init__(self) -> None:
+                self.scrolls: list[tuple[int, str]] = []
+
+            def yview_scroll(self, delta: int, units: str) -> None:
+                self.scrolls.append((delta, units))
+
+        app.forms_canvas = Canvas()
         return app
 
     class _FakeProcess:

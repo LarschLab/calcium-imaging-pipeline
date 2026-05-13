@@ -70,7 +70,9 @@ REMEMBERED_METADATA_FIELDS = (
     "experiment_name",
     "experimenter",
     "fish_ID",
+    "session",
     "fish_birth",
+    "fish_orientation",
     "genotype",
 )
 
@@ -80,6 +82,7 @@ FIELD_HELP_TEXT: dict[str, dict[str, str]] = {
         "experimenter": "Name or initials of the person running the session.",
         "experiment_date": "Run timestamp; leave empty to auto-fill at preview/run time.",
         "fish_ID": "Animal identifier written to run metadata.",
+        "session": "Integer imaging session number for this fish; session 2+ adds an r-session suffix to output files.",
         "fish_birth": "Birth date used to compute fish age (YYYY-MM-DD).",
         "fish_age_dpf": "Age in days post fertilization; auto-computed from fish_birth.",
         "genotype": "Genotype string stored with run metadata.",
@@ -126,6 +129,7 @@ FIELD_DISPLAY_LABELS: dict[str, dict[str, str]] = {
         "experimenter": "Experimenter",
         "experiment_date": "Experiment date",
         "fish_ID": "Fish ID",
+        "session": "Session",
         "fish_birth": "Fish birth date",
         "fish_age_dpf": "Fish age (dpf)",
         "genotype": "Genotype",
@@ -704,13 +708,16 @@ class DotsGuiApp:
             self._load_mode(MODE_CHOICES[mode_menu.current()])
 
         mode_menu.bind("<<ComboboxSelected>>", on_mode_change)
+        self._bind_non_scrollable_input_mousewheel(mode_menu)
         self.mode_menu = mode_menu
 
         ttk.Label(controls, text="Stimulus Folder").grid(row=1, column=0, sticky="w", pady=(10, 0))
         folder_row = ttk.Frame(controls)
         folder_row.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(10, 0))
         folder_row.columnconfigure(0, weight=1)
-        ttk.Entry(folder_row, textvariable=self.stimuli_dir_var).grid(row=0, column=0, sticky="ew")
+        stimuli_dir_entry = ttk.Entry(folder_row, textvariable=self.stimuli_dir_var)
+        stimuli_dir_entry.grid(row=0, column=0, sticky="ew")
+        self._bind_non_scrollable_input_mousewheel(stimuli_dir_entry)
         ttk.Button(folder_row, text="Browse", command=self._browse_stimuli_dir).grid(row=0, column=1, padx=(8, 0))
         ttk.Button(folder_row, text="Use Sample", command=self._use_sample_stimuli).grid(row=0, column=2, padx=(8, 0))
 
@@ -738,7 +745,9 @@ class DotsGuiApp:
 
         self.mock_output_row = ttk.Frame(controls)
         self.mock_output_row.columnconfigure(0, weight=1)
-        ttk.Entry(self.mock_output_row, textvariable=self.mock_output_root_var).grid(row=0, column=0, sticky="ew")
+        mock_output_entry = ttk.Entry(self.mock_output_row, textvariable=self.mock_output_root_var)
+        mock_output_entry.grid(row=0, column=0, sticky="ew")
+        self._bind_non_scrollable_input_mousewheel(mock_output_entry)
         ttk.Button(self.mock_output_row, text="Browse", command=self._browse_mock_output_root).grid(
             row=0, column=1, padx=(8, 0)
         )
@@ -885,6 +894,7 @@ class DotsGuiApp:
                 "write",
                 lambda *_, group=group_key, field=field_name: self._on_field_change(group, field),
             )
+        self._bind_form_input_mousewheel(widget)
         return variable, widget
 
     def _on_field_change(self, group_key: str, field_name: str) -> None:
@@ -915,20 +925,40 @@ class DotsGuiApp:
         self.forms_canvas.unbind_all("<Button-4>")
         self.forms_canvas.unbind_all("<Button-5>")
 
-    def _on_forms_mousewheel(self, event: Any) -> None:
+    def _mousewheel_scroll_units(self, event: Any) -> int | None:
         if getattr(event, "num", None) == 4:
-            delta = -1
+            return -1
         elif getattr(event, "num", None) == 5:
-            delta = 1
+            return 1
         else:
             event_delta = int(getattr(event, "delta", 0))
             if event_delta == 0:
-                return
+                return None
             if abs(event_delta) >= 120:
-                delta = int(-event_delta / 120)
-            else:
-                delta = -1 if event_delta > 0 else 1
-        self.forms_canvas.yview_scroll(delta, "units")
+                return int(-event_delta / 120)
+            return -1 if event_delta > 0 else 1
+
+    def _on_forms_mousewheel(self, event: Any) -> str:
+        delta = self._mousewheel_scroll_units(event)
+        if delta is not None:
+            self.forms_canvas.yview_scroll(delta, "units")
+        return "break"
+
+    def _on_form_input_mousewheel(self, event: Any) -> str:
+        return self._on_forms_mousewheel(event)
+
+    def _on_non_scrollable_input_mousewheel(self, _: Any) -> str:
+        return "break"
+
+    def _bind_form_input_mousewheel(self, widget: ttk.Widget) -> None:
+        widget.bind("<MouseWheel>", self._on_form_input_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_form_input_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_form_input_mousewheel, add="+")
+
+    def _bind_non_scrollable_input_mousewheel(self, widget: ttk.Widget) -> None:
+        widget.bind("<MouseWheel>", self._on_non_scrollable_input_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_non_scrollable_input_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_non_scrollable_input_mousewheel, add="+")
 
     def _browse_stimuli_dir(self) -> None:
         selected = filedialog.askdirectory(title="Select the folder containing the stimulus CSV/MP4 files")

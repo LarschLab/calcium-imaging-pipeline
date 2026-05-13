@@ -12,7 +12,7 @@ Use this file when
 ## Main run flow for `dots_*` scripts
 1. Operator setup
     - Owner region: `visual_stimulation/dots_gui.py` and `visual_stimulation/dots_protocol.py`
-    - Outputs: in-memory metadata (via scrollable parameter forms), selected CSV/MP4 stimulus directory, monitor config, mock-run flags, planned trial order, dynamic `n_trials_per_block` default at two times unique presented stimuli, derived baseline rest duration, derived fish age from remembered birth date, derived functional `framerate`/`n_volumes`, automatic block-duration/frame planning including baseline rest as `B0`, auto-refresh preview timeline with full-stem stimulus identity coloring, manual fish-orientation alignment display, start/stop visual test-bouts launcher that receives the selected fish orientation, pre-run operator checklist
+    - Outputs: in-memory metadata (via scrollable parameter forms) including integer fish session number, selected CSV/MP4 stimulus directory, monitor config, mock-run flags, planned trial order, dynamic `n_trials_per_block` default at two times unique presented stimuli, derived baseline rest duration, derived fish age from remembered birth date, derived functional `framerate`/`n_volumes`, automatic block-duration/frame planning including baseline rest as `B0`, auto-refresh preview timeline with full-stem stimulus identity coloring, manual fish-orientation alignment display, start/stop visual test-bouts launcher that receives the selected fish orientation, pre-run operator checklist
 2. Experiment tree bootstrap
    - Owner region: `visual_stimulation/dots_runner.py` `init_experiment_tree` call and `meta_dir` selection
    - Output destination: `01_raw/2p/metadata` in the canonical experiment tree
@@ -29,7 +29,7 @@ Use this file when
    - Outputs: same CSV artifacts as a hardware run, written under the canonical tree rooted at the selected mock output directory
 5. Finalization and log writing
     - Owner region: `visual_stimulation/dots_runner.py` save/output block
-    - Outputs: experiment log CSV, block log CSV, trial sequence CSV, planned schedule CSV, planned blocks CSV, metadata CSV
+    - Outputs: experiment log CSV, block log CSV, trial sequence CSV, planned schedule CSV, planned blocks CSV, metadata CSV; session 2+ filenames add `_r<session>` before the artifact suffix while staying under the base fish metadata folder
 6. Post-run anatomy append
    - Owner region: `visual_stimulation/dots_runner.py` follow-up dialogs after the first metadata write
    - Output: metadata CSV overwritten with anatomy values appended
