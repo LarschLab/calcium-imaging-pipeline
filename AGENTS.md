@@ -2,6 +2,12 @@
 
 This repository uses a routed instruction system under `.agents/`. Start here, then follow the workflow router and only read the smallest reference file needed for the current task.
 
+## Answer-Direct Route
+
+If the user asks a general question, asks for a short explanation, or provides enough context in the prompt to answer without repo/vault state, answer directly and do not load routers, references, indexes, logs, or templates.
+
+Use repo/vault routing only when the request requires local files, durable updates, validation, provenance, or project-specific workflow rules.
+
 ## Required startup order
 1. Open `coding.md` for the shared coding-behavior policies.
 2. Open `.agents/workflows/repo-router.md`.

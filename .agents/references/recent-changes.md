@@ -9,3 +9,13 @@ Open the workflow-specific rolling log that matches the current task.
 
 - Preprocessing work -> `recent-changes-preprocessing.md`
 - Visual stimulation work -> `recent-changes-visual-stimulation.md`
+
+## Compact Query Route
+
+Before opening a workflow-specific append-only log, query it with:
+
+```bash
+python3 /Users/ddharmap/gitRepo/agenticWorkflow/scripts/query_recent_changes.py --repo <repo-name> --query <term> --limit 5
+```
+
+Open the full log only when the compact result points to an entry that needs detailed reading.
