@@ -21,8 +21,8 @@ def init_experiment_tree(base_dir, fish_name):
 
     rel_dirs = [
         # 01_raw
-        "01_raw/confocal/round1",
-        "01_raw/confocal/roundn",
+        "01_raw/confocal/rbest",
+        "01_raw/confocal/rn",
         "01_raw/2p/anatomy",
         "01_raw/2p/functional",
         "01_raw/2p/metadata",
@@ -31,24 +31,8 @@ def init_experiment_tree(base_dir, fish_name):
         "02_reg/00_preprocessing/2p_anatomy",
         "02_reg/00_preprocessing/2p_functional/01_individualPlanes",
         "02_reg/00_preprocessing/2p_functional/02_motionCorrected",
-        "02_reg/00_preprocessing/r1",
+        "02_reg/00_preprocessing/rbest",
         "02_reg/00_preprocessing/rn",
-        "02_reg/01_r1-2p/logs",
-        "02_reg/01_r1-2p/matrices",
-        "02_reg/02_rn-r1/transMatrices",
-        "02_reg/02_rn-r1/logs",
-        "02_reg/03_rn-2p/transMatrices",
-        "02_reg/03_rn-2p/logs",
-        "02_reg/04_r1-ref/transMatrices",
-        "02_reg/04_r1-ref/logs",
-        "02_reg/05_r2-ref/transMatrices",
-        "02_reg/05_r2-ref/logs",
-        "02_reg/06_total-ref/transMatrices",
-        "02_reg/06_total-ref/logs",
-        "02_reg/07_2pf-a/transMatrices",
-        "02_reg/07_2pf-a/logs",
-        "02_reg/08_2pa-ref/transMatrices",
-        "02_reg/08_2pa-ref/logs",
 
         # 03_analysis
         "03_analysis/structural/cellpose",

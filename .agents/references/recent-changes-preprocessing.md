@@ -112,6 +112,15 @@ Append-only handoff log for preprocessing, Suite2P, dF/F, and migration work.
 - Next likely breakpoint: For exact or near-exact reproduction, run old Suite2P 0.14.6 in the original Windows CUDA environment, or treat existing baseline Suite2P artifacts as fixed inputs for downstream analysis.
 - Rerun implications: Current CPU + CellposeSAM is very slow on this machine: all five planes took 185.26 minutes. Avoid it for routine full-batch processing unless CPU-only current Suite2P output is explicitly required.
 
+## 2026-06-02 - remove legacy confocal registration scaffold
+- Date and label: 2026-06-02, remove legacy confocal registration scaffold
+- Slice goal: Stop new 2P metadata/fish-folder initialization from creating legacy `round1`, `roundn`, `r1`, and `r2` confocal/registration folders.
+- Passes completed in this session: Audited listed Danin fish folders, removed empty legacy folders, updated canonical tree writer, added focused layout regression test, and updated canonical layout docs.
+- What changed: `utils.init_experiment_tree` now creates `01_raw/confocal/rbest`, `01_raw/confocal/rn`, `02_reg/00_preprocessing/rbest`, and `02_reg/00_preprocessing/rn`, and no longer pre-creates old ANTs registration scaffold folders such as `01_r1-2p`, `02_rn-r1`, `04_r1-ref`, or `05_r2-ref`.
+- What remains broken: Registration-specific folder creation should be owned by the future registration staging workflow, not this 2P metadata initialization path.
+- Remaining in-slice work: None known for the folder initializer.
+- Rerun implications: Existing fish folders may still contain legacy folders until cleaned manually; new calls to `init_experiment_tree` will not recreate them.
+
 ## 2026-05-08 - Current Suite2P MPS custom Cellpose comparison
 - Date and label: 2026-05-08, Current Suite2P MPS custom Cellpose comparison
 - Slice goal: Run current Suite2P on Mac MPS with the local custom Cellpose model and baseline per-plane diameters, then compare against the existing Windows CUDA baseline and prior CPU runs.

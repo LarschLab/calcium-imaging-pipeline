@@ -16,9 +16,13 @@ Authoritative owner
 
 ## Canonical tree
 - Root: `<base_dir>/<fish_name>`
+- Raw confocal best round: `01_raw/confocal/rbest`
+- Raw confocal additional rounds: `01_raw/confocal/rn`
 - Raw metadata: `01_raw/2p/metadata`
 - Raw functional TIFFs: `01_raw/2p/functional`
 - Raw anatomy TIFFs: `01_raw/2p/anatomy`
+- Preprocessed confocal best round: `02_reg/00_preprocessing/rbest`
+- Preprocessed confocal additional rounds: `02_reg/00_preprocessing/rn`
 - Preprocessed individual planes: `02_reg/00_preprocessing/2p_functional/01_individualPlanes`
 - Motion-corrected TIFFs: `02_reg/00_preprocessing/2p_functional/02_motionCorrected`
 - Functional analysis outputs: `03_analysis/functional/suite2P`
@@ -26,6 +30,7 @@ Authoritative owner
 
 ## Writer-stage ownership
 - Visual stimulation acquisition scripts own CSV logs, planned block summaries, and run metadata written into `01_raw/2p/metadata`; multi-session visual runs keep the same base fish folder and add `_r<session>` to session 2+ artifact filenames.
+- Same-fish confocal preprocessing owns `rbest`/`rn` confocal raw staging and preprocessed NRRD outputs; `round1`, `roundn`, `r1`, and `r2` folder names are legacy and should not be created by `utils.init_experiment_tree`.
 - `preprocessing/preprocessing_tiff.py` owns plane TIFFs and preprocessing metadata JSONs in `02_reg/00_preprocessing/2p_functional/01_individualPlanes`. Multi-session raw TIFFs use one global plane index range per fish: implicit `r1` writes planes `0..n-1`, `r2` writes `n..2n-1`, and so on.
 - `preprocessing/motion_segmentation_suite2p.py` owns joined motion-corrected TIFFs in `02_motionCorrected` and plane-specific Suite2P outputs under `03_analysis/functional/suite2P/plane*`.
 - `preprocessing/dFoF_extraction.py` owns `*_dFoF.npy`, filtered ROI index arrays, and dF/F metadata JSONs in each plane folder.
