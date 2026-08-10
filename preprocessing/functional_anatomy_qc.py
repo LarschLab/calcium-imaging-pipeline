@@ -1,9 +1,8 @@
 """NCC-based functional-to-anatomy placement and temporal Z-drift QC.
 
-The stage consumes motion-corrected functional movies and the raw in-vivo 2P
-anatomy TIFF.  It deliberately preserves the acquisition orientation: the
-polarity transforms used by downstream confocal-registration projects do not
-belong in this lab-wide preprocessing gate.
+The stage consumes canonical motion-corrected functional movies and the
+canonical registration-ready in-vivo anatomy NRRD. Their shared XY frame is
+validated from the spatial preprocessing manifest before NCC is attempted.
 """
 
 from __future__ import annotations
@@ -29,6 +28,13 @@ from scipy import ndimage as ndi
 from skimage.registration import phase_cross_correlation
 from skimage.transform import resize
 import tifffile
+
+from preprocessing.spatial_preprocessing import (
+    CANONICAL_XY_FRAME,
+    REGISTRATION_Z_FRAME,
+    canonical_manifest_path,
+    validate_spatial_manifest,
+)
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,30 @@ def read_raw_anatomy(path: str | Path) -> RawAnatomy:
         series_shape=series_shape,
         used_page_stack_fallback=inconsistent_series,
     )
+
+
+def read_canonical_anatomy(path: str | Path) -> tuple[RawAnatomy, tuple[float, float, float]]:
+    source = Path(path)
+    if source.suffix.lower() != ".nrrd":
+        raise ValueError(f"Canonical NCC anatomy must be an NRRD, got {source}")
+    try:
+        import SimpleITK as sitk
+    except Exception as exc:  # pragma: no cover - environment dependent
+        raise ImportError("SimpleITK is required to read canonical anatomy NRRD") from exc
+    image = sitk.ReadImage(str(source))
+    data = sitk.GetArrayFromImage(image)
+    spacing = tuple(float(value) for value in image.GetSpacing())
+    if data.ndim != 3 or data.dtype != np.uint8:
+        raise ValueError(f"Expected canonical uint8 Z,Y,X anatomy, got {data.dtype} {data.shape}: {source}")
+    return RawAnatomy(
+        data_zyx=np.asarray(data),
+        source_path=source,
+        reader="SimpleITK",
+        source_dtype=str(data.dtype),
+        page_count=int(data.shape[0]),
+        series_shape=tuple(int(value) for value in data.shape),
+        used_page_stack_fallback=False,
+    ), spacing
 
 
 def anatomy_z_spacing_um(metadata_dir: str | Path) -> tuple[float, list[Path]]:
@@ -511,7 +541,13 @@ def _run_plane(
     anatomy_filtered: np.ndarray,
     z_spacing_um: float,
     config: FunctionalAnatomyQCConfig,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any],
+    list[dict[str, Any]],
+    np.ndarray,
+]:
     block_count = len(session["selected_tiffs"])
     canonical = pooled_analysis_reference(movie_path, block_count=block_count, config=config)
     scale_started = time.perf_counter()
@@ -578,20 +614,61 @@ def _run_plane(
             }
             for z_index, score in enumerate(result["scores"])
         )
+    anchor_scores = np.asarray(placement["scores"], dtype=np.float32)
+    anchor_metrics = _depth_profile_metrics(anchor_scores)
     plane_summary = {
         "fish_id": fish_id,
         "session": session["session_label"],
         "plane_index": plane_index,
+        "plane_label": f"{fish_id}_plane{plane_index}_mcorrected",
+        "reference_selection": "pooled_post_block0",
         "scale": float(placement["scale"]),
+        "best_z": int(placement["best_z"]),
+        "best_z_subslice": quadratic_peak_z(anchor_scores),
+        "max_ncc": float(placement["score"]),
+        "placement_x": int(placement["x"]),
+        "placement_y": int(placement["y"]),
+        "peak_delta": anchor_metrics["peak_delta"],
+        "peak_zscore": anchor_metrics["peak_zscore"],
+        "peak_at_z_boundary": bool(anchor_metrics["peak_at_z_boundary"]),
+        "reference_height": int(canonical.shape[0]),
+        "reference_width": int(canonical.shape[1]),
         "canonical_best_z": int(placement["best_z"]),
-        "canonical_best_z_subslice": quadratic_peak_z(placement["scores"]),
+        "canonical_best_z_subslice": quadratic_peak_z(anchor_scores),
         "canonical_ncc": float(placement["score"]),
         "canonical_x": int(placement["x"]),
         "canonical_y": int(placement["y"]),
         "scale_search_seconds": scale_seconds,
         "block_count": block_count,
     }
-    return interval_rows, profile_rows, plane_summary
+    anchor_profile_rows = [
+        {
+            "fish_id": fish_id,
+            "session": session["session_label"],
+            "plane_index": plane_index,
+            "plane_label": plane_summary["plane_label"],
+            "reference_selection": "pooled_post_block0",
+            "anatomy_z": z_index,
+            "anatomy_z_um": z_index * z_spacing_um,
+            "ncc": float(score),
+        }
+        for z_index, score in enumerate(anchor_scores)
+    ]
+    return interval_rows, profile_rows, plane_summary, anchor_profile_rows, canonical
+
+
+def _depth_profile_metrics(scores: np.ndarray) -> dict[str, float | bool]:
+    values = np.asarray(scores, dtype=np.float64)
+    peak = int(np.nanargmax(values))
+    maximum = float(values[peak])
+    second = float(np.partition(values[np.isfinite(values)], -2)[-2]) if np.isfinite(values).sum() >= 2 else maximum
+    mean = float(np.nanmean(values))
+    standard_deviation = float(np.nanstd(values))
+    return {
+        "peak_delta": maximum - second,
+        "peak_zscore": (maximum - mean) / (standard_deviation + 1e-6),
+        "peak_at_z_boundary": peak in {0, values.size - 1},
+    }
 
 
 def _direction_fraction(changes: np.ndarray, consensus: float) -> float:
@@ -701,15 +778,93 @@ def _render_tracks(interval_df: pd.DataFrame, summary_df: pd.DataFrame, output: 
             f"Drift gate: {status} | median ΔZ = {summary['consensus_change_slices']:+.2f} slices "
             f"({summary['consensus_change_um']:+.2f} µm)"
         )
-        ax.set_ylabel("Matched raw-anatomy depth\n(sub-slice Z index)")
+        ax.set_ylabel("Matched canonical-anatomy depth\n(sub-slice Z index)")
         ax.grid(alpha=0.2)
         ax.legend(fontsize=8, ncol=3)
     fig.suptitle(
         "Functional-plane depth stability over time\n"
-        "NCC placement in raw anatomy; each acquisition block is shown in thirds",
+        "NCC placement in canonical anatomy; each acquisition block is shown in thirds",
         fontweight="bold",
     )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(output, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _render_anchor_profiles(
+    anchor_profile_df: pd.DataFrame,
+    plane_df: pd.DataFrame,
+    output: Path,
+) -> None:
+    planes = sorted(int(value) for value in anchor_profile_df["plane_index"].unique())
+    columns = 2
+    rows = max(1, int(np.ceil(len(planes) / columns)))
+    fig, axes = plt.subplots(rows, columns, figsize=(12, 3.4 * rows), squeeze=False, sharey=True)
+    summary_by_plane = plane_df.set_index("plane_index")
+    for axis, plane_index in zip(axes.flat, planes):
+        profile = anchor_profile_df[anchor_profile_df["plane_index"] == plane_index].sort_values("anatomy_z")
+        summary = summary_by_plane.loc[plane_index]
+        best_z = int(summary["best_z"])
+        best_subslice = float(summary["best_z_subslice"])
+        maximum = float(summary["max_ncc"])
+        axis.plot(profile["anatomy_z"], profile["ncc"], color="#27628d", linewidth=1.8)
+        axis.axvline(best_subslice, color="#cf2436", linestyle="--", linewidth=1.2)
+        axis.scatter([best_z], [maximum], color="#cf2436", s=24, zorder=3)
+        boundary = " | boundary peak" if bool(summary["peak_at_z_boundary"]) else ""
+        axis.set_title(
+            f"Plane {plane_index}: best anatomy Z = {best_subslice:.2f}\n"
+            f"peak NCC = {maximum:.3f}, peak z-score = {float(summary['peak_zscore']):.2f}{boundary}"
+        )
+        axis.set_xlabel("Canonical anatomy Z index")
+        axis.set_ylabel("Normalized cross-correlation (NCC)")
+        axis.grid(alpha=0.2)
+    for axis in axes.flat[len(planes) :]:
+        axis.axis("off")
+    fig.suptitle(
+        "Confidence of pooled functional-plane placement across anatomical depth\n"
+        "Sharper, isolated NCC peaks support a more specific best-Z assignment",
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(output, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def _render_temporal_profiles(profile_df: pd.DataFrame, output: Path) -> None:
+    planes = sorted(int(value) for value in profile_df["plane_index"].unique())
+    columns = 2
+    rows = max(1, int(np.ceil(len(planes) / columns)))
+    fig, axes = plt.subplots(rows, columns, figsize=(13, 3.8 * rows), squeeze=False)
+    image = None
+    for axis, plane_index in zip(axes.flat, planes):
+        subset = profile_df[profile_df["plane_index"] == plane_index].copy()
+        matrix = subset.pivot(index="interval_index", columns="anatomy_z", values="ncc").sort_index()
+        interval_rows = subset.sort_values("interval_index").drop_duplicates("interval_index")
+        labels = interval_rows["interval_label"].tolist()
+        image = axis.imshow(matrix.to_numpy(), aspect="auto", origin="upper", cmap="viridis")
+        best_columns = np.nanargmax(matrix.to_numpy(), axis=1)
+        best_z = matrix.columns.to_numpy(dtype=float)[best_columns]
+        axis.plot(best_z - float(matrix.columns.min()), np.arange(matrix.shape[0]), color="white", linewidth=1.2)
+        axis.scatter(best_z - float(matrix.columns.min()), np.arange(matrix.shape[0]), color="white", s=8)
+        axis.axhspan(-0.5, 2.5, color="white", alpha=0.18)
+        axis.set_yticks(np.arange(len(labels)), labels, fontsize=7)
+        z_values = matrix.columns.to_numpy(dtype=int)
+        tick_positions = np.linspace(0, len(z_values) - 1, min(6, len(z_values)), dtype=int)
+        axis.set_xticks(tick_positions, z_values[tick_positions])
+        axis.set_xlabel("Canonical anatomy Z index")
+        axis.set_ylabel("Acquisition block third")
+        axis.set_title(f"Plane {plane_index}: temporal NCC-versus-depth profiles", pad=8)
+    for axis in axes.flat[len(planes) :]:
+        axis.axis("off")
+    if image is not None:
+        colorbar_axis = fig.add_axes([0.92, 0.15, 0.015, 0.66])
+        fig.colorbar(image, cax=colorbar_axis, label="NCC")
+    fig.suptitle(
+        "Anatomical-depth match quality over time\n"
+        "Block 0 is shaded and shown for settling context but excluded from the drift decision",
+        fontweight="bold",
+    )
+    fig.subplots_adjust(top=0.78, right=0.90, hspace=0.55, wspace=0.38)
     fig.savefig(output, dpi=170, bbox_inches="tight")
     plt.close(fig)
 
@@ -721,6 +876,7 @@ def run_functional_anatomy_qc(
     anatomy_path: str | Path | None = None,
     preprocessing_metadata_path: str | Path | None = None,
     config: FunctionalAnatomyQCConfig | None = None,
+    spatial_manifest_path: str | Path | None = None,
 ) -> dict[str, Any]:
     cfg = config or FunctionalAnatomyQCConfig()
     root = Path(fish_dir)
@@ -729,18 +885,36 @@ def run_functional_anatomy_qc(
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"NCC QC output directory is not empty: {out}")
     out.mkdir(parents=True, exist_ok=True)
-    anatomy_source = Path(anatomy_path) if anatomy_path else discover_raw_in_vivo_anatomy(root)
+    contract_path = Path(spatial_manifest_path) if spatial_manifest_path else canonical_manifest_path(root)
+    spatial_manifest = validate_spatial_manifest(contract_path)
+    manifest_anatomy = spatial_manifest.get("anatomy", {}).get("output_path")
+    anatomy_source = Path(anatomy_path) if anatomy_path else Path(str(manifest_anatomy or ""))
+    if not anatomy_source.exists():
+        raise FileNotFoundError(f"Canonical anatomy from spatial manifest is missing: {anatomy_source}")
     metadata_path = Path(preprocessing_metadata_path) if preprocessing_metadata_path else (
         root / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes" / f"{fish_id}_preprocessing_metadata.json"
     )
-    raw_anatomy = read_raw_anatomy(anatomy_source)
-    z_spacing_um, z_metadata_sources = anatomy_z_spacing_um(root / "01_raw" / "2p" / "metadata")
+    raw_anatomy, anatomy_spacing_xyz_um = read_canonical_anatomy(anatomy_source)
+    z_spacing_um = float(anatomy_spacing_xyz_um[2])
+    z_metadata_sources = [contract_path]
     anatomy_filtered = np.stack(
         [local_unsharp(norm01(image), cfg.sharpen_sigma, cfg.sharpen_amount) for image in raw_anatomy.data_zyx],
         axis=0,
     )
     sessions = load_preprocessing_sessions(metadata_path)
     movies = discover_motion_corrected_movies(root, fish_id)
+    declared_movies = {
+        Path(str(record["output_path"])).resolve()
+        for record in spatial_manifest.get("motion_corrected_movies", [])
+        if isinstance(record, dict) and record.get("output_path")
+    }
+    observed_movies = {path.resolve() for path in movies.values()}
+    if not observed_movies or not observed_movies.issubset(declared_movies):
+        raise ValueError(
+            "NCC motion-corrected inputs are not declared canonical in the spatial manifest: "
+            f"observed={sorted(str(path) for path in observed_movies)}, "
+            f"declared={sorted(str(path) for path in declared_movies)}"
+        )
     requested_planes = {plane for session in sessions for plane in session["output_planes"]}
     missing = sorted(requested_planes - set(movies))
     if missing:
@@ -753,6 +927,8 @@ def run_functional_anatomy_qc(
     interval_rows: list[dict[str, Any]] = []
     profile_rows: list[dict[str, Any]] = []
     plane_rows: list[dict[str, Any]] = []
+    anchor_profile_rows: list[dict[str, Any]] = []
+    references_by_plane: dict[int, np.ndarray] = {}
     started = time.perf_counter()
 
     def execute(task: tuple[dict[str, Any], int, Path]):
@@ -776,33 +952,54 @@ def run_functional_anatomy_qc(
             futures = {executor.submit(execute, task): task for task in tasks}
             for future in as_completed(futures):
                 results.append(future.result())
-    for intervals, profiles, plane in results:
+    for intervals, profiles, plane, anchor_profiles, reference in results:
         interval_rows.extend(intervals)
         profile_rows.extend(profiles)
         plane_rows.append(plane)
+        anchor_profile_rows.extend(anchor_profiles)
+        references_by_plane[int(plane["plane_index"])] = np.asarray(reference, dtype=np.float32)
     elapsed = time.perf_counter() - started
 
     interval_df = pd.DataFrame(interval_rows).sort_values(["session", "plane_index", "interval_index"])
     profile_df = pd.DataFrame(profile_rows).sort_values(["session", "plane_index", "interval_index", "anatomy_z"])
     plane_df = pd.DataFrame(plane_rows).sort_values(["session", "plane_index"])
+    anchor_profile_df = pd.DataFrame(anchor_profile_rows).sort_values(["session", "plane_index", "anatomy_z"])
     summary_df = summarize_sessions(interval_df, cfg, z_spacing_um)
+
+    reference_dir = out / "functional_references"
+    reference_dir.mkdir(parents=True, exist_ok=True)
+    reference_paths: dict[int, Path] = {}
+    for plane_index, reference in sorted(references_by_plane.items()):
+        reference_path = reference_dir / f"{fish_id}_plane{plane_index}_pooled_post_block0_ref.tif"
+        tifffile.imwrite(reference_path, reference)
+        reference_paths[plane_index] = reference_path
+    plane_df["reference_path"] = plane_df["plane_index"].map(
+        lambda plane_index: str(reference_paths[int(plane_index)])
+    )
 
     paths = {
         "intervals": out / "ncc_drift_intervals.csv",
         "profiles": out / "ncc_drift_profiles.csv",
+        "profiles_png": out / "ncc_drift_profiles.png",
         "planes": out / "ncc_scale_bestz_by_plane.csv",
+        "anchor_profiles": out / "ncc_anchor_profiles.csv",
+        "anchor_profiles_png": out / "ncc_best_z_profiles.png",
+        "functional_references": reference_dir,
         "summary": out / "ncc_drift_session_summary.csv",
         "tracks_png": out / "ncc_drift_tracks.png",
     }
     interval_df.to_csv(paths["intervals"], index=False)
     profile_df.to_csv(paths["profiles"], index=False)
     plane_df.to_csv(paths["planes"], index=False)
+    anchor_profile_df.to_csv(paths["anchor_profiles"], index=False)
     summary_df.to_csv(paths["summary"], index=False)
     _render_tracks(interval_df, summary_df, paths["tracks_png"])
+    _render_anchor_profiles(anchor_profile_df, plane_df, paths["anchor_profiles_png"])
+    _render_temporal_profiles(profile_df, paths["profiles_png"])
 
     manifest = {
         "stage": "functional_anatomy_ncc_qc",
-        "version": 2,
+        "version": 4,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "fish_id": fish_id,
         "status": _overall_status(summary_df),
@@ -817,11 +1014,12 @@ def run_functional_anatomy_qc(
         },
         "inputs": {
             "fish_dir": str(root),
-            "raw_anatomy": str(anatomy_source),
+            "canonical_anatomy": str(anatomy_source),
+            "spatial_preprocessing_manifest": str(contract_path),
             "preprocessing_metadata": str(metadata_path),
             "motion_corrected_movies": {str(index): str(path) for index, path in movies.items()},
         },
-        "raw_anatomy_validation": {
+        "canonical_anatomy_validation": {
             "shape_zyx": list(raw_anatomy.data_zyx.shape),
             "source_dtype": raw_anatomy.source_dtype,
             "page_count": raw_anatomy.page_count,
@@ -830,12 +1028,25 @@ def run_functional_anatomy_qc(
             "used_page_stack_fallback": raw_anatomy.used_page_stack_fallback,
             "z_spacing_um": z_spacing_um,
             "z_spacing_metadata_sources": [str(path) for path in z_metadata_sources],
-            "orientation": "acquisition_orientation_preserved",
+            "spacing_xyz_um": list(anatomy_spacing_xyz_um),
+            "xy_frame": CANONICAL_XY_FRAME,
+            "z_frame": REGISTRATION_Z_FRAME,
         },
         "parameters": asdict(cfg),
         "runtime_seconds": elapsed,
         "parallel_workers": workers,
         "outputs": {key: str(path) for key, path in paths.items()},
+        "downstream_handoff": {
+            "schema": "functional_anatomy_ncc_handoff_v1",
+            "authoritative_placement_table": str(paths["planes"]),
+            "authoritative_anchor_profiles": str(paths["anchor_profiles"]),
+            "functional_reference_directory": str(reference_dir),
+            "functional_reference_selection": "pooled_post_block0",
+            "xy_frame": CANONICAL_XY_FRAME,
+            "z_frame": REGISTRATION_Z_FRAME,
+            "reusable_components": ["functional_reference", "scale", "best_z", "ncc_depth_profile", "xy_placement"],
+            "downstream_residual_step": "ants_rigid_affine",
+        },
         "session_summary": summary_df.to_dict(orient="records"),
         "deferred": [
             "Optional segmentation restricted to stable intervals is intentionally deferred until the NCC gate is validated."
@@ -856,6 +1067,7 @@ __all__ = [
     "discover_raw_in_vivo_anatomy",
     "global_xy_depth_profile",
     "quadratic_peak_z",
+    "read_canonical_anatomy",
     "read_raw_anatomy",
     "run_functional_anatomy_qc",
     "tracked_local_depth_profile",

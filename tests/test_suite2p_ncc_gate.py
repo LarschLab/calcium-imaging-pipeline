@@ -11,6 +11,16 @@ from unittest import mock
 import numpy as np
 
 from preprocessing import motion_segmentation_suite2p as stage
+from preprocessing.spatial_preprocessing import PolarityResolution, write_spatial_manifest
+
+
+def _declare_planes(fish: Path, planes: list[Path]) -> None:
+    write_spatial_manifest(
+        fish_dir=fish,
+        polarity=PolarityResolution("south", "test", "resolved", None, None),
+        functional_planes=[{"output_path": str(path)} for path in planes],
+        anatomy={"output_path": str(fish / "canonical_anatomy.nrrd")},
+    )
 
 
 class Suite2PNCCGateTests(unittest.TestCase):
@@ -71,8 +81,14 @@ class Suite2PNCCGateTests(unittest.TestCase):
                 np.save(plane_dir / "stat.npy", np.asarray([], dtype=object))
                 return ops
 
-            run_s2p_module = importlib.import_module("suite2p.run_s2p")
-            with mock.patch.object(run_s2p_module, "run_plane", side_effect=fake_run_plane):
+            run_s2p_module = types.ModuleType("suite2p.run_s2p")
+            run_s2p_module.run_plane = fake_run_plane
+            suite2p_module = types.ModuleType("suite2p")
+            suite2p_module.run_s2p = run_s2p_module
+            with mock.patch.dict(
+                sys.modules,
+                {"suite2p": suite2p_module, "suite2p.run_s2p": run_s2p_module},
+            ):
                 stage.resume_suite2p_segmentation(plane_dir, delete_bin=False)
 
     def test_enforced_gate_stops_before_segmentation_and_preserves_registration(self) -> None:
@@ -80,7 +96,9 @@ class Suite2PNCCGateTests(unittest.TestCase):
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
             preprocessed.mkdir(parents=True)
-            (preprocessed / "L000_f00_plane0.tif").touch()
+            plane_path = preprocessed / "L000_f00_plane0.tif"
+            plane_path.touch()
+            _declare_planes(fish, [plane_path])
             def fake_registration(_plane_file, _ops, save_path0, _fps, _fast_disk):
                 registered = Path(save_path0) / "suite2p/plane0"
                 registered.mkdir(parents=True)
@@ -115,7 +133,9 @@ class Suite2PNCCGateTests(unittest.TestCase):
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
             preprocessed.mkdir(parents=True)
-            (preprocessed / "L000_f00_plane0.tif").touch()
+            plane_path = preprocessed / "L000_f00_plane0.tif"
+            plane_path.touch()
+            _declare_planes(fish, [plane_path])
             registered = fish / "03_analysis/functional/suite2P/_ncc_gate_registration/plane0/suite2p/plane0"
 
             def fake_registration(_plane_file, _ops, save_path0, _fps, _fast_disk):
@@ -153,6 +173,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             preprocessed.mkdir(parents=True)
             for plane in (0, 1):
                 (preprocessed / f"L000_f00_plane{plane}.tif").touch()
+            _declare_planes(fish, [preprocessed / f"L000_f00_plane{plane}.tif" for plane in (0, 1)])
             fast_disk = Path(temporary) / "fast"
             observed_fast_disks = []
 

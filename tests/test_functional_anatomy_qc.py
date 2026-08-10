@@ -9,6 +9,18 @@ import unittest
 import numpy as np
 import pandas as pd
 import tifffile
+import SimpleITK as sitk
+
+from preprocessing.spatial_preprocessing import (
+    PolarityResolution,
+    apply_canonical_xy,
+    canonical_manifest_path,
+    preprocess_anatomy,
+    record_motion_corrected_output,
+    resolve_polarity,
+    signed_integer_to_uint8,
+    write_spatial_manifest,
+)
 
 from preprocessing.functional_anatomy_qc import (
     FunctionalAnatomyQCConfig,
@@ -70,10 +82,74 @@ def _make_fish(root: Path, *, drifting: bool = False) -> Path:
         ],
     }
     (pre_dir / "L000_f00_preprocessing_metadata.json").write_text(json.dumps(metadata))
+    canonical_anatomy = fish / "02_reg" / "00_preprocessing" / "2p_anatomy" / "L000_f00_anatomy_2P_GCaMP.nrrd"
+    canonical_anatomy.parent.mkdir(parents=True)
+    image = sitk.GetImageFromArray(anatomy.astype(np.uint8))
+    image.SetSpacing((1.0, 1.0, 2.0))
+    sitk.WriteImage(image, str(canonical_anatomy), useCompression=False)
+    write_spatial_manifest(
+        fish_dir=fish,
+        polarity=PolarityResolution("south", "raw_metadata", "resolved", "run_metadata.csv", None),
+        functional_planes=[],
+        anatomy={"output_path": str(canonical_anatomy)},
+        sessions=metadata["sessions"],
+    )
+    for plane_index in (0, 1):
+        record_motion_corrected_output(
+            fish,
+            plane_index=plane_index,
+            output_path=movie_dir / f"L000_f00_plane{plane_index}_mcorrected.tif",
+            suite2p_plane_dir=fish / "03_analysis" / "functional" / "suite2P" / f"plane{plane_index}",
+        )
     return fish
 
 
 class FunctionalAnatomyQCTests(unittest.TestCase):
+    def test_direct_orientation_transforms(self) -> None:
+        array = np.asarray([[1, 2], [3, 4]])
+        np.testing.assert_array_equal(apply_canonical_xy(array, "north"), [[3, 4], [1, 2]])
+        np.testing.assert_array_equal(apply_canonical_xy(array, "south"), [[2, 1], [4, 3]])
+
+    def test_missing_metadata_uses_accepted_classifier_but_conflict_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            fish.mkdir()
+            resolved = resolve_polarity(
+                fish,
+                classifier_prediction={"polarity": "south", "status": "predicted", "model_name": "test"},
+            )
+            self.assertEqual((resolved.polarity, resolved.source), ("south", "anatomy_classifier"))
+
+            metadata = fish / "01_raw" / "2p" / "metadata"
+            metadata.mkdir(parents=True)
+            (metadata / "run_metadata.csv").write_text("parameter,value\nfish_orientation,north\n")
+            with self.assertRaisesRegex(RuntimeError, "conflicts"):
+                resolve_polarity(
+                    fish,
+                    classifier_prediction={"polarity": "south", "status": "predicted", "model_name": "test"},
+                )
+
+    def test_anatomy_preprocess_applies_xy_then_z_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw = np.arange(2 * 3 * 4, dtype=np.int16).reshape(2, 3, 4) - 3
+            source = root / "anatomy.tif"
+            output = root / "anatomy.nrrd"
+            tifffile.imwrite(source, raw, photometric="minisblack")
+            record = preprocess_anatomy(
+                anatomy_path=source,
+                output_path=output,
+                polarity="north",
+                source_spacing_xyz_um=(1.0, 1.0, 2.0),
+                target_xy_shape=(3, 4),
+            )
+            observed = sitk.GetArrayFromImage(sitk.ReadImage(str(output)))
+            self.assertEqual(observed.dtype, np.uint8)
+            converted, _ = signed_integer_to_uint8(raw)
+            expected = np.flip(apply_canonical_xy(converted, "north"), axis=0)
+            np.testing.assert_array_equal(observed, expected)
+            self.assertEqual(record["xy_transform"], "flipY")
+            self.assertEqual(record["z_transform"], "flipZ")
     def test_blocks_are_split_into_thirds_and_block_zero_is_named_explicitly(self) -> None:
         self.assertEqual(
             block_third_bounds(30, 3),
@@ -159,6 +235,20 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertFalse((output / "ncc_xy_engine_comparison.csv").exists())
             self.assertFalse((output / "ncc_xy_engine_comparison.png").exists())
             self.assertGreater((output / "ncc_drift_tracks.png").stat().st_size, 0)
+            self.assertGreater((output / "ncc_drift_profiles.png").stat().st_size, 0)
+            self.assertGreater((output / "ncc_best_z_profiles.png").stat().st_size, 0)
+            anchor_profiles = pd.read_csv(output / "ncc_anchor_profiles.csv")
+            self.assertEqual(anchor_profiles["plane_index"].nunique(), 2)
+            placements = pd.read_csv(output / "ncc_scale_bestz_by_plane.csv")
+            self.assertTrue({"best_z", "best_z_subslice", "max_ncc", "placement_x", "placement_y"}.issubset(placements.columns))
+            for reference_path in placements["reference_path"]:
+                self.assertTrue(Path(reference_path).is_file())
+            self.assertEqual(manifest["version"], 4)
+            self.assertEqual(manifest["downstream_handoff"]["schema"], "functional_anatomy_ncc_handoff_v1")
+            self.assertEqual(
+                manifest["downstream_handoff"]["reusable_components"],
+                ["functional_reference", "scale", "best_z", "ncc_depth_profile", "xy_placement"],
+            )
             self.assertEqual(
                 manifest["placement_method"]["name"],
                 "tracked_local_xy_with_global_fallback",

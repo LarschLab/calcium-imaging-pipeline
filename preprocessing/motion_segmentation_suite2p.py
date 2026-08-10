@@ -1,4 +1,11 @@
-import suite2p
+try:
+    import suite2p
+except ImportError:  # pragma: no cover - allows contract tests without Suite2P installed
+    class _MissingSuite2P:
+        def run_s2p(self, **_kwargs):
+            raise ImportError("Suite2P is required to run registration/segmentation")
+
+    suite2p = _MissingSuite2P()
 from pathlib import Path
 import numpy as np
 import shutil
@@ -10,7 +17,28 @@ import json
 import subprocess
 import tifffile as tf
 
+from preprocessing.spatial_preprocessing import (
+    canonical_manifest_path,
+    record_motion_corrected_output,
+    validate_spatial_manifest,
+)
+
 NCC_GATE_MODES = {"report_only", "enforce"}
+
+
+def validate_canonical_plane_input(fish_folder, plane_file):
+    """Fail closed if Suite2P input is not declared canonical by the manifest."""
+    fish = Path(fish_folder)
+    plane = Path(plane_file).resolve()
+    manifest = validate_spatial_manifest(canonical_manifest_path(fish))
+    declared = {
+        Path(str(record.get("output_path"))).resolve()
+        for record in manifest.get("functional_planes", [])
+        if record.get("output_path")
+    }
+    if plane not in declared:
+        raise ValueError(f"Suite2P input is not declared in the canonical spatial manifest: {plane}")
+    return manifest
 
 def get_file_index(path: Path) -> int:
     """Extract numeric index from filenames like 'file005000_chan0.tif'."""
@@ -240,9 +268,16 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
         if plane_file is None:
             print(f"⚠️ Plane {plane_idx} not found.")
             continue
+        validate_canonical_plane_input(fish_folder, plane_file)
         print(f"Processing plane {plane_idx} → {plane_file.name}")
         run_suite2p(plane_file, global_ops, analysis_s2p_folder, fps, fast_disk)
         src_folder = move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_folder.name)
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=src_folder,
+        )
         
         if storage_root is not None and src_folder:
             storage_root_p = Path(storage_root)
@@ -299,6 +334,7 @@ def process_fish_with_ncc_gate(
         plane_file = find_plane_file(pre_dir, plane_idx)
         if plane_file is None:
             raise FileNotFoundError(f"Preprocessed plane {plane_idx} not found under {pre_dir}")
+        validate_canonical_plane_input(fish_folder, plane_file)
         stage_root = gate_root / f"plane{plane_idx}"
         plane_fast_disk = None
         if fast_disk is not None:
@@ -316,6 +352,12 @@ def process_fish_with_ncc_gate(
         join_reg_tiffs_to_one(
             registered_plane_dir / "reg_tif",
             mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+        )
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=registered_plane_dir,
         )
 
     if ncc_output_dir is None:
@@ -373,6 +415,12 @@ def process_fish_with_ncc_gate(
             registered_plane_dir,
             analysis_s2p_folder,
             fish_folder.name,
+        )
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=destination,
         )
         destinations[str(plane_idx)] = str(destination)
         if storage_root is not None:

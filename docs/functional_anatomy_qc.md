@@ -1,13 +1,14 @@
 # Functional-anatomy NCC QC
 
 This preprocessing gate runs after Suite2P motion registration and before ROI
-segmentation. It uses the raw in-vivo 2P anatomy TIFF in acquisition
-orientation, estimates per-plane scale and best anatomy Z, and measures
+segmentation. It uses the registration-ready in-vivo 2P anatomy NRRD in the
+same canonical XY frame as Suite2P, estimates per-plane scale and best anatomy Z, and measures
 temporal Z drift for every acquisition block. Every block is divided into
 thirds; Block 0 is shown for settling assessment but excluded from the
 scientific drift decision.
 
-The existing combined Suite2P path remains unchanged. The opt-in gated entry
+Both Suite2P entry points validate their input plane TIFFs against the canonical
+spatial preprocessing manifest. The opt-in gated entry
 point runs registration-only Suite2P, performs NCC QC, and resumes segmentation
 from the retained registered binary. Use `report_only` during parity validation;
 `enforce` stops before segmentation unless the result is `pass_candidate`.
@@ -22,11 +23,18 @@ Suite2P environment when `--ncc-python` points to a separate scientific Python.
 
 Outputs live under `<fish>/03_analysis/functional/ncc/`. Validation runs should
 use a unique subdirectory under `validation/` and must not overwrite accepted
-results. The stage writes interval measurements, full NCC depth profiles,
-per-plane scale/best-Z placements, session summaries, one depth-stability QC
-PNG, and a provenance manifest. Temporal
+results. The stage writes interval measurements, full temporal and pooled-reference
+NCC depth profiles, per-plane scale/best-Z/XY placements, one pooled
+post-Block-0 reference TIFF per plane, session summaries, depth-stability and
+NCC-profile QC PNGs, and a provenance manifest. Temporal
 placement uses tracked-local XY with an automatic full-frame safety fallback
 when the local match is weak or reaches the search-window boundary.
+
+The version-4 manifest is the downstream handoff contract. Because functional
+movies and anatomy already share the declared canonical XY frame and anatomy
+already uses registration Z, codeANTs can reuse the saved reference, scale,
+best Z, full depth profile, and XY placement without repeating the NCC search.
+ANTs remains a downstream residual-refinement step.
 
 `pass_candidate`, `review_required`, and `fail_candidate` are screening states,
 not automatic scientific acceptance. The default material-drift threshold is
@@ -34,10 +42,11 @@ not automatic scientific acceptance. The default material-drift threshold is
 the manifest records the exact thresholds and always marks scientific review
 as required.
 
-The raw in-vivo anatomy TIFF is read directly from
-`01_raw/2p/anatomy/`. Its acquisition XY orientation and Z order are preserved.
-The reader validates the physical TIFF pages and falls back to page-wise
-stacking when embedded series metadata reports an inconsistent frame count.
+The NCC stage reads
+`02_reg/00_preprocessing/2p_anatomy/<fish>_anatomy_2P_GCaMP.nrrd` through
+SimpleITK as Z,Y,X. The spatial manifest must declare canonical functional and
+anatomy XY plus registration Z; absent, unknown, or contradictory frames stop
+the stage. Best-Z indices therefore already use registration Z.
 
 ## Deferred follow-up
 
@@ -69,11 +78,17 @@ coherent-drift cases, two real fish, and a Suite2P split-path parity check.
 - On a 600-frame L758_f04 plane, combined Suite2P and split registration then
   segmentation both produced 419 ROIs, identical offsets, identical `F`, and
   identical `iscell`. Split runtime was 37.9 s versus 46.2 s combined.
+- On 2026-08-10, an isolated Helga/J: run used a 27-fish model trained only
+  from raw metadata; acquisition-group-held-out validation was 27/27 correct
+  and unanimous. Missing-metadata `L395_f11` predicted south unanimously.
+  Direct functional transforms exactly matched the prior effective transforms,
+  and the new anatomy output exactly matched the legacy oriented uint8 TIFF
+  after the required Z reversal. It did not match the pre-existing NRRD, which
+  is therefore treated as stale/internally inconsistent and was not modified.
 
-The raw anatomy and prior project-specific canonical NRRD can have opposite Z
-index directions. Therefore the sign of delta Z is meaningful only relative to
-the manifest-recorded input stack; drift magnitude and temporal shape remain
-comparable.
+Pre-migration QC manifests that used raw anatomy have a different Z index
+direction and must be treated as legacy-frame results. New best-Z and delta-Z
+values are defined in the manifest-recorded registration Z frame.
 
 These empirical benchmarks justified removing the duplicated global temporal
 analysis and comparison figure from production output. Tracked-local placement
