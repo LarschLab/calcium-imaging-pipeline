@@ -333,6 +333,8 @@ def pooled_analysis_reference(
 ) -> np.ndarray:
     target = Path(movie_path)
     frame_count, _, _ = movie_shape(target)
+    if block_count < 2:
+        raise ValueError("block_count must be >= 2 so Block 0 can be excluded from pooled-reference analysis")
     if frame_count % block_count != 0:
         raise ValueError(f"Movie frames do not divide evenly across blocks: {target}")
     first_analysis_frame = frame_count // block_count
