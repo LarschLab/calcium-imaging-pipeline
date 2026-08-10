@@ -146,6 +146,49 @@ class Suite2PNCCGateTests(unittest.TestCase):
             self.assertTrue(result["segmentation_ran"])
             resume.assert_called_once_with(registered, delete_bin=True)
 
+    def test_multiplane_registration_uses_isolated_fast_disk_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+            preprocessed.mkdir(parents=True)
+            for plane in (0, 1):
+                (preprocessed / f"L000_f00_plane{plane}.tif").touch()
+            fast_disk = Path(temporary) / "fast"
+            observed_fast_disks = []
+
+            def fake_registration(_plane_file, _ops, save_path0, _fps, plane_fast_disk):
+                observed_fast_disks.append(Path(plane_fast_disk))
+                registered = Path(save_path0) / "suite2p/plane0"
+                registered.mkdir(parents=True)
+                return registered
+
+            fake_ncc_module = types.ModuleType("preprocessing.functional_anatomy_qc")
+            fake_ncc_module.FunctionalAnatomyQCConfig = lambda **_kwargs: object()
+            fake_ncc_module.run_functional_anatomy_qc = lambda **_kwargs: {"status": "review_required"}
+
+            with (
+                mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
+                mock.patch.object(stage, "join_reg_tiffs_to_one"),
+                mock.patch.dict(sys.modules, {"preprocessing.functional_anatomy_qc": fake_ncc_module}),
+                mock.patch.object(stage, "resume_suite2p_segmentation"),
+                mock.patch.object(stage, "move_segmentation_files", return_value=fish / "output"),
+            ):
+                stage.process_fish_with_ncc_gate(
+                    fish,
+                    {},
+                    [0, 1],
+                    2.0,
+                    fast_disk=fast_disk,
+                    gate_mode="report_only",
+                    ncc_output_dir=fish / "ncc",
+                )
+
+            self.assertEqual(
+                observed_fast_disks,
+                [fast_disk / "L000_f00/plane0", fast_disk / "L000_f00/plane1"],
+            )
+            self.assertNotEqual(observed_fast_disks[0], observed_fast_disks[1])
+
 
 if __name__ == "__main__":
     unittest.main()

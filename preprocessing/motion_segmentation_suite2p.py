@@ -300,13 +300,17 @@ def process_fish_with_ncc_gate(
         if plane_file is None:
             raise FileNotFoundError(f"Preprocessed plane {plane_idx} not found under {pre_dir}")
         stage_root = gate_root / f"plane{plane_idx}"
+        plane_fast_disk = None
+        if fast_disk is not None:
+            plane_fast_disk = Path(fast_disk) / fish_folder.name / f"plane{plane_idx}"
+            plane_fast_disk.mkdir(parents=True, exist_ok=True)
         print(f"Registration-only plane {plane_idx} -> {plane_file.name}")
         registered_plane_dir = run_suite2p_registration_only(
             plane_file,
             global_ops,
             stage_root,
             fps,
-            fast_disk,
+            plane_fast_disk,
         )
         registered_by_plane[int(plane_idx)] = registered_plane_dir
         join_reg_tiffs_to_one(
