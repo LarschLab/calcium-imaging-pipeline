@@ -487,29 +487,6 @@ def tracked_local_depth_profile(
     }
 
 
-def global_depth_result(
-    interval_reference: np.ndarray,
-    anatomy_zyx: np.ndarray,
-    *,
-    scale: float,
-) -> dict[str, Any]:
-    scores, xs, ys = global_xy_depth_profile(scale_image(interval_reference, scale), anatomy_zyx)
-    best_z = int(np.nanargmax(scores))
-    return {
-        "scores": scores,
-        "best_z": best_z,
-        "best_z_subslice": quadratic_peak_z(scores),
-        "max_score": float(scores[best_z]),
-        "x": int(xs[best_z]),
-        "y": int(ys[best_z]),
-        "functional_shift_x": np.nan,
-        "functional_shift_y": np.nan,
-        "predicted_x": np.nan,
-        "predicted_y": np.nan,
-        "fallback_reason": None,
-    }
-
-
 def _plane_index(path: Path) -> int:
     match = re.search(r"plane(\d+)", path.name)
     if match is None:
@@ -544,88 +521,62 @@ def _run_plane(
 
     interval_rows: list[dict[str, Any]] = []
     profile_rows: list[dict[str, Any]] = []
-    comparison_rows: list[dict[str, Any]] = []
     for interval_index, (reference, bounds_pair, label) in enumerate(zip(references, bounds, labels)):
-        engine_results: dict[str, dict[str, Any]] = {}
-        for engine in ("global_xy", "tracked_local_xy"):
-            started = time.perf_counter()
-            if engine == "global_xy":
-                result = global_depth_result(reference, anatomy_filtered, scale=float(placement["scale"]))
-            else:
-                result = tracked_local_depth_profile(
-                    reference,
-                    canonical,
-                    anatomy_filtered,
-                    scale=float(placement["scale"]),
-                    canonical_x=int(placement["x"]),
-                    canonical_y=int(placement["y"]),
-                    config=config,
-                )
-            result["runtime_seconds"] = time.perf_counter() - started
-            engine_results[engine] = result
-            start, stop = bounds_pair
-            interval_rows.append(
-                {
-                    "fish_id": fish_id,
-                    "session": session["session_label"],
-                    "plane_index": plane_index,
-                    "interval_index": interval_index,
-                    "interval_label": label,
-                    "block_index": interval_index // 3,
-                    "block_third_index": interval_index % 3,
-                    "included_in_drift_gate": interval_index // 3 > 0,
-                    "frame_start": start,
-                    "frame_stop": stop,
-                    "scale": float(placement["scale"]),
-                    "engine": engine,
-                    "best_z": result["best_z"],
-                    "best_z_subslice": result["best_z_subslice"],
-                    "best_z_um": result["best_z_subslice"] * z_spacing_um,
-                    "max_score": result["max_score"],
-                    "x": result["x"],
-                    "y": result["y"],
-                    "functional_shift_x": result["functional_shift_x"],
-                    "functional_shift_y": result["functional_shift_y"],
-                    "predicted_x": result["predicted_x"],
-                    "predicted_y": result["predicted_y"],
-                    "fallback_reason": result["fallback_reason"],
-                    "runtime_seconds": result["runtime_seconds"],
-                }
-            )
-            profile_rows.extend(
-                {
-                    "fish_id": fish_id,
-                    "session": session["session_label"],
-                    "plane_index": plane_index,
-                    "interval_index": interval_index,
-                    "interval_label": label,
-                    "block_index": interval_index // 3,
-                    "included_in_drift_gate": interval_index // 3 > 0,
-                    "engine": engine,
-                    "anatomy_z": z_index,
-                    "anatomy_z_um": z_index * z_spacing_um,
-                    "ncc": float(score),
-                }
-                for z_index, score in enumerate(result["scores"])
-            )
-        global_result = engine_results["global_xy"]
-        local_result = engine_results["tracked_local_xy"]
-        comparison_rows.append(
+        started = time.perf_counter()
+        result = tracked_local_depth_profile(
+            reference,
+            canonical,
+            anatomy_filtered,
+            scale=float(placement["scale"]),
+            canonical_x=int(placement["x"]),
+            canonical_y=int(placement["y"]),
+            config=config,
+        )
+        runtime_seconds = time.perf_counter() - started
+        start, stop = bounds_pair
+        interval_rows.append(
             {
                 "fish_id": fish_id,
                 "session": session["session_label"],
                 "plane_index": plane_index,
                 "interval_index": interval_index,
                 "interval_label": label,
+                "block_index": interval_index // 3,
+                "block_third_index": interval_index % 3,
                 "included_in_drift_gate": interval_index // 3 > 0,
-                "best_z_difference_slices": local_result["best_z_subslice"] - global_result["best_z_subslice"],
-                "max_ncc_difference": local_result["max_score"] - global_result["max_score"],
-                "profile_correlation": corrcoef_img(local_result["scores"], global_result["scores"]),
-                "global_runtime_seconds": global_result["runtime_seconds"],
-                "tracked_local_runtime_seconds": local_result["runtime_seconds"],
-                "runtime_speedup": global_result["runtime_seconds"] / max(local_result["runtime_seconds"], 1e-12),
-                "tracked_local_fallback_reason": local_result["fallback_reason"],
+                "frame_start": start,
+                "frame_stop": stop,
+                "scale": float(placement["scale"]),
+                "placement_method": "tracked_local_xy_with_global_fallback",
+                "best_z": result["best_z"],
+                "best_z_subslice": result["best_z_subslice"],
+                "best_z_um": result["best_z_subslice"] * z_spacing_um,
+                "max_score": result["max_score"],
+                "x": result["x"],
+                "y": result["y"],
+                "functional_shift_x": result["functional_shift_x"],
+                "functional_shift_y": result["functional_shift_y"],
+                "predicted_x": result["predicted_x"],
+                "predicted_y": result["predicted_y"],
+                "fallback_reason": result["fallback_reason"],
+                "runtime_seconds": runtime_seconds,
             }
+        )
+        profile_rows.extend(
+            {
+                "fish_id": fish_id,
+                "session": session["session_label"],
+                "plane_index": plane_index,
+                "interval_index": interval_index,
+                "interval_label": label,
+                "block_index": interval_index // 3,
+                "included_in_drift_gate": interval_index // 3 > 0,
+                "placement_method": "tracked_local_xy_with_global_fallback",
+                "anatomy_z": z_index,
+                "anatomy_z_um": z_index * z_spacing_um,
+                "ncc": float(score),
+            }
+            for z_index, score in enumerate(result["scores"])
         )
     plane_summary = {
         "fish_id": fish_id,
@@ -640,7 +591,7 @@ def _run_plane(
         "scale_search_seconds": scale_seconds,
         "block_count": block_count,
     }
-    return interval_rows, profile_rows, {"plane": plane_summary, "comparisons": comparison_rows}
+    return interval_rows, profile_rows, plane_summary
 
 
 def _direction_fraction(changes: np.ndarray, consensus: float) -> float:
@@ -652,7 +603,7 @@ def _direction_fraction(changes: np.ndarray, consensus: float) -> float:
 
 def summarize_sessions(interval_df: pd.DataFrame, config: FunctionalAnatomyQCConfig, z_spacing_um: float) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    for (fish_id, session, engine), group in interval_df.groupby(["fish_id", "session", "engine"]):
+    for (fish_id, session), group in interval_df.groupby(["fish_id", "session"]):
         eligible = group[group["included_in_drift_gate"]].copy()
         changes = []
         ranges = []
@@ -701,7 +652,7 @@ def summarize_sessions(interval_df: pd.DataFrame, config: FunctionalAnatomyQCCon
             {
                 "fish_id": fish_id,
                 "session": session,
-                "engine": engine,
+                "placement_method": "tracked_local_xy_with_global_fallback",
                 "plane_count": int(eligible["plane_index"].nunique()),
                 "analysis_interval_count": int(eligible["interval_index"].nunique()),
                 "block0_included_in_figures": True,
@@ -721,8 +672,8 @@ def summarize_sessions(interval_df: pd.DataFrame, config: FunctionalAnatomyQCCon
     return pd.DataFrame(rows)
 
 
-def _overall_status(summary_df: pd.DataFrame, engine: str) -> str:
-    statuses = set(summary_df[summary_df["engine"] == engine]["status"])
+def _overall_status(summary_df: pd.DataFrame) -> str:
+    statuses = set(summary_df["status"])
     if "fail_candidate" in statuses:
         return "fail_candidate"
     if "review_required" in statuses:
@@ -731,47 +682,34 @@ def _overall_status(summary_df: pd.DataFrame, engine: str) -> str:
 
 
 def _render_tracks(interval_df: pd.DataFrame, summary_df: pd.DataFrame, output: Path) -> None:
-    engines = ("global_xy", "tracked_local_xy")
     sessions = sorted(interval_df["session"].unique())
-    fig, axes = plt.subplots(len(sessions), len(engines), figsize=(15, 4.5 * len(sessions)), squeeze=False)
+    fig, axes = plt.subplots(len(sessions), 1, figsize=(11, 4.8 * len(sessions)), squeeze=False)
     for row, session in enumerate(sessions):
-        for column, engine in enumerate(engines):
-            ax = axes[row, column]
-            subset = interval_df[(interval_df["session"] == session) & (interval_df["engine"] == engine)]
-            for plane, group in subset.groupby("plane_index"):
-                ordered = group.sort_values("interval_index")
-                ax.plot(ordered["interval_index"], ordered["best_z_subslice"], marker="o", label=f"plane {plane}")
-            labels = subset.sort_values("interval_index").drop_duplicates("interval_index")["interval_label"].tolist()
-            ax.set_xticks(range(len(labels)), labels, rotation=35, ha="right")
-            ax.axvspan(-0.5, 2.5, color="0.8", alpha=0.35, label="Block 0 excluded from gate")
-            summary = summary_df[(summary_df["session"] == session) & (summary_df["engine"] == engine)].iloc[0]
-            ax.set_title(
-                f"{session} — {engine}\n{summary['status']}; ΔZ={summary['consensus_change_slices']:+.2f} slices"
-            )
-            ax.set_ylabel("Best anatomy Z (sub-slice NCC peak)")
-            ax.grid(alpha=0.2)
-            ax.legend(fontsize=7, ncol=2)
-    fig.suptitle("Temporal NCC Z tracks; every block shown in thirds", fontweight="bold")
-    fig.tight_layout()
-    fig.savefig(output, dpi=170, bbox_inches="tight")
-    plt.close(fig)
-
-
-def _render_engine_comparison(comparison_df: pd.DataFrame, output: Path) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-    axes[0].scatter(comparison_df["best_z_difference_slices"], comparison_df["max_ncc_difference"], alpha=0.7)
-    axes[0].axvline(0, color="0.4", linewidth=1)
-    axes[0].axhline(0, color="0.4", linewidth=1)
-    axes[0].set_xlabel("Tracked-local minus global best Z (slices)")
-    axes[0].set_ylabel("Tracked-local minus global max NCC")
-    axes[1].hist(comparison_df["profile_correlation"], bins=20)
-    axes[1].set_xlabel("NCC depth-profile correlation")
-    axes[1].set_ylabel("Intervals")
-    axes[2].hist(comparison_df["runtime_speedup"].clip(upper=comparison_df["runtime_speedup"].quantile(0.99)), bins=20)
-    axes[2].set_xlabel("Global / tracked-local runtime")
-    axes[2].set_ylabel("Intervals")
-    fig.suptitle("Tracked-local XY versus global XY NCC", fontweight="bold")
-    fig.tight_layout()
+        ax = axes[row, 0]
+        subset = interval_df[interval_df["session"] == session]
+        for plane, group in subset.groupby("plane_index"):
+            ordered = group.sort_values("interval_index")
+            ax.plot(ordered["interval_index"], ordered["best_z_subslice"], marker="o", label=f"plane {plane}")
+        labels = subset.sort_values("interval_index").drop_duplicates("interval_index")["interval_label"].tolist()
+        ax.set_xticks(range(len(labels)), labels, rotation=35, ha="right")
+        ax.axvspan(-0.5, 2.5, color="0.8", alpha=0.35, label="Initial settling block (excluded from drift calculation)")
+        summary = summary_df[summary_df["session"] == session].iloc[0]
+        status = str(summary["status"]).replace("_", " ").upper()
+        planes = sorted(int(value) for value in subset["plane_index"].unique())
+        ax.set_title(
+            f"Session {session}: functional planes {planes[0]}–{planes[-1]}\n"
+            f"Drift gate: {status} | median ΔZ = {summary['consensus_change_slices']:+.2f} slices "
+            f"({summary['consensus_change_um']:+.2f} µm)"
+        )
+        ax.set_ylabel("Matched raw-anatomy depth\n(sub-slice Z index)")
+        ax.grid(alpha=0.2)
+        ax.legend(fontsize=8, ncol=3)
+    fig.suptitle(
+        "Functional-plane depth stability over time\n"
+        "NCC placement in raw anatomy; each acquisition block is shown in thirds",
+        fontweight="bold",
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
     fig.savefig(output, dpi=170, bbox_inches="tight")
     plt.close(fig)
 
@@ -815,7 +753,6 @@ def run_functional_anatomy_qc(
     interval_rows: list[dict[str, Any]] = []
     profile_rows: list[dict[str, Any]] = []
     plane_rows: list[dict[str, Any]] = []
-    comparison_rows: list[dict[str, Any]] = []
     started = time.perf_counter()
 
     def execute(task: tuple[dict[str, Any], int, Path]):
@@ -839,17 +776,15 @@ def run_functional_anatomy_qc(
             futures = {executor.submit(execute, task): task for task in tasks}
             for future in as_completed(futures):
                 results.append(future.result())
-    for intervals, profiles, extras in results:
+    for intervals, profiles, plane in results:
         interval_rows.extend(intervals)
         profile_rows.extend(profiles)
-        plane_rows.append(extras["plane"])
-        comparison_rows.extend(extras["comparisons"])
+        plane_rows.append(plane)
     elapsed = time.perf_counter() - started
 
-    interval_df = pd.DataFrame(interval_rows).sort_values(["session", "plane_index", "interval_index", "engine"])
-    profile_df = pd.DataFrame(profile_rows).sort_values(["session", "plane_index", "interval_index", "engine", "anatomy_z"])
+    interval_df = pd.DataFrame(interval_rows).sort_values(["session", "plane_index", "interval_index"])
+    profile_df = pd.DataFrame(profile_rows).sort_values(["session", "plane_index", "interval_index", "anatomy_z"])
     plane_df = pd.DataFrame(plane_rows).sort_values(["session", "plane_index"])
-    comparison_df = pd.DataFrame(comparison_rows).sort_values(["session", "plane_index", "interval_index"])
     summary_df = summarize_sessions(interval_df, cfg, z_spacing_um)
 
     paths = {
@@ -857,26 +792,29 @@ def run_functional_anatomy_qc(
         "profiles": out / "ncc_drift_profiles.csv",
         "planes": out / "ncc_scale_bestz_by_plane.csv",
         "summary": out / "ncc_drift_session_summary.csv",
-        "comparison": out / "ncc_xy_engine_comparison.csv",
         "tracks_png": out / "ncc_drift_tracks.png",
-        "comparison_png": out / "ncc_xy_engine_comparison.png",
     }
     interval_df.to_csv(paths["intervals"], index=False)
     profile_df.to_csv(paths["profiles"], index=False)
     plane_df.to_csv(paths["planes"], index=False)
     summary_df.to_csv(paths["summary"], index=False)
-    comparison_df.to_csv(paths["comparison"], index=False)
     _render_tracks(interval_df, summary_df, paths["tracks_png"])
-    _render_engine_comparison(comparison_df, paths["comparison_png"])
 
     manifest = {
         "stage": "functional_anatomy_ncc_qc",
-        "version": 1,
+        "version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "fish_id": fish_id,
-        "status": _overall_status(summary_df, "tracked_local_xy"),
-        "reference_status": _overall_status(summary_df, "global_xy"),
+        "status": _overall_status(summary_df),
         "scientific_review_required": True,
+        "placement_method": {
+            "name": "tracked_local_xy_with_global_fallback",
+            "validation": (
+                "Promoted after real-data benchmarks reproduced global best Z and maximum NCC without loss "
+                "of depth-profile quality while reducing runtime. Full-frame matching remains the safety "
+                "fallback when the tracked local optimum is weak or touches the local-search boundary."
+            ),
+        },
         "inputs": {
             "fish_dir": str(root),
             "raw_anatomy": str(anatomy_source),

@@ -150,11 +150,19 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             summary = pd.read_csv(output / "ncc_drift_session_summary.csv")
             self.assertEqual(set(summary["status"]), {"pass_candidate"})
             self.assertEqual(manifest["status"], "pass_candidate")
-            comparison = pd.read_csv(output / "ncc_xy_engine_comparison.csv")
-            self.assertLess(float(comparison["best_z_difference_slices"].abs().max()), 0.1)
-            self.assertGreater(float(comparison["profile_correlation"].median()), 0.95)
+            self.assertEqual(len(intervals), 2 * 9)
+            self.assertEqual(
+                set(intervals["placement_method"]),
+                {"tracked_local_xy_with_global_fallback"},
+            )
+            self.assertNotIn("engine", intervals.columns)
+            self.assertFalse((output / "ncc_xy_engine_comparison.csv").exists())
+            self.assertFalse((output / "ncc_xy_engine_comparison.png").exists())
             self.assertGreater((output / "ncc_drift_tracks.png").stat().st_size, 0)
-            self.assertGreater((output / "ncc_xy_engine_comparison.png").stat().st_size, 0)
+            self.assertEqual(
+                manifest["placement_method"]["name"],
+                "tracked_local_xy_with_global_fallback",
+            )
 
     def test_end_to_end_qc_fails_coherent_post_block_zero_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -7,9 +7,10 @@ and functional-anatomy quality control.
 
 The opt-in NCC stage runs after Suite2P motion registration and before ROI
 segmentation. It uses the raw in-vivo anatomy TIFF, searches per-plane scaling
-and best anatomy Z, and assesses temporal Z drift. Every acquisition block is
-shown in thirds. Block 0 is included to visualize settling but excluded from
-the drift decision.
+and best anatomy Z, and assesses temporal Z drift with empirically validated
+tracked-local XY placement plus a conservative full-frame fallback. Every
+acquisition block is shown in thirds. Block 0 is included to visualize settling
+but excluded from the drift decision.
 
 Run NCC against existing motion-corrected movies:
 

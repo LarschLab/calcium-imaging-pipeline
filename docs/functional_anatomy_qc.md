@@ -23,8 +23,10 @@ Suite2P environment when `--ncc-python` points to a separate scientific Python.
 Outputs live under `<fish>/03_analysis/functional/ncc/`. Validation runs should
 use a unique subdirectory under `validation/` and must not overwrite accepted
 results. The stage writes interval measurements, full NCC depth profiles,
-per-plane scale/best-Z placements, session summaries, global-versus-local XY
-benchmarks, QC PNGs, and a provenance manifest.
+per-plane scale/best-Z placements, session summaries, one depth-stability QC
+PNG, and a provenance manifest. Temporal
+placement uses tracked-local XY with an automatic full-frame safety fallback
+when the local match is weak or reaches the search-window boundary.
 
 `pass_candidate`, `review_required`, and `fail_candidate` are screening states,
 not automatic scientific acceptance. The default material-drift threshold is
@@ -58,6 +60,12 @@ coherent-drift cases, two real fish, and a Suite2P split-path parity check.
 - Across both fish, tracked-local XY and global XY selected exactly the same
   best Z and max NCC for all 180 interval-plane comparisons. Median speedup was
   1.64x for L758_f04 and 1.56x for L758_f02.
+- A full L765_f03 preprocessing run on 2026-08-10 reproduced the same best Z
+  and maximum NCC for all 90 interval-plane comparisons. The complete depth
+  profiles had median correlation 0.998 (minimum 0.985), and tracked-local XY
+  was 1.09x faster overall despite 20 conservative full-frame fallbacks. The
+  resulting drift calls remained `fail_candidate` at +10.32 slices for R1 and
+  +12.23 slices for R2.
 - On a 600-frame L758_f04 plane, combined Suite2P and split registration then
   segmentation both produced 419 ROIs, identical offsets, identical `F`, and
   identical `iscell`. Split runtime was 37.9 s versus 46.2 s combined.
@@ -66,3 +74,10 @@ The raw anatomy and prior project-specific canonical NRRD can have opposite Z
 index directions. Therefore the sign of delta Z is meaningful only relative to
 the manifest-recorded input stack; drift magnitude and temporal shape remain
 comparable.
+
+These empirical benchmarks justified removing the duplicated global temporal
+analysis and comparison figure from production output. Tracked-local placement
+is now the sole temporal engine because it was faster without sacrificing best
+Z, peak NCC, or depth-profile quality. The initial scale/anchor search and the
+explicit weak/boundary fallback still use full-frame matching; those are safety
+mechanisms, not a second reported engine.
