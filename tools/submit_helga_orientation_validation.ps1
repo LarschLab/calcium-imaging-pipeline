@@ -10,7 +10,7 @@ $outputRoot = Join-Path $JobRoot "output"
 $stdoutPath = Join-Path $JobRoot "stdout.log"
 $stderrPath = Join-Path $JobRoot "stderr.log"
 $recordPath = Join-Path $JobRoot "job.json"
-$scriptPath = Join-Path $codeRoot "validate_canonical_orientation_real_data.py"
+$scriptPath = Join-Path $codeRoot "tools/validate_canonical_orientation_real_data.py"
 
 $arguments = @(
     "-u",
