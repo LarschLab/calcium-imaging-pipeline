@@ -30,6 +30,51 @@ for manual review. Train and validate the compact model once with
 `tools/train_anatomy_polarity_model.py`, then pass `--classifier-model` and
 `--classifier-validation` to avoid rereading every reference stack per fish.
 
+### Choosing whether to standardize functional X/Y orientation
+
+The lower-level `preprocessing_tiff.py` workflow preserves the microscope's
+original X/Y orientation by default. In that mode it does not interpret or
+save fish polarity:
+
+```python
+from preprocessing.preprocessing_tiff import process_fish
+
+process_fish(
+    "L000_f00",
+    input_base="/data/Matilde/Microscopy",
+    output_base="/data/Matilde/Microscopy",
+    protocol="resonant",
+    blocks=[1, 2, 3],
+    n_planes=5,
+    n_frames_per_plane=3,
+    apply_polarity_orientation=False,
+)
+```
+
+Set the single option below to `True` when functional images must share the
+codeANTs X/Y orientation. This enables both use of the resolved polarity and
+the corresponding image flip; the two actions cannot be enabled separately:
+
+```python
+process_fish(
+    "L000_f00",
+    input_base="/data/Matilde/Microscopy",
+    output_base="/validation",
+    protocol="resonant",
+    blocks=[1, 2, 3],
+    n_planes=5,
+    n_frames_per_plane=3,
+    apply_polarity_orientation=True,
+    polarity="south",
+    polarity_source="reviewed metadata",
+)
+```
+
+The canonical spatial workflow always opts in explicitly because its anatomy
+and functional outputs must use the same X/Y frame for NCC and registration.
+The preprocessing metadata records the option, polarity, applied transform,
+and resulting coordinate frame.
+
 ## Functional-anatomy NCC quality gate
 
 The opt-in NCC stage runs after Suite2P motion registration and before ROI
@@ -39,14 +84,26 @@ tracked-local XY placement plus a conservative full-frame fallback. Every
 acquisition block is shown in thirds. Block 0 is included to visualize settling
 but excluded from the drift decision.
 
-Run NCC against existing motion-corrected movies:
+Run the standalone drift analysis retroactively against existing preprocessed,
+motion-corrected movies:
 
 ```bash
-python -m preprocessing.functional_anatomy_qc_cli \
+python -m preprocessing.drift_analysis_cli \
   --fish-dir /path/to/Microscopy/L000_f00 \
   --output-dir /path/to/validation-output \
   --workers 8
 ```
+
+Python workflows can call `preprocessing.drift_analysis.run_drift_analysis`
+directly. The older `functional_anatomy_qc` module and CLI remain as
+backward-compatible aliases. The Suite2P workflow below calls the same drift
+module automatically after motion correction.
+
+Retroactive runs deliberately require the canonical spatial manifest and its
+declared `*_mcorrected.tif` movies. Older folders without that manifest, or
+with manually transformed names such as `*_mcorrected_flipX.tif`, are rejected
+rather than having their orientation guessed. Validate or migrate those inputs
+into an explicitly declared coordinate frame before running this command.
 
 Run the opt-in split Suite2P workflow:
 

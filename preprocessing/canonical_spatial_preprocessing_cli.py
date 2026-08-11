@@ -1,3 +1,5 @@
+"""Command-line entry point for canonical functional and anatomy preprocessing."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from preprocessing.canonical_spatial_preprocessing import run_canonical_spatial_
 
 
 def main() -> None:
+    """Read command-line options, run one fish, and print a short result."""
     parser = argparse.ArgumentParser(description="Create canonical functional planes, anatomy NRRD, and spatial manifest")
     parser.add_argument("--source-fish-dir", type=Path, required=True)
     parser.add_argument("--output-fish-dir", type=Path, required=True)

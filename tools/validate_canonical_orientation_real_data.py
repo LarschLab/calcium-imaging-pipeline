@@ -1,3 +1,9 @@
+"""Compare newly oriented real data with previously accepted fish outputs.
+
+This is a developer validation tool, not a routine preprocessing command. It
+checks that the direct orientation code reproduces trusted historical files.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -20,6 +26,7 @@ from preprocessing.spatial_preprocessing import (
 
 
 def _accepted_anatomy(fish: Path) -> Path:
+    """Return the expected trusted anatomy NRRD, or explain that it is missing."""
     expected = fish / "02_reg" / "00_preprocessing" / "2p_anatomy" / f"{fish.name}_anatomy_2P_GCaMP.nrrd"
     if not expected.exists():
         raise FileNotFoundError(f"Accepted anatomy NRRD not found: {expected}")
@@ -27,6 +34,7 @@ def _accepted_anatomy(fish: Path) -> Path:
 
 
 def _sample_functional(fish: Path, pages: int = 25) -> tuple[Path, np.ndarray]:
+    """Read a small functional sample for a quick orientation comparison."""
     candidates = sorted(
         path for path in (fish / "01_raw" / "2p" / "functional").glob("*.tif*")
         if "anatomy" not in path.name.lower()
@@ -39,6 +47,7 @@ def _sample_functional(fish: Path, pages: int = 25) -> tuple[Path, np.ndarray]:
 
 
 def main() -> None:
+    """Run the real-data comparison and write a detailed JSON report."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--microscopy-root", type=Path, required=True)
     parser.add_argument("--fish-id", default="L395_f11")

@@ -1,3 +1,5 @@
+"""Command-line entry point for Suite2P with optional NCC review gating."""
+
 from __future__ import annotations
 
 import argparse
@@ -10,6 +12,7 @@ from preprocessing.motion_segmentation_suite2p import process_fish_with_ncc_gate
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Describe Suite2P, plane-selection, and NCC gate command-line options."""
     parser = argparse.ArgumentParser(description="Run Suite2P with the opt-in functional-anatomy NCC gate.")
     parser.add_argument("--fish-dir", required=True, type=Path)
     parser.add_argument("--ops-path", required=True, type=Path)
@@ -29,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the gated Suite2P workflow and print a machine-readable result."""
     args = build_parser().parse_args(argv)
     ops = np.load(args.ops_path, allow_pickle=True).item()
     result = process_fish_with_ncc_gate(

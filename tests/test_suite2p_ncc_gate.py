@@ -1,3 +1,5 @@
+"""Tests for Suite2P registration, NCC gating, and safe workflow resumption."""
+
 from __future__ import annotations
 
 import importlib
@@ -15,6 +17,7 @@ from preprocessing.spatial_preprocessing import PolarityResolution, write_spatia
 
 
 def _declare_planes(fish: Path, planes: list[Path]) -> None:
+    """Write a minimal canonical manifest declaring the supplied plane TIFFs."""
     write_spatial_manifest(
         fish_dir=fish,
         polarity=PolarityResolution("south", "test", "resolved", None, None),
@@ -25,9 +28,11 @@ def _declare_planes(fish: Path, planes: list[Path]) -> None:
 
 class Suite2PNCCGateTests(unittest.TestCase):
     def test_historical_suite2p_path_does_not_enable_the_gate(self) -> None:
+        """The historical Suite2P function must retain its original behavior."""
         captured = {}
 
         def fake_run_s2p(*, ops):
+            """Capture historical Suite2P settings without running Suite2P."""
             captured.update(ops)
 
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
@@ -42,9 +47,11 @@ class Suite2PNCCGateTests(unittest.TestCase):
         self.assertNotIn("roidetect", captured)
 
     def test_registration_only_sets_required_suite2p_flags(self) -> None:
+        """Registration-only mode must save the data needed for QC and resumption."""
         captured = {}
 
         def fake_run_s2p(*, ops):
+            """Create the minimal files returned by registration-only Suite2P."""
             captured.update(ops)
             plane_dir = Path(ops["save_path0"]) / "suite2p" / "plane0"
             (plane_dir / "reg_tif").mkdir(parents=True)
@@ -66,6 +73,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
         self.assertTrue(captured["reg_tif"])
 
     def test_resume_reuses_registered_binary_without_registration(self) -> None:
+        """Resuming segmentation must reuse motion correction instead of repeating it."""
         with tempfile.TemporaryDirectory() as temporary:
             plane_dir = Path(temporary)
             binary = plane_dir / "data.bin"
@@ -76,6 +84,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             )
 
             def fake_run_plane(ops, ops_path=None):
+                """Pretend to segment an existing registered binary."""
                 self.assertEqual(ops["do_registration"], 0)
                 self.assertTrue(ops["roidetect"])
                 np.save(plane_dir / "stat.npy", np.asarray([], dtype=object))
@@ -92,6 +101,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
                 stage.resume_suite2p_segmentation(plane_dir, delete_bin=False)
 
     def test_enforced_gate_stops_before_segmentation_and_preserves_registration(self) -> None:
+        """Enforced QC must stop a failed fish while retaining registration outputs."""
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
@@ -100,18 +110,19 @@ class Suite2PNCCGateTests(unittest.TestCase):
             plane_path.touch()
             _declare_planes(fish, [plane_path])
             def fake_registration(_plane_file, _ops, save_path0, _fps, _fast_disk):
+                """Create an empty registered-plane directory for gate testing."""
                 registered = Path(save_path0) / "suite2p/plane0"
                 registered.mkdir(parents=True)
                 return registered
 
-            fake_ncc_module = types.ModuleType("preprocessing.functional_anatomy_qc")
+            fake_ncc_module = types.ModuleType("preprocessing.drift_analysis")
             fake_ncc_module.FunctionalAnatomyQCConfig = lambda **_kwargs: object()
-            fake_ncc_module.run_functional_anatomy_qc = lambda **_kwargs: {"status": "review_required"}
+            fake_ncc_module.run_drift_analysis = lambda **_kwargs: {"status": "review_required"}
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
                 mock.patch.object(stage, "join_reg_tiffs_to_one"),
-                mock.patch.dict(sys.modules, {"preprocessing.functional_anatomy_qc": fake_ncc_module}),
+                mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation") as resume,
             ):
                 result = stage.process_fish_with_ncc_gate(
@@ -129,6 +140,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             resume.assert_not_called()
 
     def test_report_only_continues_after_nonpassing_candidate(self) -> None:
+        """Report-only QC must record concern but allow segmentation to continue."""
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
@@ -139,18 +151,19 @@ class Suite2PNCCGateTests(unittest.TestCase):
             registered = fish / "03_analysis/functional/suite2P/_ncc_gate_registration/plane0/suite2p/plane0"
 
             def fake_registration(_plane_file, _ops, save_path0, _fps, _fast_disk):
+                """Create the expected registered-plane directory."""
                 result = Path(save_path0) / "suite2p/plane0"
                 result.mkdir(parents=True)
                 return result
 
-            fake_ncc_module = types.ModuleType("preprocessing.functional_anatomy_qc")
+            fake_ncc_module = types.ModuleType("preprocessing.drift_analysis")
             fake_ncc_module.FunctionalAnatomyQCConfig = lambda **_kwargs: object()
-            fake_ncc_module.run_functional_anatomy_qc = lambda **_kwargs: {"status": "fail_candidate"}
+            fake_ncc_module.run_drift_analysis = lambda **_kwargs: {"status": "fail_candidate"}
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
                 mock.patch.object(stage, "join_reg_tiffs_to_one"),
-                mock.patch.dict(sys.modules, {"preprocessing.functional_anatomy_qc": fake_ncc_module}),
+                mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation") as resume,
                 mock.patch.object(stage, "move_segmentation_files", return_value=fish / "output"),
             ):
@@ -167,6 +180,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             resume.assert_called_once_with(registered, delete_bin=True)
 
     def test_multiplane_registration_uses_isolated_fast_disk_directories(self) -> None:
+        """Parallel planes must never share a temporary Suite2P directory."""
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
@@ -178,19 +192,20 @@ class Suite2PNCCGateTests(unittest.TestCase):
             observed_fast_disks = []
 
             def fake_registration(_plane_file, _ops, save_path0, _fps, plane_fast_disk):
+                """Record the temporary directory assigned to each plane."""
                 observed_fast_disks.append(Path(plane_fast_disk))
                 registered = Path(save_path0) / "suite2p/plane0"
                 registered.mkdir(parents=True)
                 return registered
 
-            fake_ncc_module = types.ModuleType("preprocessing.functional_anatomy_qc")
+            fake_ncc_module = types.ModuleType("preprocessing.drift_analysis")
             fake_ncc_module.FunctionalAnatomyQCConfig = lambda **_kwargs: object()
-            fake_ncc_module.run_functional_anatomy_qc = lambda **_kwargs: {"status": "review_required"}
+            fake_ncc_module.run_drift_analysis = lambda **_kwargs: {"status": "review_required"}
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
                 mock.patch.object(stage, "join_reg_tiffs_to_one"),
-                mock.patch.dict(sys.modules, {"preprocessing.functional_anatomy_qc": fake_ncc_module}),
+                mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation"),
                 mock.patch.object(stage, "move_segmentation_files", return_value=fish / "output"),
             ):

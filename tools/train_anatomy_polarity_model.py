@@ -1,3 +1,5 @@
+"""Train and save the anatomy-based north/south polarity helper."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from preprocessing.anatomy_polarity import save_model, train_from_raw_metadata
 
 
 def main() -> None:
+    """Train from labelled raw metadata and save model and validation files."""
     parser = argparse.ArgumentParser(description="Train the anatomy polarity model from raw fish_orientation metadata")
     parser.add_argument("--microscopy-root", type=Path, required=True)
     parser.add_argument("--output-model", type=Path, required=True)

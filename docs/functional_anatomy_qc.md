@@ -1,7 +1,9 @@
 # Functional-anatomy NCC QC
 
-This preprocessing gate runs after Suite2P motion registration and before ROI
-segmentation. It uses the registration-ready in-vivo 2P anatomy NRRD in the
+The analysis lives in `preprocessing/drift_analysis.py`. It can run
+retroactively on fish that have already been spatially preprocessed and motion
+corrected, or it can be called automatically by the Suite2P workflow after
+motion registration and before ROI segmentation. It uses the registration-ready in-vivo 2P anatomy NRRD in the
 same canonical XY frame as Suite2P, estimates per-plane scale and best anatomy Z, and measures
 temporal Z drift for every acquisition block. Every block is divided into
 thirds; Block 0 is shown for settling assessment but excluded from the
@@ -14,6 +16,22 @@ from the retained registered binary. Use `report_only` during parity validation;
 `enforce` stops before segmentation unless the result is `pass_candidate`.
 The gated CLI accepts `--ncc-python` so Suite2P and scientific NCC can remain in
 separate reproducible environments.
+
+For a retroactive run:
+
+```bash
+python -m preprocessing.drift_analysis_cli \
+  --fish-dir /path/to/Microscopy/L000_f00 \
+  --output-dir /path/to/new-empty-output \
+  --workers 8
+```
+
+This command does not repeat raw TIFF preprocessing or motion correction. It
+reads their saved outputs and writes the drift-analysis bundle to the requested
+new directory. It requires a canonical spatial manifest and motion-corrected
+movies declared by that manifest. Legacy folders without this record, including
+manually transformed `*_mcorrected_flipX.tif` files, fail closed because their
+coordinate direction cannot be inferred safely.
 
 The NCC runtime requires NumPy, SciPy, pandas, tifffile, Matplotlib,
 scikit-image, and OpenCV. These dependencies do not need to be installed in the
@@ -85,6 +103,14 @@ coherent-drift cases, two real fish, and a Suite2P split-path parity check.
   and the new anatomy output exactly matched the legacy oriented uint8 TIFF
   after the required Z reversal. It did not match the pre-existing NRRD, which
   is therefore treated as stale/internally inconsistent and was not modified.
+- On 2026-08-11, the combined polarity/orientation flag was tested from raw
+  block 1 of L758_f04 on Helga. Two independent acquisition metadata files both
+  recorded `top-right`, which resolves to `south`. With the flag disabled, all
+  five 1,834-frame outputs exactly matched the corresponding historical movie
+  prefixes and metadata recorded no polarity or X/Y transform. With the flag
+  enabled, every pixel in every plane exactly matched `flipX` of both the
+  disabled output and the historical prefix; metadata recorded `south`,
+  `flipX`, and the canonical X/Y frame.
 
 Pre-migration QC manifests that used raw anatomy have a different Z index
 direction and must be treated as legacy-frame results. New best-Z and delta-Z

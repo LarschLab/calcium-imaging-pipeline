@@ -1,3 +1,5 @@
+"""Shared helpers for creating the repository's standard fish folders."""
+
 from pathlib import Path
 
 def init_experiment_tree(base_dir, fish_name):

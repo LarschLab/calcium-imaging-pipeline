@@ -1,8 +1,18 @@
+"""Run Suite2P motion correction and optional NCC quality gating.
+
+The historical all-in-one Suite2P path remains available.  The newer opt-in
+path pauses after motion correction, checks functional planes against anatomy,
+and then either continues or stops according to the selected gate mode.
+"""
+
 try:
     import suite2p
 except ImportError:  # pragma: no cover - allows contract tests without Suite2P installed
     class _MissingSuite2P:
+        """Delay the missing-Suite2P error until processing is actually requested."""
+
         def run_s2p(self, **_kwargs):
+            """Explain that Suite2P must be installed before this stage can run."""
             raise ImportError("Suite2P is required to run registration/segmentation")
 
     suite2p = _MissingSuite2P()
@@ -371,9 +381,9 @@ def process_fish_with_ncc_gate(
         )
     ncc_output_dir = Path(ncc_output_dir)
     if ncc_python is None:
-        from preprocessing.functional_anatomy_qc import FunctionalAnatomyQCConfig, run_functional_anatomy_qc
+        from preprocessing.drift_analysis import FunctionalAnatomyQCConfig, run_drift_analysis
 
-        manifest = run_functional_anatomy_qc(
+        manifest = run_drift_analysis(
             fish_dir=fish_folder,
             output_dir=ncc_output_dir,
             config=FunctionalAnatomyQCConfig(workers=int(ncc_workers)),
@@ -382,7 +392,7 @@ def process_fish_with_ncc_gate(
         command = [
             str(ncc_python),
             "-m",
-            "preprocessing.functional_anatomy_qc_cli",
+            "preprocessing.drift_analysis_cli",
             "--fish-dir",
             str(fish_folder),
             "--output-dir",
