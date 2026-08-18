@@ -92,12 +92,12 @@ def compute_dff(fluorescence_trace, F0_baseline):
     return (fluorescence_trace - F0_baseline) / baseline_safe
 
 
-def process_suite2p_fluorescence(fish, s2p_folder, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40):
+def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40):
     """
     Complete extraction pipeline: from Suite2p raw output to ΔF/F traces.
 
     Parameters:
-    - fish (str): Fish ID for logging.
+    - file_prefix (str): Filename prefix for this fish/plane (e.g. "{fish}_plane{i}").
     - s2p_folder (Path): Path to plane folder containing Suite2p files.
     - fps (float): Imaging rate in Hz.
     - tau (float): Calcium decay constant (seconds).
@@ -108,8 +108,8 @@ def process_suite2p_fluorescence(fish, s2p_folder, fps, tau, percentile=8, insta
     - np.ndarray: ΔF/F0 traces (T x N_final).
     - np.ndarray: Retained ROI indices relative to full Suite2p ROI list.
     """
-    fluorescence_trace = load_fluorescence_data(s2p_folder / f"{fish}_F.npy")
-    iscell_mask = np.load(s2p_folder / f"{fish}_iscell.npy")[:, 0].astype(bool)
+    fluorescence_trace = load_fluorescence_data(s2p_folder / f"{file_prefix}_F.npy")
+    iscell_mask = np.load(s2p_folder / f"{file_prefix}_iscell.npy")[:, 0].astype(bool)
 
     # Keep only ROIs classified as cells
     fluorescence_trace = fluorescence_trace[:, iscell_mask]
@@ -143,9 +143,9 @@ if __name__ == "__main__":
 
     # Parameters
     #base_data_path = Path("D:/Matilde/2p_data/LR_thalamus_bout_exp01")
-    #base_data_path = Path("/Volumes/LAB-MATI/Lausanne/2p/speed_groupsize_thalamus_exp03")
-    base_data_path = Path("F:/Matilde/2p_data")
-    fish_selected = ['L500_f01']  # List of fish numbers to process
+    base_data_path = Path("/Volumes/RECHERCHE/FAC/FBM/CIG/jlarsch/default/D2c/07_Data/Matilde/Microscopy")
+    #base_data_path = Path("F:/Matilde/2p_data")
+    fish_selected = ['L331_f01']  # List of fish numbers to process
 
     n_planes = 5
     fps = 2.0 # Imaging rate in Hz
@@ -162,9 +162,11 @@ if __name__ == "__main__":
         for i in range(n_planes):
             print(f"\n📦 Processing plane {i}")
             plane_path = s2p_folder / f"plane{i}"
-            if (plane_path / f"{fish}_plane{i}_F.npy").exists():
+            file_prefix = f"{fish}_plane{i}"
+            f_path = plane_path / f"{file_prefix}_F.npy"
+            if f_path.exists():
                 deltaF_F, final_indices = process_suite2p_fluorescence(
-                    fish,
+                    file_prefix,
                     plane_path,
                     fps,
                     tau,
