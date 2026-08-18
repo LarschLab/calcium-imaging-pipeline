@@ -9,8 +9,14 @@ from pathlib import Path
 from preprocessing.drift_analysis import FunctionalAnatomyQCConfig, run_drift_analysis
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Describe the user-facing command-line options for NCC QC."""
+def build_parser():
+    """Describe the user-facing command-line options for NCC QC.
+
+    Returns:
+        argparse.ArgumentParser: Parser configured with the fish directory,
+        output, anatomy, metadata, and sampling options for the drift
+        analysis command.
+    """
     parser = argparse.ArgumentParser(description="Run NCC scaling, best-Z, and temporal Z-drift QC.")
     parser.add_argument("--fish-dir", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path)
@@ -23,8 +29,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run NCC QC from command-line arguments and print its manifest."""
+def main(argv=None):
+    """Run NCC QC from command-line arguments and print its manifest.
+
+    Args:
+        argv (list[str] | None): Command-line arguments to parse, excluding
+            the program name. Defaults to None, which makes argparse read
+            from ``sys.argv``.
+
+    Returns:
+        int: Process exit code; always 0 on success.
+    """
     args = build_parser().parse_args(argv)
     fish_dir = args.fish_dir.resolve()
     output_dir = args.output_dir or (

@@ -53,11 +53,19 @@ class PolarityResolution:
     classifier: Mapping[str, Any] | None
 
 
-def normalize_polarity(value: Any) -> str | None:
+def normalize_polarity(value):
     """Convert accepted shorthand labels into ``north`` or ``south``.
 
     Empty values become None; unknown non-empty text is returned unchanged so
     the caller can give a useful validation error.
+
+    Args:
+        value (Any): Raw polarity value to normalize, such as a string read
+            from metadata or user input. May be None.
+
+    Returns:
+        str | None: The normalized ``"north"`` or ``"south"`` label, the
+        unrecognized text unchanged, or None if the value was empty.
     """
     text = "" if value is None else str(value).strip().lower()
     aliases = {
@@ -77,8 +85,18 @@ def normalize_polarity(value: Any) -> str | None:
     return aliases.get(text, text)
 
 
-def _metadata_value(path: Path, parameter: str) -> Any:
-    """Read one named value from either supported metadata CSV layout."""
+def _metadata_value(path, parameter):
+    """Read one named value from either supported metadata CSV layout.
+
+    Args:
+        path (Path): Path to the metadata CSV file.
+        parameter (str): Name of the parameter to look up, matched
+            case-insensitively.
+
+    Returns:
+        Any: The matching value as read from the CSV, or None if the file is
+        empty or the parameter is not found.
+    """
     with path.open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.reader(handle))
     if not rows:
@@ -98,11 +116,20 @@ def _metadata_value(path: Path, parameter: str) -> Any:
     return None
 
 
-def read_raw_metadata_polarity(fish_dir: str | Path) -> tuple[str | None, str | None]:
+def read_raw_metadata_polarity(fish_dir):
     """Read and cross-check north/south orientation from raw metadata files.
 
-    Returns the normalized value and a description of its source. Conflicting
-    or unrecognized values stop processing instead of being guessed.
+    Conflicting or unrecognized values stop processing instead of being
+    guessed.
+
+    Args:
+        fish_dir (str | Path): Root directory for one fish, containing the
+            ``01_raw/2p/metadata`` folder to search for orientation CSVs.
+
+    Returns:
+        tuple[str | None, str | None]: The normalized polarity value and a
+        description of the metadata file/field it came from, or
+        ``(None, None)`` if no metadata file specifies an orientation.
     """
     metadata_dir = Path(fish_dir) / "01_raw" / "2p" / "metadata"
     paths = sorted(path for path in metadata_dir.glob("*metadata*.csv") if not path.name.startswith("."))
@@ -128,23 +155,47 @@ def read_raw_metadata_polarity(fish_dir: str | Path) -> tuple[str | None, str | 
     return found[0][0], f"{found[0][1]}:fish_orientation"
 
 
-def _prediction_dict(prediction: PolarityPrediction | Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """Convert an optional prediction record to an ordinary dictionary."""
+def _prediction_dict(prediction):
+    """Convert an optional prediction record to an ordinary dictionary.
+
+    Args:
+        prediction (PolarityPrediction | Mapping[str, Any] | None): The
+            classifier prediction to convert, either already a mapping or a
+            ``PolarityPrediction`` instance. May be None.
+
+    Returns:
+        dict[str, Any] | None: The prediction as a plain dictionary, or None
+        if `prediction` was None.
+    """
     if prediction is None:
         return None
     return asdict(prediction) if isinstance(prediction, PolarityPrediction) else dict(prediction)
 
 
 def resolve_polarity(
-    fish_dir: str | Path,
+    fish_dir,
     *,
-    classifier_prediction: PolarityPrediction | Mapping[str, Any] | None = None,
-    reviewed_polarity: str | None = None,
-) -> PolarityResolution:
+    classifier_prediction=None,
+    reviewed_polarity=None,
+):
     """Resolve metadata first, classifier second, and fail closed otherwise.
 
     The classifier is always treated as an independent metadata QC when both
     sources are present. A disagreement requires explicit manual review.
+
+    Args:
+        fish_dir (str | Path): Root directory for one fish, used to look up
+            raw metadata orientation.
+        classifier_prediction (PolarityPrediction | Mapping[str, Any] | None):
+            Optional anatomy-classifier prediction to cross-check against raw
+            metadata. Defaults to None.
+        reviewed_polarity (str | None): Optional manually reviewed polarity
+            used to resolve conflicts or to stand in when no raw metadata or
+            accepted classifier prediction is available. Defaults to None.
+
+    Returns:
+        PolarityResolution: The resolved polarity together with its source,
+        status, and supporting evidence.
     """
     raw, raw_source = read_raw_metadata_polarity(fish_dir)
     prediction = _prediction_dict(classifier_prediction)
@@ -174,8 +225,19 @@ def resolve_polarity(
     raise PolarityResolutionError(f"Missing fish_orientation and {detail}; manual review is required")
 
 
-def apply_canonical_xy(array: np.ndarray, polarity: str) -> np.ndarray:
-    """Apply the direct effective transform to the final Y and X axes."""
+def apply_canonical_xy(array, polarity):
+    """Apply the direct effective transform to the final Y and X axes.
+
+    Args:
+        array (np.ndarray): Array with at least two trailing Y, X axes to
+            reorient.
+        polarity (str): Polarity label (``"north"`` or ``"south"``, or an
+            accepted alias) determining which axis is flipped.
+
+    Returns:
+        np.ndarray: A new array with the Y axis flipped for ``"north"`` or
+        the X axis flipped for ``"south"``.
+    """
     data = np.asarray(array)
     value = normalize_polarity(polarity)
     if data.ndim < 2:
@@ -187,11 +249,19 @@ def apply_canonical_xy(array: np.ndarray, polarity: str) -> np.ndarray:
     raise PolarityResolutionError(f"Expected north/south polarity, got {polarity!r}")
 
 
-def signed_integer_to_uint8(array: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+def signed_integer_to_uint8(array):
     """Convert a signed anatomy stack to display-safe 8-bit intensities.
 
     Negative values are shifted above zero before the full observed range is
     mapped to 0-255. The returned dictionary records that conversion.
+
+    Args:
+        array (np.ndarray): Non-empty integer-dtype anatomy stack to convert.
+
+    Returns:
+        tuple[np.ndarray, dict[str, int]]: The converted ``uint8`` array and
+        a dictionary recording the raw min/max, the negative offset applied,
+        and the corrected and output intensity ranges.
     """
     data = np.asarray(array)
     if data.size == 0 or not np.issubdtype(data.dtype, np.integer):
@@ -215,8 +285,17 @@ def signed_integer_to_uint8(array: np.ndarray) -> tuple[np.ndarray, dict[str, in
     }
 
 
-def read_anatomy_pages(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
-    """Read TIFF pages in file order and verify that they form one 3-D stack."""
+def read_anatomy_pages(path):
+    """Read TIFF pages in file order and verify that they form one 3-D stack.
+
+    Args:
+        path (str | Path): Path to the anatomy TIFF file to read.
+
+    Returns:
+        tuple[np.ndarray, dict[str, Any]]: The stacked pages as a 3-D array
+        and a dictionary describing the read (reader name, page count, and
+        Z/Y/X shape).
+    """
     source = Path(path)
     with tifffile.TiffFile(source) as tif:
         if not tif.pages:
@@ -229,8 +308,19 @@ def read_anatomy_pages(path: str | Path) -> tuple[np.ndarray, dict[str, Any]]:
     return stack, {"reader": "tifffile_pages", "page_count": len(pages), "shape_zyx": list(stack.shape)}
 
 
-def write_registration_nrrd(array_zyx: np.ndarray, path: str | Path, spacing_xyz_um: Sequence[float]) -> str:
-    """Write an anatomy stack as an uncompressed NRRD with physical spacing."""
+def write_registration_nrrd(array_zyx, path, spacing_xyz_um):
+    """Write an anatomy stack as an uncompressed NRRD with physical spacing.
+
+    Args:
+        array_zyx (np.ndarray): Anatomy stack in Z, Y, X order to write.
+        path (str | Path): Output NRRD file path; parent directories are
+            created if missing.
+        spacing_xyz_um (Sequence[float]): Positive physical voxel spacing in
+            micrometers, ordered X, Y, Z.
+
+    Returns:
+        str: Name of the library used to write the file (``"SimpleITK"``).
+    """
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     spacing = tuple(float(value) for value in spacing_xyz_um)
@@ -248,19 +338,31 @@ def write_registration_nrrd(array_zyx: np.ndarray, path: str | Path, spacing_xyz
 
 def preprocess_anatomy(
     *,
-    anatomy_path: str | Path,
-    output_path: str | Path,
-    polarity: str,
-    source_spacing_xyz_um: Sequence[float],
-    target_xy_shape: tuple[int, int] = (750, 750),
-) -> dict[str, Any]:
+    anatomy_path,
+    output_path,
+    polarity,
+    source_spacing_xyz_um,
+    target_xy_shape=(750, 750),
+):
     """Prepare raw anatomy for same-frame registration with functional data.
 
     The function converts intensity, applies the polarity-dependent X/Y flip,
     reverses Z for the registration convention, resizes X/Y, and writes NRRD.
 
+    Args:
+        anatomy_path (str | Path): Path to the raw anatomy TIFF to read.
+        output_path (str | Path): Path where the canonical registration NRRD
+            is written.
+        polarity (str): Polarity label (``"north"`` or ``"south"``, or an
+            accepted alias) determining the X/Y flip applied.
+        source_spacing_xyz_um (Sequence[float]): Positive physical voxel
+            spacing of the raw anatomy in micrometers, ordered X, Y, Z.
+        target_xy_shape (tuple[int, int]): Target (Y, X) pixel shape to
+            resize each plane to. Defaults to (750, 750).
+
     Returns:
-    - dict: Source, output, spacing, intensity, and orientation details.
+        dict[str, Any]: Source, output, spacing, intensity, and orientation
+        details describing the conversion.
     """
     raw, read_info = read_anatomy_pages(anatomy_path)
     converted, range_info = signed_integer_to_uint8(raw)
@@ -298,24 +400,49 @@ def preprocess_anatomy(
     }
 
 
-def canonical_manifest_path(fish_dir: str | Path) -> Path:
-    """Return the standard spatial-manifest path for one fish."""
+def canonical_manifest_path(fish_dir):
+    """Return the standard spatial-manifest path for one fish.
+
+    Args:
+        fish_dir (str | Path): Root directory for one fish.
+
+    Returns:
+        Path: Standard path to the spatial preprocessing manifest under
+        ``02_reg/00_preprocessing``.
+    """
     return Path(fish_dir) / "02_reg" / "00_preprocessing" / SPATIAL_MANIFEST_NAME
 
 
 def write_spatial_manifest(
     *,
-    fish_dir: str | Path,
-    polarity: PolarityResolution,
-    functional_planes: Sequence[Mapping[str, Any]],
-    anatomy: Mapping[str, Any],
-    sessions: Sequence[Mapping[str, Any]] = (),
-    output_path: str | Path | None = None,
-) -> dict[str, Any]:
+    fish_dir,
+    polarity,
+    functional_planes,
+    anatomy,
+    sessions=(),
+    output_path=None,
+):
     """Write the authoritative record of spatial inputs, outputs, and transforms.
 
     The manifest lets later stages confirm that functional and anatomy images
     use the same X/Y frame before registration or NCC matching.
+
+    Args:
+        fish_dir (str | Path): Root directory for one fish; used to derive
+            `fish_id` and the default manifest path.
+        polarity (PolarityResolution): Resolved polarity to record, including
+            its source and supporting evidence.
+        functional_planes (Sequence[Mapping[str, Any]]): Per-plane functional
+            records to include in the manifest.
+        anatomy (Mapping[str, Any]): Anatomy conversion details to include in
+            the manifest.
+        sessions (Sequence[Mapping[str, Any]]): Optional per-session records
+            to include in the manifest. Defaults to an empty sequence.
+        output_path (str | Path | None): Optional explicit manifest path.
+            Defaults to None, which uses `canonical_manifest_path`.
+
+    Returns:
+        dict[str, Any]: The manifest payload that was written to disk.
     """
     root = Path(fish_dir)
     path = Path(output_path) if output_path else canonical_manifest_path(root)
@@ -356,8 +483,16 @@ def write_spatial_manifest(
     return payload
 
 
-def validate_spatial_manifest(path: str | Path) -> dict[str, Any]:
-    """Load a spatial manifest and reject incomplete or unknown coordinate frames."""
+def validate_spatial_manifest(path):
+    """Load a spatial manifest and reject incomplete or unknown coordinate frames.
+
+    Args:
+        path (str | Path): Path to the spatial preprocessing manifest JSON
+            file.
+
+    Returns:
+        dict[str, Any]: The parsed manifest payload.
+    """
     target = Path(path)
     payload = json.loads(target.read_text(encoding="utf-8"))
     frames = payload.get("coordinate_frames", {})
@@ -373,13 +508,27 @@ def validate_spatial_manifest(path: str | Path) -> dict[str, Any]:
 
 
 def record_motion_corrected_output(
-    fish_dir: str | Path,
+    fish_dir,
     *,
-    plane_index: int,
-    output_path: str | Path,
-    suite2p_plane_dir: str | Path,
-) -> dict[str, Any]:
-    """Append a Suite2P-derived canonical movie without changing frame semantics."""
+    plane_index,
+    output_path,
+    suite2p_plane_dir,
+):
+    """Append a Suite2P-derived canonical movie without changing frame semantics.
+
+    Args:
+        fish_dir (str | Path): Root directory for one fish, used to locate
+            the existing spatial preprocessing manifest.
+        plane_index (int): Index of the plane the motion-corrected movie
+            belongs to; replaces any existing record for the same plane.
+        output_path (str | Path): Path to the motion-corrected movie output.
+        suite2p_plane_dir (str | Path): Path to the Suite2P plane directory
+            that produced the output.
+
+    Returns:
+        dict[str, Any]: The updated manifest payload that was written to
+        disk.
+    """
     path = canonical_manifest_path(fish_dir)
     payload = validate_spatial_manifest(path)
     records = [

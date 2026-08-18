@@ -21,8 +21,18 @@ from preprocessing.spatial_preprocessing import (
 )
 
 
-def _metadata_float(fish_dir: Path, keys: Sequence[str]) -> float | None:
-    """Read the first positive numeric value matching any requested metadata key."""
+def _metadata_float(fish_dir, keys):
+    """Read the first positive numeric value matching any requested metadata key.
+
+    Args:
+        fish_dir (Path): Root folder for one fish.
+        keys (Sequence[str]): Metadata row names to accept, matched
+            case-insensitively.
+
+    Returns:
+        float or None: The first matching positive value found, or ``None``
+            if no metadata CSV contains a matching, positive value.
+    """
     wanted = {str(value).strip().lower() for value in keys}
     for path in sorted((fish_dir / "01_raw" / "2p" / "metadata").glob("*metadata*.csv")):
         with path.open(newline="", encoding="utf-8-sig") as handle:
@@ -37,8 +47,17 @@ def _metadata_float(fish_dir: Path, keys: Sequence[str]) -> float | None:
     return None
 
 
-def _functional_plane_records(output_fish_dir: Path) -> list[dict[str, Any]]:
-    """Describe the functional plane TIFFs created for the spatial manifest."""
+def _functional_plane_records(output_fish_dir):
+    """Describe the functional plane TIFFs created for the spatial manifest.
+
+    Args:
+        output_fish_dir (Path): Isolated output folder for the fish being
+            preprocessed.
+
+    Returns:
+        list[dict]: One record per functional plane TIFF, describing its
+            output path, shape, dtype, and coordinate frame.
+    """
     directory = output_fish_dir / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
     records = []
     for path in sorted(directory.glob(f"{output_fish_dir.name}_plane*.tif")):
@@ -60,48 +79,48 @@ def _functional_plane_records(output_fish_dir: Path) -> list[dict[str, Any]]:
 
 def run_canonical_spatial_preprocessing(
     *,
-    source_fish_dir: str | Path,
-    output_fish_dir: str | Path,
-    reference_microscopy_root: str | Path | None,
-    protocol: str,
-    blocks: Sequence[int] | None,
-    n_planes: int | None,
-    n_frames_per_plane: int | None,
-    volume_flyback_frames: int = 1,
-    remove_first_frame: bool = False,
-    reviewed_polarity: str | None = None,
-    anatomy_xy_spacing_um: float | None = None,
-    anatomy_z_spacing_um: float | None = None,
-    target_xy_shape: tuple[int, int] = (750, 750),
-    classifier_model_path: str | Path | None = None,
-    classifier_validation_path: str | Path | None = None,
-) -> dict[str, Any]:
+    source_fish_dir,
+    output_fish_dir,
+    reference_microscopy_root,
+    protocol,
+    blocks,
+    n_planes,
+    n_frames_per_plane,
+    volume_flyback_frames=1,
+    remove_first_frame=False,
+    reviewed_polarity=None,
+    anatomy_xy_spacing_um=None,
+    anatomy_z_spacing_um=None,
+    target_xy_shape=(750, 750),
+    classifier_model_path=None,
+    classifier_validation_path=None,
+):
     """Create consistently oriented functional planes and anatomy for one fish.
 
     This end-to-end entry point predicts or reviews fish polarity, preprocesses
     raw functional TIFFs, prepares the anatomy NRRD, and writes a manifest that
     records every coordinate change.
 
-    Parameters:
-    - source_fish_dir (str or Path): Existing fish folder containing raw data.
-    - output_fish_dir (str or Path): New isolated output folder for the same fish ID.
-    - reference_microscopy_root (str or Path or None): Reference fish used when
-      a saved classifier is not supplied.
-    - protocol (str): Functional acquisition type, ``resonant`` or ``linear``.
-    - blocks (Sequence[int] or None): Recording blocks to include.
-    - n_planes (int or None): Number of acquired functional planes.
-    - n_frames_per_plane (int or None): Frames averaged for each plane and volume.
-    - volume_flyback_frames (int): Unusable return frames in each volume.
-    - remove_first_frame (bool): Drop the first repeated resonant frame when requested.
-    - reviewed_polarity (str or None): Manually reviewed north/south value.
-    - anatomy_xy_spacing_um (float or None): Raw anatomy pixel size in X and Y.
-    - anatomy_z_spacing_um (float or None): Distance between anatomy slices.
-    - target_xy_shape (tuple[int, int]): Output anatomy height and width.
-    - classifier_model_path (str or Path or None): Saved polarity model.
-    - classifier_validation_path (str or Path or None): Validation report for that model.
+    Args:
+        source_fish_dir (str or Path): Existing fish folder containing raw data.
+        output_fish_dir (str or Path): New isolated output folder for the same fish ID.
+        reference_microscopy_root (str or Path or None): Reference fish used when
+            a saved classifier is not supplied.
+        protocol (str): Functional acquisition type, ``resonant`` or ``linear``.
+        blocks (Sequence[int] or None): Recording blocks to include.
+        n_planes (int or None): Number of acquired functional planes.
+        n_frames_per_plane (int or None): Frames averaged for each plane and volume.
+        volume_flyback_frames (int): Unusable return frames in each volume.
+        remove_first_frame (bool): Drop the first repeated resonant frame when requested.
+        reviewed_polarity (str or None): Manually reviewed north/south value.
+        anatomy_xy_spacing_um (float or None): Raw anatomy pixel size in X and Y.
+        anatomy_z_spacing_um (float or None): Distance between anatomy slices.
+        target_xy_shape (tuple[int, int]): Output anatomy height and width.
+        classifier_model_path (str or Path or None): Saved polarity model.
+        classifier_validation_path (str or Path or None): Validation report for that model.
 
     Returns:
-    - dict: Completed spatial manifest describing inputs, outputs, and transforms.
+        dict: Completed spatial manifest describing inputs, outputs, and transforms.
     """
     source = Path(source_fish_dir)
     output = Path(output_fish_dir)

@@ -11,8 +11,15 @@ import numpy as np
 from preprocessing.motion_segmentation_suite2p import process_fish_with_ncc_gate
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """Describe Suite2P, plane-selection, and NCC gate command-line options."""
+def build_parser():
+    """Describe Suite2P, plane-selection, and NCC gate command-line options.
+
+    Returns:
+        argparse.ArgumentParser: Parser configured with the Suite2P run
+        options (fish directory, ops file, FPS, planes, storage paths) and
+        the NCC gate options (gate mode, output directory, worker count,
+        Python runtime).
+    """
     parser = argparse.ArgumentParser(description="Run Suite2P with the opt-in functional-anatomy NCC gate.")
     parser.add_argument("--fish-dir", required=True, type=Path)
     parser.add_argument("--ops-path", required=True, type=Path)
@@ -31,8 +38,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the gated Suite2P workflow and print a machine-readable result."""
+def main(argv=None):
+    """Run the gated Suite2P workflow and print a machine-readable result.
+
+    Args:
+        argv (list[str] | None): Command-line arguments to parse, excluding
+            the program name. Defaults to None, which makes argparse read
+            from ``sys.argv``.
+
+    Returns:
+        int: Process exit code; always 0 on success.
+    """
     args = build_parser().parse_args(argv)
     ops = np.load(args.ops_path, allow_pickle=True).item()
     result = process_fish_with_ncc_gate(

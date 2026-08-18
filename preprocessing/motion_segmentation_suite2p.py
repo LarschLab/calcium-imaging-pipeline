@@ -12,7 +12,15 @@ except ImportError:  # pragma: no cover - allows contract tests without Suite2P 
         """Delay the missing-Suite2P error until processing is actually requested."""
 
         def run_s2p(self, **_kwargs):
-            """Explain that Suite2P must be installed before this stage can run."""
+            """Explain that Suite2P must be installed before this stage can run.
+
+            Args:
+                **_kwargs: Ignored keyword arguments, accepted to match the
+                    call signature of ``suite2p.run_s2p``.
+
+            Returns:
+                None: This method always raises before returning.
+            """
             raise ImportError("Suite2P is required to run registration/segmentation")
 
     suite2p = _MissingSuite2P()
@@ -37,7 +45,17 @@ NCC_GATE_MODES = {"report_only", "enforce"}
 
 
 def validate_canonical_plane_input(fish_folder, plane_file):
-    """Fail closed if Suite2P input is not declared canonical by the manifest."""
+    """Fail closed if Suite2P input is not declared canonical by the manifest.
+
+    Args:
+        fish_folder (Path): Folder of one fish (base directory) containing
+            the canonical spatial manifest.
+        plane_file (Path): Path to the plane TIFF file to check against the
+            manifest's declared functional planes.
+
+    Returns:
+        dict: The validated canonical spatial manifest.
+    """
     fish = Path(fish_folder)
     plane = Path(plane_file).resolve()
     manifest = validate_spatial_manifest(canonical_manifest_path(fish))
@@ -50,14 +68,22 @@ def validate_canonical_plane_input(fish_folder, plane_file):
         raise ValueError(f"Suite2P input is not declared in the canonical spatial manifest: {plane}")
     return manifest
 
-def get_file_index(path: Path) -> int:
-    """Extract numeric index from filenames like 'file005000_chan0.tif'."""
+def get_file_index(path):
+    """Extract numeric index from filenames like 'file005000_chan0.tif'.
+
+    Args:
+        path (Path): File path whose name contains the numeric index.
+
+    Returns:
+        int: The extracted index, or -1 if the filename does not match the
+        expected pattern.
+    """
     match = re.search(r"file(\d+)", path.name)
     if match:
         return int(match.group(1))
     return -1  # fallback if pattern not found
 
-def join_reg_tiffs_to_one(reg_folder: Path, out_tiff: Path):
+def join_reg_tiffs_to_one(reg_folder, out_tiff):
     """
     Join Suite2p motion-corrected chunks into a single BigTIFF.
 
@@ -65,9 +91,12 @@ def join_reg_tiffs_to_one(reg_folder: Path, out_tiff: Path):
     - Append frames to one output stack at `out_tiff`
     - Overwrite existing file if present
 
-    Parameters:
-    - reg_folder (Path): Folder with Suite2p `reg_tif` chunks
-    - out_tiff (Path): Output path for the merged TIFF stack
+    Args:
+        reg_folder (Path): Folder with Suite2p `reg_tif` chunks.
+        out_tiff (Path): Output path for the merged TIFF stack.
+
+    Returns:
+        None: The merged TIFF stack is written to `out_tiff`.
     """
     tiff_files = sorted(reg_folder.glob("file*_chan0.tif"), key=get_file_index)
 
@@ -93,10 +122,15 @@ def move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish
     - Move registered TIFF chunks into the motion-corrected folder
     - Move segmentation .npy files into a plane-specific subfolder
 
-    Parameters:
-    - plane_idx (int): Plane index currently processed
-    - analysis_s2p_folder (Path): Suite2p output base folder
-    - mcorrected_folder (Path): Destination folder for motion-corrected TIFF files
+    Args:
+        plane_idx (int): Plane index currently processed.
+        analysis_s2p_folder (Path): Suite2p output base folder.
+        mcorrected_folder (Path): Destination folder for motion-corrected TIFF files.
+        fish_id (str): Fish identifier used to prefix moved filenames.
+
+    Returns:
+        Path or None: Folder containing the moved segmentation files, or None
+        if the expected registered-TIFF folder was not found.
     """
 
     # Path to the reg folder with TIFF files
@@ -132,12 +166,15 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     """
     Prepare and run Suite2p segmentation on a single TIFF file.
 
-    Parameters:
-    - plane_file (Path): TIFF file to process
-    - global_ops (dict): Suite2p ops loaded from file
-    - segmented_folder (Path): Destination for Suite2p output
-    - fps (float) : framerate
-    - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
+    Args:
+        plane_file (Path): TIFF file to process.
+        global_ops (dict): Suite2p ops loaded from file.
+        save_path0 (Path): Destination folder for Suite2p output.
+        fps (float): Framerate.
+        fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files.
+
+    Returns:
+        None: Suite2p writes its outputs under `save_path0`.
     """
     ops = copy.deepcopy(global_ops)
     ops['input_format'] = 'tif'
@@ -162,6 +199,17 @@ def run_suite2p_registration_only(plane_file, global_ops, save_path0, fps, fast_
 
     This function is used only by the opt-in NCC-gated workflow. The historical
     ``run_suite2p`` path remains unchanged.
+
+    Args:
+        plane_file (Path): TIFF file to process.
+        global_ops (dict): Suite2p ops loaded from file.
+        save_path0 (Path): Destination folder for Suite2p registration output.
+        fps (float): Framerate.
+        fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files.
+
+    Returns:
+        Path: Folder containing the registered plane's Suite2p outputs
+        (``save_path0/suite2p/plane0``).
     """
     ops = copy.deepcopy(global_ops)
     ops['input_format'] = 'tif'
@@ -191,7 +239,18 @@ def run_suite2p_registration_only(plane_file, global_ops, save_path0, fps, fast_
 
 
 def resume_suite2p_segmentation(registered_plane_dir, *, delete_bin=True):
-    """Run ROI detection/extraction from an existing Suite2P registration."""
+    """Run ROI detection/extraction from an existing Suite2P registration.
+
+    Args:
+        registered_plane_dir (Path): Folder containing a previously
+            registered plane's Suite2p outputs (ops.npy and registered binary).
+        delete_bin (bool): Whether to delete the registered binary file after
+            segmentation completes.
+
+    Returns:
+        Path: The same `registered_plane_dir`, now also containing
+        segmentation outputs (stat.npy, etc.).
+    """
     from suite2p.run_s2p import run_plane
 
     plane_dir = Path(registered_plane_dir)
@@ -213,7 +272,17 @@ def resume_suite2p_segmentation(registered_plane_dir, *, delete_bin=True):
 
 
 def move_segmentation_files(plane_idx, suite2p_plane_dir, analysis_s2p_folder, fish_id):
-    """Move one registered plane's NPY outputs into the canonical fish folder."""
+    """Move one registered plane's NPY outputs into the canonical fish folder.
+
+    Args:
+        plane_idx (int): Plane index currently processed.
+        suite2p_plane_dir (Path): Folder containing the Suite2p plane outputs to move.
+        analysis_s2p_folder (Path): Suite2p analysis base folder for this fish.
+        fish_id (str): Fish identifier used to prefix moved filenames.
+
+    Returns:
+        Path: Destination folder containing the moved segmentation files.
+    """
     source = Path(suite2p_plane_dir)
     destination = Path(analysis_s2p_folder) / f"plane{plane_idx}"
     destination.mkdir(parents=True, exist_ok=True)
@@ -231,12 +300,12 @@ def find_plane_file(pre_dir, plane_idx):
     """
     Find the preprocessed TIFF file for a specific plane index.
 
-    Parameters:
-    - pre_dir (Path): Folder containing preprocessed TIFF files
-    - plane_idx (int): Plane index to find
+    Args:
+        pre_dir (Path): Folder containing preprocessed TIFF files.
+        plane_idx (int): Plane index to find.
 
     Returns:
-    - Path or None: Path to matching TIFF file, or None if not found
+        Path or None: Path to matching TIFF file, or None if not found.
     """
     candidates = list(pre_dir.glob(f"*plane{plane_idx}.tif"))
     if len(candidates) == 0:
@@ -250,13 +319,17 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
     """
     Process Suite2p registration and segmentation for all selected planes of one fish.
 
-    Parameters:
-    - fish_folder (Path): Folder of one fish (base directory)
-    - global_ops (dict): Suite2p ops loaded from disk
-    - selected_planes (list[int]): Plane indices to process
-    - fps (float) : framerate
-    - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
-    - storage_root (str or Path or None): Optional root path where final outputs will be copied (mirror)
+    Args:
+        fish_folder (Path): Folder of one fish (base directory).
+        global_ops (dict): Suite2p ops loaded from disk.
+        selected_planes (list[int]): Plane indices to process.
+        fps (float): Framerate.
+        fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files.
+        storage_root (str or Path or None): Optional root path where final outputs will be copied (mirror).
+
+    Returns:
+        None: Motion-corrected TIFFs and segmentation outputs are written
+        under `fish_folder`, and optionally mirrored under `storage_root`.
     """
     pre_dir = fish_folder / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     if not pre_dir.exists():
@@ -323,6 +396,31 @@ def process_fish_with_ncc_gate(
     ``report_only`` always continues to segmentation and is intended for parity
     validation. ``enforce`` stops before segmentation unless NCC returns a
     ``pass_candidate``. Registered outputs are preserved when the gate stops.
+
+    Args:
+        fish_folder (Path): Folder of one fish (base directory).
+        global_ops (dict): Suite2p ops loaded from disk.
+        selected_planes (list[int]): Plane indices to process.
+        fps (float): Framerate.
+        fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files.
+        storage_root (str or Path or None): Optional root path where final
+            segmentation outputs will be copied (mirror) once the gate passes.
+        gate_mode (str): Either "report_only" (always continue to
+            segmentation) or "enforce" (stop before segmentation unless the
+            NCC check returns "pass_candidate").
+        ncc_output_dir (Path or None): Directory to write NCC validation
+            outputs to. Defaults to a timestamped folder under `fish_folder`.
+        ncc_workers (int): Number of worker processes to use for the NCC
+            drift analysis.
+        ncc_python (str or Path or None): Optional path to a Python
+            interpreter used to run the NCC analysis as a subprocess. If
+            None, the NCC analysis runs in-process.
+
+    Returns:
+        dict: Summary of the run, including "ncc_gate_mode", "ncc_manifest",
+        "segmentation_ran", and either "registered_plane_dirs" (when the
+        gate stopped before segmentation) or "segmentation_destinations"
+        (when segmentation ran).
     """
     mode = str(gate_mode).strip().lower()
     if mode not in NCC_GATE_MODES:
@@ -448,17 +546,23 @@ def process_fish_with_ncc_gate(
     }
 
 
-def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None):
+def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None, storage_root=None):
     """
     Process multiple fish folders.
 
-    Parameters:
-    - data_root (Path): Root directory containing all fish folders
-    - ops_path (Path): Path to Suite2p ops file (saved as .npy dictionary)
-    - storage_root (Path): Root folder where outputs will be mirrored/copied
-    - fish_ids (list[str] or None): List of fish folder names to process (or all if None)
-    - selected_planes (list[int]): Plane indices to process
-    - fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files
+    Args:
+        data_root (Path): Root directory containing all fish folders.
+        ops_path (Path): Path to Suite2p ops file (saved as .npy dictionary).
+        fps (float): Framerate.
+        fish_ids (list[str] or None): List of fish folder names to process (or all if None).
+        selected_planes (list[int]): Plane indices to process.
+        fast_disk (str or Path or None): Optional fast disk path for Suite2p temporary files.
+        storage_root (str or Path or None): Optional root path where final
+            outputs will be copied (mirror) for each processed fish.
+
+    Returns:
+        None: Each fish's motion-corrected TIFFs and segmentation outputs are
+        written to disk, and optionally mirrored under `storage_root`.
     """
     data_root = Path(data_root)
     global_ops = np.load(ops_path, allow_pickle=True).item()
@@ -492,8 +596,8 @@ if __name__ == "__main__":
     batch_process(
         data_root,
         ops_file_path,
-        storage_root,
         fps,
         fish_ids=fish_to_process,
         selected_planes=planes_to_process,
-        fast_disk=fast_disk_path)
+        fast_disk=fast_disk_path,
+        storage_root=storage_root)

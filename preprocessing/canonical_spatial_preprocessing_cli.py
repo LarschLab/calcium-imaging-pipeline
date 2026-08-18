@@ -9,8 +9,13 @@ from pathlib import Path
 from preprocessing.canonical_spatial_preprocessing import run_canonical_spatial_preprocessing
 
 
-def main() -> None:
-    """Read command-line options, run one fish, and print a short result."""
+def main():
+    """Read command-line options, run one fish, and print a short result.
+
+    Returns:
+        None: The completed manifest's status and fish ID are printed to
+            stdout instead of being returned.
+    """
     parser = argparse.ArgumentParser(description="Create canonical functional planes, anatomy NRRD, and spatial manifest")
     parser.add_argument("--source-fish-dir", type=Path, required=True)
     parser.add_argument("--output-fish-dir", type=Path, required=True)

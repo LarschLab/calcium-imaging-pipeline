@@ -38,14 +38,34 @@ from preprocessing.drift_analysis import (
 from preprocessing.preprocessing_tiff import process_fish
 
 
-def _spot(shape: tuple[int, int], y: int, x: int) -> np.ndarray:
-    """Create a small synthetic bright spot for anatomy test images."""
+def _spot(shape, y, x):
+    """Create a small synthetic bright spot for anatomy test images.
+
+    Args:
+        shape (tuple[int, int]): Height and width of the output array.
+        y (int): Row coordinate of the spot center.
+        x (int): Column coordinate of the spot center.
+
+    Returns:
+        numpy.ndarray: Float32 array of `shape` containing a Gaussian-shaped
+        bright spot centered at `(y, x)`.
+    """
     yy, xx = np.indices(shape)
     return np.exp(-((yy - y) ** 2 + (xx - x) ** 2) / 5.0).astype(np.float32)
 
 
-def _make_fish(root: Path, *, drifting: bool = False) -> Path:
-    """Create a minimal synthetic fish with either stable or drifting planes."""
+def _make_fish(root, *, drifting=False):
+    """Create a minimal synthetic fish with either stable or drifting planes.
+
+    Args:
+        root (Path): Directory under which the synthetic fish tree is built.
+        drifting (bool): Whether the synthetic functional planes should
+            simulate coherent z-drift across temporal blocks. Defaults to
+            False, producing stable planes.
+
+    Returns:
+        Path: Path to the created fish directory (`root / "L000_f00"`).
+    """
     fish = root / "L000_f00"
     anatomy_dir = fish / "01_raw" / "2p" / "anatomy"
     metadata_dir = fish / "01_raw" / "2p" / "metadata"
@@ -112,8 +132,13 @@ def _make_fish(root: Path, *, drifting: bool = False) -> Path:
 
 
 class FunctionalAnatomyQCTests(unittest.TestCase):
-    def test_historical_qc_module_preserves_direct_helper_imports(self) -> None:
-        """The renamed module must not break existing notebook imports."""
+    def test_historical_qc_module_preserves_direct_helper_imports(self):
+        """The renamed module must not break existing notebook imports.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         for name in (
             "norm01",
             "corrcoef_img",
@@ -125,8 +150,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
         ):
             self.assertIs(getattr(compatibility_qc, name), getattr(drift_analysis, name))
 
-    def test_functional_xy_orientation_is_one_opt_in_step(self) -> None:
-        """The one flag must control both polarity use and X/Y reorientation."""
+    def test_functional_xy_orientation_is_one_opt_in_step(self):
+        """The one flag must control both polarity use and X/Y reorientation.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source_base = root / "source"
@@ -176,14 +206,24 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                     apply_polarity_orientation=True,
                 )
 
-    def test_direct_orientation_transforms(self) -> None:
-        """North and south polarity must apply their documented direct flips."""
+    def test_direct_orientation_transforms(self):
+        """North and south polarity must apply their documented direct flips.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         array = np.asarray([[1, 2], [3, 4]])
         np.testing.assert_array_equal(apply_canonical_xy(array, "north"), [[3, 4], [1, 2]])
         np.testing.assert_array_equal(apply_canonical_xy(array, "south"), [[2, 1], [4, 3]])
 
-    def test_missing_metadata_uses_accepted_classifier_but_conflict_stops(self) -> None:
-        """Classifier output may fill missing metadata but may not override it."""
+    def test_missing_metadata_uses_accepted_classifier_but_conflict_stops(self):
+        """Classifier output may fill missing metadata but may not override it.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             fish.mkdir()
@@ -202,8 +242,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                     classifier_prediction={"polarity": "south", "status": "predicted", "model_name": "test"},
                 )
 
-    def test_anatomy_preprocess_applies_xy_then_z_once(self) -> None:
-        """Anatomy preparation must apply each requested axis change exactly once."""
+    def test_anatomy_preprocess_applies_xy_then_z_once(self):
+        """Anatomy preparation must apply each requested axis change exactly once.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             raw = np.arange(2 * 3 * 4, dtype=np.int16).reshape(2, 3, 4) - 3
@@ -224,8 +269,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             np.testing.assert_array_equal(observed, expected)
             self.assertEqual(record["xy_transform"], "flipY")
             self.assertEqual(record["z_transform"], "flipZ")
-    def test_blocks_are_split_into_thirds_and_block_zero_is_named_explicitly(self) -> None:
-        """Temporal windows must have complete and understandable block labels."""
+    def test_blocks_are_split_into_thirds_and_block_zero_is_named_explicitly(self):
+        """Temporal windows must have complete and understandable block labels.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         self.assertEqual(
             block_third_bounds(30, 3),
             (
@@ -252,12 +302,22 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             ),
         )
 
-    def test_quadratic_peak_reports_subslice_location(self) -> None:
-        """A smooth peak estimate should report positions between integer slices."""
+    def test_quadratic_peak_reports_subslice_location(self):
+        """A smooth peak estimate should report positions between integer slices.
+
+        Returns:
+            None: The test passes if the assertion holds; otherwise it
+            raises an assertion error.
+        """
         self.assertTrue(np.isclose(quadratic_peak_z(np.asarray([0.0, 0.5, 1.0, 0.75, 0.0])), 2.1666666667))
 
-    def test_raw_anatomy_preserves_page_order_and_signed_dtype(self) -> None:
-        """Raw anatomy reading must not reorder pages or discard signed values."""
+    def test_raw_anatomy_preserves_page_order_and_signed_dtype(self):
+        """Raw anatomy reading must not reorder pages or discard signed values.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             stack = (np.arange(5 * 8 * 9).reshape(5, 8, 9) - 100).astype(np.int16)
@@ -268,8 +328,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(loaded.source_dtype, "int16")
             np.testing.assert_array_equal(loaded.data_zyx, stack)
 
-    def test_anatomy_spacing_comes_from_metadata_and_must_agree(self) -> None:
-        """Conflicting anatomy slice spacing must stop instead of being guessed."""
+    def test_anatomy_spacing_comes_from_metadata_and_must_agree(self):
+        """Conflicting anatomy slice spacing must stop instead of being guessed.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name in ("first_metadata.csv", "second_metadata.csv"):
@@ -279,8 +344,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(spacing, 2.0)
             self.assertEqual(len(sources), 2)
 
-    def test_end_to_end_qc_shows_block_zero_but_excludes_it_from_gate(self) -> None:
-        """Initial settling data should be plotted but excluded from drift decisions."""
+    def test_end_to_end_qc_shows_block_zero_but_excludes_it_from_gate(self):
+        """Initial settling data should be plotted but excluded from drift decisions.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fish = _make_fish(root)
@@ -333,8 +403,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                 "tracked_local_xy_with_global_fallback",
             )
 
-    def test_end_to_end_qc_fails_coherent_post_block_zero_drift(self) -> None:
-        """Consistent movement across planes after settling should fail the gate."""
+    def test_end_to_end_qc_fails_coherent_post_block_zero_drift(self):
+        """Consistent movement across planes after settling should fail the gate.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fish = _make_fish(root, drifting=True)

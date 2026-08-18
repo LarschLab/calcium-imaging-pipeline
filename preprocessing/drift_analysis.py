@@ -72,8 +72,16 @@ class RawAnatomy:
     used_page_stack_fallback: bool
 
 
-def norm01(image: np.ndarray) -> np.ndarray:
-    """Scale an image to 0-1 using brightness limits that ignore rare extremes."""
+def norm01(image):
+    """Scale an image to 0-1 using brightness limits that ignore rare extremes.
+
+    Args:
+        image (numpy.ndarray): Image array to normalize.
+
+    Returns:
+        numpy.ndarray: Float32 array with values clipped to [0, 1], or the
+        original empty array unchanged if `image` has no elements.
+    """
     arr = np.asarray(image, dtype=np.float32)
     if arr.size == 0:
         return arr
@@ -86,14 +94,35 @@ def norm01(image: np.ndarray) -> np.ndarray:
     return np.clip((arr - low) / (high - low), 0.0, 1.0).astype(np.float32)
 
 
-def local_unsharp(image: np.ndarray, sigma: float, amount: float) -> np.ndarray:
-    """Gently sharpen local anatomy detail without changing image size."""
+def local_unsharp(image, sigma, amount):
+    """Gently sharpen local anatomy detail without changing image size.
+
+    Args:
+        image (numpy.ndarray): Image to sharpen, expected in the 0-1 range.
+        sigma (float): Standard deviation of the Gaussian blur used to build
+            the smoothed base image.
+        amount (float): Strength of the unsharp-mask boost added back on top
+            of the blurred base.
+
+    Returns:
+        numpy.ndarray: Sharpened image, clipped to [0, 1].
+    """
     base = ndi.gaussian_filter(np.asarray(image, dtype=np.float32), sigma)
     return np.clip(base + amount * (np.asarray(image) - base), 0.0, 1.0)
 
 
-def corrcoef_img(first: np.ndarray, second: np.ndarray) -> float:
-    """Measure how similar two images are on a scale from -1 to 1."""
+def corrcoef_img(first, second):
+    """Measure how similar two images are on a scale from -1 to 1.
+
+    Args:
+        first (numpy.ndarray): First image.
+        second (numpy.ndarray): Second image; must have the same shape as
+            `first`.
+
+    Returns:
+        float: Zero-mean normalized cross-correlation between the two
+        images, or 0.0 if the denominator is numerically negligible.
+    """
     a = np.asarray(first, dtype=np.float32)
     b = np.asarray(second, dtype=np.float32)
     if a.shape != b.shape:
@@ -106,8 +135,17 @@ def corrcoef_img(first: np.ndarray, second: np.ndarray) -> float:
     return float(np.sum(a * b) / denominator)
 
 
-def discover_raw_in_vivo_anatomy(fish_dir: str | Path) -> Path:
-    """Find the single raw in-vivo anatomy TIFF for one fish."""
+def discover_raw_in_vivo_anatomy(fish_dir):
+    """Find the single raw in-vivo anatomy TIFF for one fish.
+
+    Args:
+        fish_dir (str or Path): Fish root directory containing
+            `01_raw/2p/anatomy`.
+
+    Returns:
+        Path: Path to the one raw in-vivo anatomy TIFF found (files with
+        "ex_vivo" or "exvivo" in the stem are excluded).
+    """
     raw_dir = Path(fish_dir) / "01_raw" / "2p" / "anatomy"
     candidates = [
         path
@@ -120,8 +158,19 @@ def discover_raw_in_vivo_anatomy(fish_dir: str | Path) -> Path:
     return candidates[0]
 
 
-def read_raw_anatomy(path: str | Path) -> RawAnatomy:
-    """Read raw anatomy while preserving TIFF page order and signed values."""
+def read_raw_anatomy(path):
+    """Read raw anatomy while preserving TIFF page order and signed values.
+
+    Reads the anatomy stack as a Z,Y,X volume, falling back to stacking
+    individual TIFF pages when the file's series shape does not match the
+    per-page shape.
+
+    Args:
+        path (str or Path): Path to the raw anatomy TIFF.
+
+    Returns:
+        RawAnatomy: The loaded volume plus metadata about how it was read.
+    """
     source = Path(path)
     with tifffile.TiffFile(source) as tif:
         if not tif.pages:
@@ -160,8 +209,17 @@ def read_raw_anatomy(path: str | Path) -> RawAnatomy:
     )
 
 
-def read_canonical_anatomy(path: str | Path) -> tuple[RawAnatomy, tuple[float, float, float]]:
-    """Read prepared anatomy together with its X/Y/Z physical spacing."""
+def read_canonical_anatomy(path):
+    """Read prepared anatomy together with its X/Y/Z physical spacing.
+
+    Args:
+        path (str or Path): Path to the canonical anatomy NRRD file.
+
+    Returns:
+        tuple: A `(RawAnatomy, spacing)` pair, where `RawAnatomy` wraps the
+        loaded uint8 Z,Y,X volume and `spacing` is a tuple of three floats
+        giving the X, Y, Z physical spacing in the units stored in the NRRD.
+    """
     source = Path(path)
     if source.suffix.lower() != ".nrrd":
         raise ValueError(f"Canonical NCC anatomy must be an NRRD, got {source}")
@@ -185,8 +243,18 @@ def read_canonical_anatomy(path: str | Path) -> tuple[RawAnatomy, tuple[float, f
     ), spacing
 
 
-def anatomy_z_spacing_um(metadata_dir: str | Path) -> tuple[float, list[Path]]:
-    """Read anatomy slice spacing and ensure all metadata files agree."""
+def anatomy_z_spacing_um(metadata_dir):
+    """Read anatomy slice spacing and ensure all metadata files agree.
+
+    Args:
+        metadata_dir (str or Path): Directory searched (via
+            `*_metadata.csv`) for a `step_size_um_anatomy` row.
+
+    Returns:
+        tuple: A `(spacing_um, sources)` pair, where `spacing_um` (float) is
+        the agreed anatomy Z spacing in micrometers and `sources` (list of
+        Path) lists the metadata files it was read from.
+    """
     values: list[float] = []
     sources: list[Path] = []
     for path in sorted(Path(metadata_dir).glob("*_metadata.csv")):
@@ -204,8 +272,23 @@ def anatomy_z_spacing_um(metadata_dir: str | Path) -> tuple[float, list[Path]]:
     return float(values[0]), sources
 
 
-def load_preprocessing_sessions(metadata_path: str | Path) -> list[dict[str, Any]]:
-    """Load recording sessions and the source blocks belonging to each one."""
+def load_preprocessing_sessions(metadata_path):
+    """Load recording sessions and the source blocks belonging to each one.
+
+    Reads a preprocessing metadata JSON file and returns its `sessions`
+    list in a normalized form. If the file has no `sessions` list, it
+    falls back to building a single legacy session from top-level
+    `n_planes` and `blocks` fields.
+
+    Args:
+        metadata_path (str or Path): Path to the preprocessing metadata
+            JSON file.
+
+    Returns:
+        list: List of dicts, one per session, each with `session_label`
+        (str), `session_number` (int), `output_planes` (list of int), and
+        `selected_tiffs` (list of str).
+    """
     payload = json.loads(Path(metadata_path).read_text())
     sessions = payload.get("sessions")
     if not isinstance(sessions, list) or not sessions:
@@ -244,16 +327,35 @@ def load_preprocessing_sessions(metadata_path: str | Path) -> list[dict[str, Any
     return normalized
 
 
-def block_third_labels(block_count: int) -> tuple[str, ...]:
-    """Create first, middle, and final-third labels for recording blocks."""
+def block_third_labels(block_count):
+    """Create first, middle, and final-third labels for recording blocks.
+
+    Args:
+        block_count (int): Number of acquisition blocks.
+
+    Returns:
+        tuple: Tuple of strings, three per block, of the form
+        "Block {block}\\n{third}" for "first third", "middle third", and
+        "final third".
+    """
     if block_count < 1:
         raise ValueError("block_count must be positive")
     thirds = ("first third", "middle third", "final third")
     return tuple(f"Block {block}\n{third}" for block in range(block_count) for third in thirds)
 
 
-def block_third_bounds(frame_count: int, block_count: int) -> tuple[tuple[int, int], ...]:
-    """Divide equal recording blocks into three frame ranges each."""
+def block_third_bounds(frame_count, block_count):
+    """Divide equal recording blocks into three frame ranges each.
+
+    Args:
+        frame_count (int): Total number of frames in the movie.
+        block_count (int): Number of equally sized acquisition blocks the
+            frames are divided into.
+
+    Returns:
+        tuple: Tuple of `(start, stop)` int pairs, three per block, giving
+        the frame range of each block's first, middle, and final third.
+    """
     if frame_count < block_count * 3:
         raise ValueError("Not enough frames to divide every acquisition block into thirds")
     if frame_count % block_count != 0:
@@ -269,8 +371,20 @@ def block_third_bounds(frame_count: int, block_count: int) -> tuple[tuple[int, i
     return tuple(bounds)
 
 
-def _sample_indices(start: int, stop: int, count: int) -> np.ndarray:
-    """Choose evenly spaced frame numbers from one time window."""
+def _sample_indices(start, stop, count):
+    """Choose evenly spaced frame numbers from one time window.
+
+    Args:
+        start (int): First frame index of the window (inclusive).
+        stop (int): One past the last frame index of the window
+            (exclusive).
+        count (int): Desired number of samples; capped at the number of
+            frames actually available in the window.
+
+    Returns:
+        numpy.ndarray: Integer array of evenly spaced frame indices within
+        `[start, stop)`.
+    """
     effective = min(int(count), int(stop - start))
     if effective < 1:
         raise ValueError(f"Empty temporal window {start}:{stop}")
@@ -278,12 +392,28 @@ def _sample_indices(start: int, stop: int, count: int) -> np.ndarray:
 
 
 def top_correlated_mean(
-    stack: np.ndarray,
+    stack,
     *,
-    take_k: int,
-    pre_smooth_sigma: float,
-) -> np.ndarray:
-    """Average the sampled frames that best resemble the window's typical image."""
+    take_k,
+    pre_smooth_sigma,
+):
+    """Average the sampled frames that best resemble the window's typical image.
+
+    Computes each frame's correlation to the (optionally smoothed) mean of
+    the stack, then averages the `take_k` frames with the highest
+    correlation.
+
+    Args:
+        stack (numpy.ndarray): Frames array, shaped (n_frames, height,
+            width).
+        take_k (int): Number of top-correlated frames to average; clamped
+            to the number of frames available.
+        pre_smooth_sigma (float): Gaussian smoothing sigma applied before
+            computing correlations; 0 disables smoothing.
+
+    Returns:
+        numpy.ndarray: Mean image of the top-correlated frames.
+    """
     frames = np.asarray(stack, dtype=np.float32)
     initial = frames.mean(axis=0)
     compare_reference = ndi.gaussian_filter(initial, pre_smooth_sigma) if pre_smooth_sigma > 0 else initial
@@ -295,8 +425,21 @@ def top_correlated_mean(
     return frames[selected].mean(axis=0)
 
 
-def _read_sampled_frames(path: Path, indices: Iterable[int]) -> np.ndarray:
-    """Read requested TIFF pages without loading the full movie when possible."""
+def _read_sampled_frames(path, indices):
+    """Read requested TIFF pages without loading the full movie when possible.
+
+    Tries to memory-map the movie and index directly into it; falls back to
+    reading individual pages via `tifffile.TiffFile` if memory-mapping
+    fails.
+
+    Args:
+        path (Path): Path to the movie TIFF.
+        indices (Iterable[int]): Frame indices to read.
+
+    Returns:
+        numpy.ndarray: Float32 array of the requested frames, shaped
+        (len(indices), height, width).
+    """
     selected = np.asarray(list(indices), dtype=int)
     try:
         movie = tifffile.memmap(path)
@@ -306,8 +449,15 @@ def _read_sampled_frames(path: Path, indices: Iterable[int]) -> np.ndarray:
             return np.stack([np.asarray(tif.pages[int(index)].asarray(), dtype=np.float32) for index in selected])
 
 
-def movie_shape(path: str | Path) -> tuple[int, int, int]:
-    """Return movie length, height, and width without reading every frame."""
+def movie_shape(path):
+    """Return movie length, height, and width without reading every frame.
+
+    Args:
+        path (str or Path): Path to the movie TIFF.
+
+    Returns:
+        tuple: `(page_count, height, width)` as ints.
+    """
     target = Path(path)
     with tifffile.TiffFile(target) as tif:
         page_count = len(tif.pages)
@@ -318,12 +468,29 @@ def movie_shape(path: str | Path) -> tuple[int, int, int]:
 
 
 def build_window_references(
-    movie_path: str | Path,
+    movie_path,
     *,
-    block_count: int,
-    config: FunctionalAnatomyQCConfig,
-) -> tuple[list[np.ndarray], tuple[tuple[int, int], ...], tuple[str, ...]]:
-    """Build one representative functional image for every block third."""
+    block_count,
+    config,
+):
+    """Build one representative functional image for every block third.
+
+    For each first/middle/final third of every acquisition block, samples
+    frames, averages the top-correlated ones, normalizes, and sharpens the
+    result into a reference image.
+
+    Args:
+        movie_path (str or Path): Path to the motion-corrected movie TIFF.
+        block_count (int): Number of acquisition blocks in the movie.
+        config (FunctionalAnatomyQCConfig): Sampling and sharpening
+            settings.
+
+    Returns:
+        tuple: `(references, bounds, labels)`, where `references` is a list
+        of sharpened, normalized reference images (one per block third),
+        `bounds` is the matching tuple of `(start, stop)` frame ranges, and
+        `labels` is the matching tuple of block-third label strings.
+    """
     target = Path(movie_path)
     frame_count, _, _ = movie_shape(target)
     bounds = block_third_bounds(frame_count, block_count)
@@ -344,12 +511,27 @@ def build_window_references(
 
 
 def pooled_analysis_reference(
-    movie_path: str | Path,
+    movie_path,
     *,
-    block_count: int,
-    config: FunctionalAnatomyQCConfig,
-) -> np.ndarray:
-    """Combine post-settling frames into one stable plane-placement reference."""
+    block_count,
+    config,
+):
+    """Combine post-settling frames into one stable plane-placement reference.
+
+    Excludes the first block (assumed to be an initial settling period),
+    samples frames from the remaining recording, averages the
+    top-correlated ones, and normalizes and sharpens the result.
+
+    Args:
+        movie_path (str or Path): Path to the motion-corrected movie TIFF.
+        block_count (int): Number of acquisition blocks in the movie; must
+            be at least 2 so Block 0 can be excluded.
+        config (FunctionalAnatomyQCConfig): Sampling and sharpening
+            settings.
+
+    Returns:
+        numpy.ndarray: Sharpened, normalized pooled reference image.
+    """
     target = Path(movie_path)
     frame_count, _, _ = movie_shape(target)
     if block_count < 2:
@@ -367,8 +549,17 @@ def pooled_analysis_reference(
     return local_unsharp(norm01(reference), config.sharpen_sigma, config.sharpen_amount)
 
 
-def scale_image(image: np.ndarray, scale: float) -> np.ndarray:
-    """Resize a functional image by a candidate anatomy-matching scale."""
+def scale_image(image, scale):
+    """Resize a functional image by a candidate anatomy-matching scale.
+
+    Args:
+        image (numpy.ndarray): Image to resize.
+        scale (float): Scale factor applied to both dimensions; a value
+            close to 1.0 returns the image unchanged.
+
+    Returns:
+        numpy.ndarray: Resized float32 image.
+    """
     arr = np.asarray(image, dtype=np.float32)
     if np.isclose(scale, 1.0):
         return arr
@@ -377,10 +568,26 @@ def scale_image(image: np.ndarray, scale: float) -> np.ndarray:
 
 
 def global_xy_depth_profile(
-    template: np.ndarray,
-    anatomy_zyx: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Find the best X/Y placement and similarity at every anatomy depth."""
+    template,
+    anatomy_zyx,
+):
+    """Find the best X/Y placement and similarity at every anatomy depth.
+
+    Runs an exhaustive normalized cross-correlation template match of
+    `template` against every anatomy Z-slice.
+
+    Args:
+        template (numpy.ndarray): Functional reference image to place
+            within the anatomy volume.
+        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
+
+    Returns:
+        tuple: `(scores, xs, ys)`, three arrays of length equal to the
+        number of anatomy slices, giving the best-match NCC score and the
+        top-left X and Y pixel coordinates of that match at each depth.
+        Slices too small to fit the template keep a score of `-inf` and
+        coordinates of `-1`.
+    """
     moving = norm01(template)
     scores = np.full(anatomy_zyx.shape[0], -np.inf, dtype=np.float32)
     xs = np.full(anatomy_zyx.shape[0], -1, dtype=np.int32)
@@ -398,8 +605,20 @@ def global_xy_depth_profile(
     return scores, xs, ys
 
 
-def quadratic_peak_z(scores: np.ndarray) -> float:
-    """Estimate a best depth between slices around the strongest score."""
+def quadratic_peak_z(scores):
+    """Estimate a best depth between slices around the strongest score.
+
+    Fits a parabola through the score at the argmax and its two neighbors
+    to refine the integer peak index to a sub-slice position.
+
+    Args:
+        scores (numpy.ndarray): Per-depth similarity scores.
+
+    Returns:
+        float: Sub-slice depth estimate of the peak. Falls back to the
+        integer argmax when the peak is at an array boundary or the
+        parabola fit is numerically degenerate.
+    """
     values = np.asarray(scores, dtype=np.float64)
     peak = int(np.nanargmax(values))
     if peak == 0 or peak == values.size - 1:
@@ -412,26 +631,63 @@ def quadratic_peak_z(scores: np.ndarray) -> float:
     return float(peak + np.clip(offset, -1.0, 1.0))
 
 
-def _scale_candidates(center: float, half_window: float, step: float) -> np.ndarray:
-    """Create an inclusive sequence of image-scale values to test."""
+def _scale_candidates(center, half_window, step):
+    """Create an inclusive sequence of image-scale values to test.
+
+    Args:
+        center (float): Scale value around which to search.
+        half_window (float): Half-width of the search window around
+            `center`.
+        step (float): Spacing between candidate scale values.
+
+    Returns:
+        numpy.ndarray: Array of candidate scale values from
+        `max(step, center - half_window)` to `center + half_window`
+        inclusive.
+    """
     return np.arange(max(step, center - half_window), center + half_window + step * 0.25, step)
 
 
 def search_scale(
-    reference: np.ndarray,
-    anatomy_zyx: np.ndarray,
-    config: FunctionalAnatomyQCConfig,
-) -> dict[str, Any]:
+    reference,
+    anatomy_zyx,
+    config,
+):
     """Find the image scale producing the clearest anatomy-depth match.
 
     NCC means normalized cross-correlation: a similarity score where a larger
-    value means the functional and anatomy images look more alike.
+    value means the functional and anatomy images look more alike. Searches
+    a coarse scale grid first, then refines around the best candidate with
+    progressively finer grids as configured.
+
+    Args:
+        reference (numpy.ndarray): Functional reference image to place
+            within the anatomy volume.
+        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
+        config (FunctionalAnatomyQCConfig): Coarse and fine scale-search
+            settings.
+
+    Returns:
+        dict: Best-scoring result with keys `scale` (float), `best_z`
+        (int), `score` (float), `x` (int), `y` (int), and `scores`
+        (numpy.ndarray of per-depth NCC scores at that scale).
     """
     start, stop, step = config.scale_coarse
     candidates = np.arange(start, stop + step * 0.25, step)
 
-    def evaluate(scale: float) -> dict[str, Any] | None:
-        """Score one candidate scale, or skip it when it cannot fit."""
+    def evaluate(scale):
+        """Score one candidate scale, or skip it when it cannot fit.
+
+        Args:
+            scale (float): Candidate image scale to test.
+
+        Returns:
+            dict or None: Dict with keys `scale` (float), `best_z` (int),
+            `score` (float), `x` (int), `y` (int), and `scores`
+            (numpy.ndarray of per-depth NCC scores), or None if the scaled
+            reference is larger than the anatomy canvas in either
+            dimension.
+        """
         scaled = scale_image(reference, float(scale))
         if any(scaled.shape[index] > anatomy_zyx.shape[index + 1] for index in range(2)):
             return None
@@ -467,14 +723,36 @@ def search_scale(
 
 
 def _bounded_xy_depth_profile(
-    template: np.ndarray,
-    anatomy_zyx: np.ndarray,
+    template,
+    anatomy_zyx,
     *,
-    predicted_x: int,
-    predicted_y: int,
-    radius: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Search near expected X/Y positions while moving through anatomy depth."""
+    predicted_x,
+    predicted_y,
+    radius,
+):
+    """Search near expected X/Y positions while moving through anatomy depth.
+
+    At every anatomy depth, restricts the normalized cross-correlation
+    template match to a square window around `(predicted_x, predicted_y)`
+    and records whether the match landed on the window's boundary.
+
+    Args:
+        template (numpy.ndarray): Functional reference image to place
+            within the anatomy volume.
+        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
+        predicted_x (int): Expected top-left X coordinate of the match.
+        predicted_y (int): Expected top-left Y coordinate of the match.
+        radius (int): Half-width, in pixels, of the search window around
+            the predicted position.
+
+    Returns:
+        tuple: `(scores, xs, ys, touched)`, four arrays of length equal to
+        the number of anatomy slices: best-match NCC score, top-left X and
+        Y coordinates of that match, and a bool flag marking depths where
+        the match touched the search window's edge. Depths with an empty
+        search window keep a score of `-inf`, coordinates of `-1`, and
+        `touched` False.
+    """
     moving = norm01(template)
     height, width = moving.shape
     scores = np.full(anatomy_zyx.shape[0], -np.inf, dtype=np.float32)
@@ -500,16 +778,44 @@ def _bounded_xy_depth_profile(
 
 
 def tracked_local_depth_profile(
-    interval_reference: np.ndarray,
-    canonical_reference: np.ndarray,
-    anatomy_zyx: np.ndarray,
+    interval_reference,
+    canonical_reference,
+    anatomy_zyx,
     *,
-    scale: float,
-    canonical_x: int,
-    canonical_y: int,
-    config: FunctionalAnatomyQCConfig,
-) -> dict[str, Any]:
-    """Track a local depth profile, using a full search when confidence is weak."""
+    scale,
+    canonical_x,
+    canonical_y,
+    config,
+):
+    """Track a local depth profile, using a full search when confidence is weak.
+
+    Predicts the interval's X/Y position from the phase-correlation shift
+    between the interval and canonical references, then searches near that
+    position at every anatomy depth. Falls back to a full-canvas search
+    when the local match is weak or touches the local-search boundary.
+
+    Args:
+        interval_reference (numpy.ndarray): Functional reference image for
+            this time interval.
+        canonical_reference (numpy.ndarray): Pooled functional reference
+            used as the tracking anchor.
+        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
+        scale (float): Image scale factor applied to both references before
+            matching.
+        canonical_x (int): Anchor X coordinate of the canonical reference's
+            best match in the anatomy volume.
+        canonical_y (int): Anchor Y coordinate of the canonical reference's
+            best match in the anatomy volume.
+        config (FunctionalAnatomyQCConfig): Local search radius and
+            fallback-score threshold settings.
+
+    Returns:
+        dict: Placement result with keys `scores` (numpy.ndarray of
+        per-depth NCC scores), `best_z` (int), `best_z_subslice` (float),
+        `max_score` (float), `x` (int), `y` (int), `functional_shift_x`
+        (float), `functional_shift_y` (float), `predicted_x` (int),
+        `predicted_y` (int), and `fallback_reason` (str or None).
+    """
     interval_scaled = scale_image(interval_reference, scale)
     canonical_scaled = scale_image(canonical_reference, scale)
     shift_yx, _, _ = phase_cross_correlation(
@@ -550,16 +856,33 @@ def tracked_local_depth_profile(
     }
 
 
-def _plane_index(path: Path) -> int:
-    """Extract the plane number from a motion-corrected TIFF filename."""
+def _plane_index(path):
+    """Extract the plane number from a motion-corrected TIFF filename.
+
+    Args:
+        path (Path): Motion-corrected movie TIFF path, expected to contain
+            "plane<N>" in its filename.
+
+    Returns:
+        int: The parsed plane index.
+    """
     match = re.search(r"plane(\d+)", path.name)
     if match is None:
         raise ValueError(f"Could not parse plane index from {path.name}")
     return int(match.group(1))
 
 
-def discover_motion_corrected_movies(fish_dir: str | Path, fish_id: str) -> dict[int, Path]:
-    """Find one motion-corrected TIFF for each functional plane."""
+def discover_motion_corrected_movies(fish_dir, fish_id):
+    """Find one motion-corrected TIFF for each functional plane.
+
+    Args:
+        fish_dir (str or Path): Fish root directory.
+        fish_id (str): Fish identifier used in the movie filenames.
+
+    Returns:
+        dict: Mapping of plane index (int) to motion-corrected movie path
+        (Path), sorted by plane index.
+    """
     root = Path(fish_dir) / "02_reg" / "00_preprocessing" / "2p_functional" / "02_motionCorrected"
     movies = {_plane_index(path): path for path in root.glob(f"{fish_id}_plane*_mcorrected.tif")}
     if not movies:
@@ -569,21 +892,45 @@ def discover_motion_corrected_movies(fish_dir: str | Path, fish_id: str) -> dict
 
 def _run_plane(
     *,
-    fish_id: str,
-    session: dict[str, Any],
-    plane_index: int,
-    movie_path: Path,
-    anatomy_filtered: np.ndarray,
-    z_spacing_um: float,
-    config: FunctionalAnatomyQCConfig,
-) -> tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-    dict[str, Any],
-    list[dict[str, Any]],
-    np.ndarray,
-]:
-    """Measure best anatomy depth and its change over time for one plane."""
+    fish_id,
+    session,
+    plane_index,
+    movie_path,
+    anatomy_filtered,
+    z_spacing_um,
+    config,
+):
+    """Measure best anatomy depth and its change over time for one plane.
+
+    Builds a pooled reference to anchor the plane's scale and X/Y/Z
+    placement in the anatomy volume, then builds per-block-third references
+    and tracks their local depth profile over the recording to produce
+    interval-level and profile-level rows plus a plane-level summary.
+
+    Args:
+        fish_id (str): Fish identifier.
+        session (dict): Session record with `session_label` and
+            `selected_tiffs` used to determine the block count.
+        plane_index (int): Functional plane index being processed.
+        movie_path (Path): Path to this plane's motion-corrected movie
+            TIFF.
+        anatomy_filtered (numpy.ndarray): Normalized and sharpened anatomy
+            volume, shaped (Z, Y, X).
+        z_spacing_um (float): Anatomy Z-slice spacing in micrometers.
+        config (FunctionalAnatomyQCConfig): Sampling, scale-search, and
+            local-tracking settings.
+
+    Returns:
+        tuple: `(interval_rows, profile_rows, plane_summary,
+        anchor_profile_rows, canonical)`, where `interval_rows` (list of
+        dict) holds one row per block third with placement and drift
+        fields, `profile_rows` (list of dict) holds one row per
+        block-third/anatomy-depth combination, `plane_summary` (dict) holds
+        the plane-level anchor placement and peak-quality metrics,
+        `anchor_profile_rows` (list of dict) holds one row per anatomy
+        depth for the pooled anchor reference, and `canonical`
+        (numpy.ndarray) is the pooled reference image used for this plane.
+    """
     block_count = len(session["selected_tiffs"])
     canonical = pooled_analysis_reference(movie_path, block_count=block_count, config=config)
     scale_started = time.perf_counter()
@@ -693,8 +1040,18 @@ def _run_plane(
     return interval_rows, profile_rows, plane_summary, anchor_profile_rows, canonical
 
 
-def _depth_profile_metrics(scores: np.ndarray) -> dict[str, float | bool]:
-    """Describe how strong and isolated the best depth-profile peak is."""
+def _depth_profile_metrics(scores):
+    """Describe how strong and isolated the best depth-profile peak is.
+
+    Args:
+        scores (numpy.ndarray): Per-depth similarity scores.
+
+    Returns:
+        dict: Metrics with keys `peak_delta` (float, gap between the top
+        two scores), `peak_zscore` (float, how many standard deviations the
+        peak is above the mean), and `peak_at_z_boundary` (bool, whether
+        the peak sits at the first or last depth index).
+    """
     values = np.asarray(scores, dtype=np.float64)
     peak = int(np.nanargmax(values))
     maximum = float(values[peak])
@@ -708,16 +1065,45 @@ def _depth_profile_metrics(scores: np.ndarray) -> dict[str, float | bool]:
     }
 
 
-def _direction_fraction(changes: np.ndarray, consensus: float) -> float:
-    """Measure how many planes move in the same direction as the group."""
+def _direction_fraction(changes, consensus):
+    """Measure how many planes move in the same direction as the group.
+
+    Args:
+        changes (numpy.ndarray): Per-plane depth change values.
+        consensus (float): Group-level reference change (e.g. median)
+            whose sign defines the expected direction.
+
+    Returns:
+        float: Fraction of finite `changes` values sharing the sign of
+        `consensus`, or 0.0 if there are no finite values or `consensus` is
+        zero.
+    """
     finite = changes[np.isfinite(changes)]
     if finite.size == 0 or np.isclose(consensus, 0.0):
         return 0.0
     return float(np.mean(np.sign(finite) == np.sign(consensus)))
 
 
-def summarize_sessions(interval_df: pd.DataFrame, config: FunctionalAnatomyQCConfig, z_spacing_um: float) -> pd.DataFrame:
-    """Summarize plane changes and decide whether meaningful drift is plausible."""
+def summarize_sessions(interval_df, config, z_spacing_um):
+    """Summarize plane changes and decide whether meaningful drift is plausible.
+
+    For each fish/session group, computes the consensus depth change across
+    planes (excluding the initial settling block), classifies the session
+    as `fail_candidate`, `review_required`, or `pass_candidate` based on
+    magnitude, direction consistency, and match confidence, and estimates
+    the interval at which the depth profile settles.
+
+    Args:
+        interval_df (pandas.DataFrame): Interval-level rows produced by
+            `_run_plane`, across all planes and sessions.
+        config (FunctionalAnatomyQCConfig): Thresholds for material drift,
+            direction consensus, and weak-match detection.
+        z_spacing_um (float): Anatomy Z-slice spacing in micrometers.
+
+    Returns:
+        pandas.DataFrame: One row per fish/session with drift magnitude,
+        direction consensus, match-quality, settling, and status columns.
+    """
     rows: list[dict[str, Any]] = []
     for (fish_id, session), group in interval_df.groupby(["fish_id", "session"]):
         eligible = group[group["included_in_drift_gate"]].copy()
@@ -788,8 +1174,18 @@ def summarize_sessions(interval_df: pd.DataFrame, config: FunctionalAnatomyQCCon
     return pd.DataFrame(rows)
 
 
-def _overall_status(summary_df: pd.DataFrame) -> str:
-    """Combine session decisions into one fish-level QC status."""
+def _overall_status(summary_df):
+    """Combine session decisions into one fish-level QC status.
+
+    Args:
+        summary_df (pandas.DataFrame): Session-level summary rows produced
+            by `summarize_sessions`, containing a `status` column.
+
+    Returns:
+        str: `"fail_candidate"` if any session failed, else
+        `"review_required"` if any session needs review, else
+        `"pass_candidate"`.
+    """
     statuses = set(summary_df["status"])
     if "fail_candidate" in statuses:
         return "fail_candidate"
@@ -798,8 +1194,23 @@ def _overall_status(summary_df: pd.DataFrame) -> str:
     return "pass_candidate"
 
 
-def _render_tracks(interval_df: pd.DataFrame, summary_df: pd.DataFrame, output: Path) -> None:
-    """Plot the matched anatomy depth of every functional plane over time."""
+def _render_tracks(interval_df, summary_df, output):
+    """Plot the matched anatomy depth of every functional plane over time.
+
+    Writes one subplot per session showing each plane's tracked sub-slice
+    depth across intervals, annotated with the session's drift-gate status
+    and consensus depth change.
+
+    Args:
+        interval_df (pandas.DataFrame): Interval-level rows across all
+            planes and sessions.
+        summary_df (pandas.DataFrame): Session-level summary rows produced
+            by `summarize_sessions`.
+        output (Path): File path the figure is saved to.
+
+    Returns:
+        None
+    """
     sessions = sorted(interval_df["session"].unique())
     fig, axes = plt.subplots(len(sessions), 1, figsize=(11, 4.8 * len(sessions)), squeeze=False)
     for row, session in enumerate(sessions):
@@ -833,11 +1244,26 @@ def _render_tracks(interval_df: pd.DataFrame, summary_df: pd.DataFrame, output: 
 
 
 def _render_anchor_profiles(
-    anchor_profile_df: pd.DataFrame,
-    plane_df: pd.DataFrame,
-    output: Path,
-) -> None:
-    """Plot pooled NCC-versus-depth curves and mark each best-Z estimate."""
+    anchor_profile_df,
+    plane_df,
+    output,
+):
+    """Plot pooled NCC-versus-depth curves and mark each best-Z estimate.
+
+    Writes one subplot per plane showing the pooled-reference NCC score
+    against anatomy depth, with the best sub-slice depth and peak
+    confidence metrics annotated.
+
+    Args:
+        anchor_profile_df (pandas.DataFrame): Per-plane, per-depth NCC rows
+            for the pooled anchor reference.
+        plane_df (pandas.DataFrame): Plane-level summary rows produced by
+            `_run_plane`, indexed by `plane_index`.
+        output (Path): File path the figure is saved to.
+
+    Returns:
+        None
+    """
     planes = sorted(int(value) for value in anchor_profile_df["plane_index"].unique())
     columns = 2
     rows = max(1, int(np.ceil(len(planes) / columns)))
@@ -872,8 +1298,22 @@ def _render_anchor_profiles(
     plt.close(fig)
 
 
-def _render_temporal_profiles(profile_df: pd.DataFrame, output: Path) -> None:
-    """Plot NCC-versus-depth heatmaps for successive recording windows."""
+def _render_temporal_profiles(profile_df, output):
+    """Plot NCC-versus-depth heatmaps for successive recording windows.
+
+    Writes one heatmap subplot per plane with acquisition block third on
+    the Y axis and anatomy Z index on the X axis, overlaying the
+    best-matching depth at each interval and shading the excluded
+    settling block.
+
+    Args:
+        profile_df (pandas.DataFrame): Interval-level, per-depth NCC rows
+            across all planes.
+        output (Path): File path the figure is saved to.
+
+    Returns:
+        None
+    """
     planes = sorted(int(value) for value in profile_df["plane_index"].unique())
     columns = 2
     rows = max(1, int(np.ceil(len(planes) / columns)))
@@ -914,29 +1354,32 @@ def _render_temporal_profiles(profile_df: pd.DataFrame, output: Path) -> None:
 
 def run_drift_analysis(
     *,
-    fish_dir: str | Path,
-    output_dir: str | Path,
-    anatomy_path: str | Path | None = None,
-    preprocessing_metadata_path: str | Path | None = None,
-    config: FunctionalAnatomyQCConfig | None = None,
-    spatial_manifest_path: str | Path | None = None,
-) -> dict[str, Any]:
+    fish_dir,
+    output_dir,
+    anatomy_path=None,
+    preprocessing_metadata_path=None,
+    config=None,
+    spatial_manifest_path=None,
+):
     """Run functional-to-anatomy depth placement and temporal drift QC.
 
     For every motion-corrected plane, this builds representative images, finds
     the most similar anatomy depth, tracks the match through recording time,
     and writes CSV tables, QC PNGs, and a machine-readable manifest.
 
-    Parameters:
-    - fish_dir (str or Path): Canonically preprocessed fish folder.
-    - output_dir (str or Path): New empty directory for QC outputs.
-    - anatomy_path (str or Path or None): Optional anatomy override.
-    - preprocessing_metadata_path (str or Path or None): Optional session metadata override.
-    - config (FunctionalAnatomyQCConfig or None): Sampling and decision settings.
-    - spatial_manifest_path (str or Path or None): Optional spatial manifest override.
+    Args:
+        fish_dir (str or Path): Canonically preprocessed fish folder.
+        output_dir (str or Path): New empty directory for QC outputs.
+        anatomy_path (str or Path or None): Optional anatomy override.
+        preprocessing_metadata_path (str or Path or None): Optional session
+            metadata override.
+        config (FunctionalAnatomyQCConfig or None): Sampling and decision
+            settings.
+        spatial_manifest_path (str or Path or None): Optional spatial
+            manifest override.
 
     Returns:
-    - dict: QC status, inputs, settings, runtime, and output paths.
+        dict: QC status, inputs, settings, runtime, and output paths.
     """
     cfg = config or FunctionalAnatomyQCConfig()
     root = Path(fish_dir)
@@ -991,8 +1434,18 @@ def run_drift_analysis(
     references_by_plane: dict[int, np.ndarray] = {}
     started = time.perf_counter()
 
-    def execute(task: tuple[dict[str, Any], int, Path]):
-        """Run one plane task so the outer function can use worker threads."""
+    def execute(task):
+        """Run one plane task so the outer function can use worker threads.
+
+        Args:
+            task (tuple): `(session, plane_index, movie)` tuple, where
+                `session` (dict) is the session record, `plane_index` (int)
+                is the functional plane index, and `movie` (Path) is the
+                plane's motion-corrected movie path.
+
+        Returns:
+            tuple: The same five-element tuple returned by `_run_plane`.
+        """
         session, plane_index, movie = task
         return _run_plane(
             fish_id=fish_id,

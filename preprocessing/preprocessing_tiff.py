@@ -25,12 +25,12 @@ def correct_chunk_int16_to_uint16(chunk, offset):
     """
     Correct one chunk of frames by shifting negative values to positive.
 
-    Parameters:
-    - chunk (np.ndarray): 3D array chunk.
-    - offset (int): Value to add to make data positive.
+    Args:
+        chunk (np.ndarray): 3D array chunk.
+        offset (int): Value to add to make data positive.
 
     Returns:
-    - np.ndarray: Corrected uint16 chunk.
+        np.ndarray: Corrected uint16 chunk.
     """
     chunk_int32 = chunk.astype(np.int32)
     chunk_int32 += offset
@@ -42,11 +42,17 @@ def load_tiff_file(filepath, n_planes, n_frames_per_plane):
     """
     Load a multi-page TIFF file into a 3D NumPy array.
 
-    Parameters:
-    - filepath (Path): Path to the TIFF file.
+    Args:
+        filepath (Path): Path to the TIFF file.
+        n_planes (int): Number of planes acquired per volume, used together
+            with `n_frames_per_plane` to trim a truncated read back to a
+            whole number of volumes.
+        n_frames_per_plane (int): Number of frames acquired per plane, used
+            together with `n_planes` to trim a truncated read back to a
+            whole number of volumes.
 
     Returns:
-    - np.ndarray: 3D array (frames, height, width).
+        np.ndarray: 3D array (frames, height, width).
     """
 
     frames = []
@@ -75,13 +81,13 @@ def remove_vflyback_frames(frames, frames_per_volume, vflyback_frames=1):
     """
     Remove volume flyback frame (black frame) from each volume.
 
-    Parameters:
-    - frames (np.ndarray): 3D array (frames, H, W)
-    - frames_per_volume (int): Total frames in one volume (including flyback)
-    - flyback_frames (int): Number of flyback frames per volume
+    Args:
+        frames (np.ndarray): 3D array (frames, H, W).
+        frames_per_volume (int): Total frames in one volume (including flyback).
+        vflyback_frames (int): Number of flyback frames per volume.
 
     Returns:
-    - np.ndarray: Cleaned 3D array
+        np.ndarray: Cleaned 3D array.
     """
     total_frames = len(frames)
     if total_frames % frames_per_volume != 0:
@@ -99,12 +105,12 @@ def correct_negative_values_mp_safe(frames, num_chunks=5):
     """
    Correct negative pixel values using multiprocessing.
 
-   Parameters:
-   - frames (np.ndarray): Original image stack, uint16.
-   - num_chunks (int): Number of chunks to split data into for processing.
+   Args:
+       frames (np.ndarray): Original image stack, uint16.
+       num_chunks (int): Number of chunks to split data into for processing.
 
    Returns:
-   - np.ndarray: Corrected image stack, uint16.
+       np.ndarray: Corrected image stack, uint16.
     """
 
     min_value = np.min(frames)
@@ -134,10 +140,13 @@ def save_stack(output_path, filename, stack):
     """
     Save image stack as TIFF.
 
-    Parameters:
-    - output_path (Path): Directory to save file.
-    - filename (str): Output TIFF filename.
-    - stack (np.ndarray): Image stack to save.
+    Args:
+        output_path (Path): Directory to save file.
+        filename (str): Output TIFF filename.
+        stack (np.ndarray): Image stack to save.
+
+    Returns:
+        None: The stack is written to `output_path / filename`.
     """
     output_path.mkdir(parents=True, exist_ok=True)
     tf.imwrite(output_path / filename, stack, photometric='minisblack')
@@ -147,11 +156,11 @@ def extract_block_number(tif_file):
     """
     Extract block number from TIFF filename assuming format *_000XX.tif.
 
-    Parameters:
-    - tif_file (Path): TIFF file.
+    Args:
+        tif_file (Path): TIFF file.
 
     Returns:
-    - int or None: Block number.
+        int or None: Block number.
     """
     match = re.search(r"_(\d{5})\.tif$", tif_file.name)
     if match:
@@ -164,17 +173,19 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     """
     Load and concatenate selected blocks. For resonant protocol, also remove flyback and reshape.
 
-    Parameters:
-    - fish_id (str): Fish ID.
-    - input_base (Path): Root input directory.
-    - protocol (str): 'resonant' or 'linear'.
-    - blocks (list[int] or None): Blocks to include.
-    - n_planes (int): Number of planes (only for resonant).
-    - n_frames_per_plane (int): Frames per plane (only for resonant).
-    - volume flyback_frames (int): Volume Flyback frames (only for resonant).
+    Args:
+        fish_id (str): Fish ID.
+        input_base (Path): Root input directory.
+        protocol (str): 'resonant' or 'linear'.
+        blocks (list[int] or None): Blocks to include.
+        n_planes (int): Number of planes (only for resonant).
+        n_frames_per_plane (int): Frames per plane (only for resonant).
+        volume_flyback_frames (int): Volume flyback frames (only for resonant).
+        remove_first_frame (bool): If True, drop the first frame of each
+            plane within each volume (only for resonant).
 
     Returns:
-    - np.ndarray: Full concatenated image stack.
+        np.ndarray: Full concatenated image stack.
     """
     raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
     tiffs = sorted(raw_folder.glob("*.tif"))
@@ -229,26 +240,26 @@ def process_fish(
     """
     Process one fish for either resonant or linear protocols.
 
-    Parameters:
-    - fish_id (str): Fish ID.
-    - input_base (Path): Root input directory.
-    - output_base (Path): Output directory.
-    - protocol (str): 'resonant' or 'linear'.
-    - blocks (list[int] or None): Blocks to include.
-    - n_planes (int): Number of planes (only resonant).
-    - n_frames_per_plane (int): Frames per plane (only resonant).
-    - volume_flyback_frames (int): Volume flyback frames (only resonant).
-    - remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
-    - apply_polarity_orientation (bool): If True, use north/south polarity to
-      place the movie in the shared X/Y orientation. If False, do not use
-      polarity and leave X/Y unchanged.
-    - polarity (str or None): Reviewed or predicted north/south direction. It
-      is required only when apply_polarity_orientation is True.
-    - polarity_source (str or None): Plain description of where polarity came
-      from, saved in the metadata when orientation is applied.
+    Args:
+        fish_id (str): Fish ID.
+        input_base (Path): Root input directory.
+        output_base (Path): Output directory.
+        protocol (str): 'resonant' or 'linear'.
+        blocks (list[int] or None): Blocks to include.
+        n_planes (int): Number of planes (only resonant).
+        n_frames_per_plane (int): Frames per plane (only resonant).
+        volume_flyback_frames (int): Volume flyback frames (only resonant).
+        remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
+        apply_polarity_orientation (bool): If True, use north/south polarity to
+            place the movie in the shared X/Y orientation. If False, do not use
+            polarity and leave X/Y unchanged.
+        polarity (str or None): Reviewed or predicted north/south direction. It
+            is required only when apply_polarity_orientation is True.
+        polarity_source (str or None): Plain description of where polarity came
+            from, saved in the metadata when orientation is applied.
 
     Returns:
-    - None: Plane TIFFs and a JSON metadata file are written to output_base.
+        None: Plane TIFFs and a JSON metadata file are written to output_base.
     """
     if apply_polarity_orientation:
         polarity = normalize_polarity(polarity)
@@ -365,25 +376,25 @@ def parallel_preprocess(
     """
     Run preprocessing across multiple fish using multiprocessing.
 
-    Parameters:
-    - fish_ids (list[str]): List of fish IDs.
-    - input_base (Path): Root input directory.
-    - output_base (Path): Output directory.
-    - protocol (str): 'resonant' or 'linear'.
-    - blocks (list[int] or None): Blocks to include.
-    - n_planes (int): Number of planes (only resonant).
-    - n_frames_per_plane (int): Frames per plane (only resonant).
-    - vflyback_frames (int): Flyback frames (only resonant).
-    - remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
-    - apply_polarity_orientation (bool): Apply both polarity interpretation and
-      the matching X/Y reorientation when True; do neither when False.
-    - polarity_by_fish (dict[str, str] or None): North/south value for each fish
-      when polarity orientation is enabled.
-    - polarity_source_by_fish (dict[str, str] or None): Where each saved
-      polarity value came from.
+    Args:
+        fish_ids (list[str]): List of fish IDs.
+        input_base (Path): Root input directory.
+        output_base (Path): Output directory.
+        protocol (str): 'resonant' or 'linear'.
+        blocks (list[int] or None): Blocks to include.
+        n_planes (int): Number of planes (only resonant).
+        n_frames_per_plane (int): Frames per plane (only resonant).
+        volume_flyback_frames (int): Volume flyback frames (only resonant).
+        remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
+        apply_polarity_orientation (bool): Apply both polarity interpretation and
+            the matching X/Y reorientation when True; do neither when False.
+        polarity_by_fish (dict[str, str] or None): North/south value for each fish
+            when polarity orientation is enabled.
+        polarity_source_by_fish (dict[str, str] or None): Where each saved
+            polarity value came from.
 
     Returns:
-    - None: Waits for every fish-processing job to finish.
+        None: Waits for every fish-processing job to finish.
     """
     with mp.Pool(processes=mp.cpu_count()) as pool:
         jobs = []

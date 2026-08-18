@@ -16,8 +16,17 @@ from preprocessing import motion_segmentation_suite2p as stage
 from preprocessing.spatial_preprocessing import PolarityResolution, write_spatial_manifest
 
 
-def _declare_planes(fish: Path, planes: list[Path]) -> None:
-    """Write a minimal canonical manifest declaring the supplied plane TIFFs."""
+def _declare_planes(fish, planes):
+    """Write a minimal canonical manifest declaring the supplied plane TIFFs.
+
+    Args:
+        fish (Path): Fish directory the manifest should be written under.
+        planes (list[Path]): Paths to the functional plane TIFFs to declare
+            in the manifest.
+
+    Returns:
+        None: The manifest is written to disk as a side effect.
+    """
     write_spatial_manifest(
         fish_dir=fish,
         polarity=PolarityResolution("south", "test", "resolved", None, None),
@@ -27,8 +36,13 @@ def _declare_planes(fish: Path, planes: list[Path]) -> None:
 
 
 class Suite2PNCCGateTests(unittest.TestCase):
-    def test_historical_suite2p_path_does_not_enable_the_gate(self) -> None:
-        """The historical Suite2P function must retain its original behavior."""
+    def test_historical_suite2p_path_does_not_enable_the_gate(self):
+        """The historical Suite2P function must retain its original behavior.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         captured = {}
 
         def fake_run_s2p(*, ops):
@@ -46,8 +60,13 @@ class Suite2PNCCGateTests(unittest.TestCase):
         self.assertTrue(captured["delete_bin"])
         self.assertNotIn("roidetect", captured)
 
-    def test_registration_only_sets_required_suite2p_flags(self) -> None:
-        """Registration-only mode must save the data needed for QC and resumption."""
+    def test_registration_only_sets_required_suite2p_flags(self):
+        """Registration-only mode must save the data needed for QC and resumption.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         captured = {}
 
         def fake_run_s2p(*, ops):
@@ -72,8 +91,13 @@ class Suite2PNCCGateTests(unittest.TestCase):
         self.assertFalse(captured["delete_bin"])
         self.assertTrue(captured["reg_tif"])
 
-    def test_resume_reuses_registered_binary_without_registration(self) -> None:
-        """Resuming segmentation must reuse motion correction instead of repeating it."""
+    def test_resume_reuses_registered_binary_without_registration(self):
+        """Resuming segmentation must reuse motion correction instead of repeating it.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             plane_dir = Path(temporary)
             binary = plane_dir / "data.bin"
@@ -100,8 +124,13 @@ class Suite2PNCCGateTests(unittest.TestCase):
             ):
                 stage.resume_suite2p_segmentation(plane_dir, delete_bin=False)
 
-    def test_enforced_gate_stops_before_segmentation_and_preserves_registration(self) -> None:
-        """Enforced QC must stop a failed fish while retaining registration outputs."""
+    def test_enforced_gate_stops_before_segmentation_and_preserves_registration(self):
+        """Enforced QC must stop a failed fish while retaining registration outputs.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
@@ -139,8 +168,13 @@ class Suite2PNCCGateTests(unittest.TestCase):
             self.assertTrue((fish / "03_analysis/functional/suite2P/_ncc_gate_registration").exists())
             resume.assert_not_called()
 
-    def test_report_only_continues_after_nonpassing_candidate(self) -> None:
-        """Report-only QC must record concern but allow segmentation to continue."""
+    def test_report_only_continues_after_nonpassing_candidate(self):
+        """Report-only QC must record concern but allow segmentation to continue.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
@@ -179,8 +213,13 @@ class Suite2PNCCGateTests(unittest.TestCase):
             self.assertTrue(result["segmentation_ran"])
             resume.assert_called_once_with(registered, delete_bin=True)
 
-    def test_multiplane_registration_uses_isolated_fast_disk_directories(self) -> None:
-        """Parallel planes must never share a temporary Suite2P directory."""
+    def test_multiplane_registration_uses_isolated_fast_disk_directories(self):
+        """Parallel planes must never share a temporary Suite2P directory.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             preprocessed = fish / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
