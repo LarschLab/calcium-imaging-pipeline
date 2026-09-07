@@ -79,6 +79,30 @@ reviewing code in this repository.
   Reserve raising for invalid config or programmer errors.
 - Don't add inline type hints (`def f(name: str) -> int:`) — document
   argument and return types in the docstring instead.
+- Add short inline comments on lines doing non-obvious work (a tricky slice,
+  why a constant has the value it does, what a loop iteration represents) —
+  the goal is that a reader can follow the logic without re-deriving it.
+- Don't `return` a multi-step computation directly (e.g.
+  `return float(peak + np.clip(offset, -1.0, 1.0))`). Assign it to a
+  well-named variable first, then return that name — the name documents
+  what the value means, and it shows up if you need to inspect it in a
+  debugger or traceback.
+
+## Notebooks
+
+- Structure notebooks as a sequence of short code cells each preceded by
+  a markdown cell explaining what the step does — keep the markdown
+  concise (a sentence or two), not a restatement of the code.
+- Put imports and constants in cells at the top of the notebook, same
+  as a script's top-of-file imports. Constants get `UPPER_CASE` names
+  (e.g. `FRAME_RATE_HZ = 30`) so they read as configuration, distinct
+  from ordinary `snake_case` variables.
+- It's fine to prototype computation directly in a cell while exploring,
+  but the end state should have that logic moved into reusable functions
+  imported from the project's `.py` modules, not left inline in the
+  notebook. Plotting/visualization code is the exception — keep it in
+  notebook cells so plot parameters (axes, colors, thresholds) stay easy
+  to tweak interactively without editing a module.
 
 ## Version Control
 
