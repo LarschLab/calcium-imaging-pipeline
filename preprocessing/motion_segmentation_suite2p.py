@@ -1,4 +1,21 @@
-import suite2p
+"""Run Suite2P motion correction and optional NCC quality gating.
+
+The historical all-in-one Suite2P path remains available.  The newer opt-in
+path pauses after motion correction, checks functional planes against anatomy,
+and then either continues or stops according to the selected gate mode.
+"""
+
+try:
+    import suite2p
+except ImportError:  # pragma: no cover - allows contract tests without Suite2P installed
+    class _MissingSuite2P:
+        """Delay the missing-Suite2P error until processing is actually requested."""
+
+        def run_s2p(self, **_kwargs):
+            """Explain that Suite2P must be installed before this stage can run."""
+            raise ImportError("Suite2P is required to run registration/segmentation")
+
+    suite2p = _MissingSuite2P()
 from pathlib import Path
 import numpy as np
 import shutil
@@ -6,7 +23,32 @@ import time
 import copy
 import re
 import gc
+import json
+import subprocess
 import tifffile as tf
+
+from preprocessing.spatial_preprocessing import (
+    canonical_manifest_path,
+    record_motion_corrected_output,
+    validate_spatial_manifest,
+)
+
+NCC_GATE_MODES = {"report_only", "enforce"}
+
+
+def validate_canonical_plane_input(fish_folder, plane_file):
+    """Fail closed if Suite2P input is not declared canonical by the manifest."""
+    fish = Path(fish_folder)
+    plane = Path(plane_file).resolve()
+    manifest = validate_spatial_manifest(canonical_manifest_path(fish))
+    declared = {
+        Path(str(record.get("output_path"))).resolve()
+        for record in manifest.get("functional_planes", [])
+        if record.get("output_path")
+    }
+    if plane not in declared:
+        raise ValueError(f"Suite2P input is not declared in the canonical spatial manifest: {plane}")
+    return manifest
 
 def get_file_index(path: Path) -> int:
     """Extract numeric index from filenames like 'file005000_chan0.tif'."""
@@ -115,6 +157,76 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     gc.collect()
 
 
+def run_suite2p_registration_only(plane_file, global_ops, save_path0, fps, fast_disk=None):
+    """Run Suite2P registration while retaining outputs for NCC and segmentation.
+
+    This function is used only by the opt-in NCC-gated workflow. The historical
+    ``run_suite2p`` path remains unchanged.
+    """
+    ops = copy.deepcopy(global_ops)
+    ops['input_format'] = 'tif'
+    ops['fs'] = fps
+    ops['tiff_list'] = [plane_file]
+    ops['data_path'] = [str(plane_file.parent)]
+    ops['save_path0'] = str(save_path0)
+    ops['keep_movie_raw'] = False
+    ops['delete_bin'] = False
+    ops['reg_tif'] = True
+    ops['roidetect'] = False
+    ops['batch_size'] = 500
+    if fast_disk is not None:
+        ops['fast_disk'] = str(fast_disk)
+
+    suite2p.run_s2p(ops=ops)
+    plane_dir = Path(save_path0) / "suite2p" / "plane0"
+    ops_path = plane_dir / "ops.npy"
+    saved_ops = np.load(ops_path, allow_pickle=True).item() if ops_path.exists() else {}
+    registered_binary = Path(saved_ops.get("reg_file", plane_dir / "data.bin"))
+    required = (ops_path, registered_binary, plane_dir / "reg_tif")
+    missing = [path for path in required if not path.exists()]
+    if missing:
+        raise RuntimeError(f"Suite2P registration-only outputs are incomplete: {missing}")
+    gc.collect()
+    return plane_dir
+
+
+def resume_suite2p_segmentation(registered_plane_dir, *, delete_bin=True):
+    """Run ROI detection/extraction from an existing Suite2P registration."""
+    from suite2p.run_s2p import run_plane
+
+    plane_dir = Path(registered_plane_dir)
+    ops_path = plane_dir / "ops.npy"
+    if not ops_path.exists():
+        raise FileNotFoundError(f"Cannot resume Suite2P segmentation from {plane_dir}")
+    ops = np.load(ops_path, allow_pickle=True).item()
+    binary_path = Path(ops.get("reg_file", plane_dir / "data.bin"))
+    if not binary_path.exists():
+        raise FileNotFoundError(f"Registered Suite2P binary is missing: {binary_path}")
+    ops['do_registration'] = 0
+    ops['roidetect'] = True
+    ops['delete_bin'] = bool(delete_bin)
+    run_plane(ops, ops_path=str(ops_path))
+    if not (plane_dir / "stat.npy").exists():
+        raise RuntimeError(f"Suite2P segmentation did not write stat.npy under {plane_dir}")
+    gc.collect()
+    return plane_dir
+
+
+def move_segmentation_files(plane_idx, suite2p_plane_dir, analysis_s2p_folder, fish_id):
+    """Move one registered plane's NPY outputs into the canonical fish folder."""
+    source = Path(suite2p_plane_dir)
+    destination = Path(analysis_s2p_folder) / f"plane{plane_idx}"
+    destination.mkdir(parents=True, exist_ok=True)
+    for seg_file in sorted(source.glob('*.npy')):
+        new_name = f"{fish_id}_plane{plane_idx}_{seg_file.name}"
+        dest_file = destination / new_name
+        if dest_file.exists():
+            dest_file.unlink()
+        shutil.move(str(seg_file), str(dest_file))
+        print(f"Moved {seg_file.name} -> {dest_file}")
+    return destination
+
+
 def find_plane_file(pre_dir, plane_idx):
     """
     Find the preprocessed TIFF file for a specific plane index.
@@ -166,9 +278,16 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
         if plane_file is None:
             print(f"⚠️ Plane {plane_idx} not found.")
             continue
+        validate_canonical_plane_input(fish_folder, plane_file)
         print(f"Processing plane {plane_idx} → {plane_file.name}")
         run_suite2p(plane_file, global_ops, analysis_s2p_folder, fps, fast_disk)
         src_folder = move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_folder.name)
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=src_folder,
+        )
         
         if storage_root is not None and src_folder:
             storage_root_p = Path(storage_root)
@@ -184,6 +303,149 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
                     print(f"📁 Mirrored segmentation file: {f} → {dst_file}")
         
         gc.collect()
+
+
+def process_fish_with_ncc_gate(
+    fish_folder,
+    global_ops,
+    selected_planes,
+    fps,
+    *,
+    fast_disk=None,
+    storage_root=None,
+    gate_mode="report_only",
+    ncc_output_dir=None,
+    ncc_workers=1,
+    ncc_python=None,
+):
+    """Run registration, NCC QC, then optionally enforce the gate before segmentation.
+
+    ``report_only`` always continues to segmentation and is intended for parity
+    validation. ``enforce`` stops before segmentation unless NCC returns a
+    ``pass_candidate``. Registered outputs are preserved when the gate stops.
+    """
+    mode = str(gate_mode).strip().lower()
+    if mode not in NCC_GATE_MODES:
+        raise ValueError(f"gate_mode must be one of {sorted(NCC_GATE_MODES)}, got {gate_mode!r}")
+    fish_folder = Path(fish_folder)
+    pre_dir = fish_folder / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+    mcorrected_folder = fish_folder / "02_reg/00_preprocessing/2p_functional/02_motionCorrected"
+    analysis_s2p_folder = fish_folder / "03_analysis/functional/suite2P"
+    if not pre_dir.is_dir():
+        raise FileNotFoundError(f"Missing preprocessed plane folder: {pre_dir}")
+    mcorrected_folder.mkdir(parents=True, exist_ok=True)
+    analysis_s2p_folder.mkdir(parents=True, exist_ok=True)
+    gate_root = analysis_s2p_folder / "_ncc_gate_registration"
+    if gate_root.exists():
+        raise FileExistsError(f"NCC gate staging folder already exists: {gate_root}")
+
+    registered_by_plane = {}
+    for plane_idx in selected_planes:
+        plane_file = find_plane_file(pre_dir, plane_idx)
+        if plane_file is None:
+            raise FileNotFoundError(f"Preprocessed plane {plane_idx} not found under {pre_dir}")
+        validate_canonical_plane_input(fish_folder, plane_file)
+        stage_root = gate_root / f"plane{plane_idx}"
+        plane_fast_disk = None
+        if fast_disk is not None:
+            plane_fast_disk = Path(fast_disk) / fish_folder.name / f"plane{plane_idx}"
+            plane_fast_disk.mkdir(parents=True, exist_ok=True)
+        print(f"Registration-only plane {plane_idx} -> {plane_file.name}")
+        registered_plane_dir = run_suite2p_registration_only(
+            plane_file,
+            global_ops,
+            stage_root,
+            fps,
+            plane_fast_disk,
+        )
+        registered_by_plane[int(plane_idx)] = registered_plane_dir
+        join_reg_tiffs_to_one(
+            registered_plane_dir / "reg_tif",
+            mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+        )
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=registered_plane_dir,
+        )
+
+    if ncc_output_dir is None:
+        ncc_output_dir = (
+            fish_folder
+            / "03_analysis"
+            / "functional"
+            / "ncc"
+            / "validation"
+            / time.strftime("%Y%m%d-%H%M%S")
+        )
+    ncc_output_dir = Path(ncc_output_dir)
+    if ncc_python is None:
+        from preprocessing.drift_analysis import FunctionalAnatomyQCConfig, run_drift_analysis
+
+        manifest = run_drift_analysis(
+            fish_dir=fish_folder,
+            output_dir=ncc_output_dir,
+            config=FunctionalAnatomyQCConfig(workers=int(ncc_workers)),
+        )
+    else:
+        command = [
+            str(ncc_python),
+            "-m",
+            "preprocessing.drift_analysis_cli",
+            "--fish-dir",
+            str(fish_folder),
+            "--output-dir",
+            str(ncc_output_dir),
+            "--workers",
+            str(int(ncc_workers)),
+        ]
+        subprocess.run(
+            command,
+            cwd=str(Path(__file__).resolve().parent.parent),
+            check=True,
+        )
+        manifest_path = ncc_output_dir / "functional_anatomy_qc_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+    print(f"NCC gate result: {manifest['status']}")
+    if mode == "enforce" and manifest["status"] != "pass_candidate":
+        print("NCC gate stopped before segmentation; registration outputs were preserved for review.")
+        return {
+            "ncc_gate_mode": mode,
+            "ncc_manifest": manifest,
+            "segmentation_ran": False,
+            "registered_plane_dirs": {str(key): str(value) for key, value in registered_by_plane.items()},
+        }
+
+    destinations = {}
+    for plane_idx, registered_plane_dir in sorted(registered_by_plane.items()):
+        resume_suite2p_segmentation(registered_plane_dir, delete_bin=True)
+        destination = move_segmentation_files(
+            plane_idx,
+            registered_plane_dir,
+            analysis_s2p_folder,
+            fish_folder.name,
+        )
+        record_motion_corrected_output(
+            fish_folder,
+            plane_index=plane_idx,
+            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+            suite2p_plane_dir=destination,
+        )
+        destinations[str(plane_idx)] = str(destination)
+        if storage_root is not None:
+            storage_destination = Path(storage_root) / fish_folder.name / destination.relative_to(fish_folder)
+            storage_destination.mkdir(parents=True, exist_ok=True)
+            for file_path in destination.iterdir():
+                if file_path.is_file():
+                    shutil.copy2(file_path, storage_destination / file_path.name)
+    shutil.rmtree(gate_root)
+    return {
+        "ncc_gate_mode": mode,
+        "ncc_manifest": manifest,
+        "segmentation_ran": True,
+        "segmentation_destinations": destinations,
+    }
 
 
 def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None):

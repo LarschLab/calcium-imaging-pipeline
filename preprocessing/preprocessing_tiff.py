@@ -1,3 +1,10 @@
+"""Split raw functional TIFF recordings into plane movies.
+
+This is the historical functional-preprocessing entry point.  It can preserve
+the microscope's original X/Y orientation, or optionally use a resolved fish
+polarity to place every fish in the shared codeANTs X/Y orientation.
+"""
+
 from pathlib import Path
 import tifffile as tf
 import numpy as np
@@ -6,6 +13,13 @@ import time
 import gc
 import re
 import multiprocessing as mp
+
+from preprocessing.spatial_preprocessing import (
+    ACQUISITION_XY_FRAME,
+    CANONICAL_XY_FRAME,
+    apply_canonical_xy,
+    normalize_polarity,
+)
 
 def correct_chunk_int16_to_uint16(chunk, offset):
     """
@@ -45,7 +59,8 @@ def load_tiff_file(filepath, n_planes, n_frames_per_plane):
                 print(f"⚠️ {filepath.name}: stopped at frame {i} due to error: {e}")
                 # frame to remove to make it divisible by n_planes * n_frames_per_plane
                 to_remove = len(frames)%(n_planes * n_frames_per_plane)
-                frames = frames[:-to_remove]
+                if to_remove:
+                    frames = frames[:-to_remove]
                 break  # stop reading further pages
     if not frames:
         raise ValueError(f"{filepath.name}: no readable frames")
@@ -196,7 +211,21 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     print(f"  Full concatenated stack shape: {full_stack.shape}")
     return full_stack
 
-def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
+def process_fish(
+    fish_id,
+    input_base,
+    output_base,
+    protocol="resonant",
+    blocks=None,
+    n_planes=None,
+    n_frames_per_plane=None,
+    volume_flyback_frames=1,
+    remove_first_frame=False,
+    *,
+    apply_polarity_orientation=False,
+    polarity=None,
+    polarity_source=None,
+):
     """
     Process one fish for either resonant or linear protocols.
 
@@ -210,9 +239,39 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
     - n_frames_per_plane (int): Frames per plane (only resonant).
     - volume_flyback_frames (int): Volume flyback frames (only resonant).
     - remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
+    - apply_polarity_orientation (bool): If True, use north/south polarity to
+      place the movie in the shared X/Y orientation. If False, do not use
+      polarity and leave X/Y unchanged.
+    - polarity (str or None): Reviewed or predicted north/south direction. It
+      is required only when apply_polarity_orientation is True.
+    - polarity_source (str or None): Plain description of where polarity came
+      from, saved in the metadata when orientation is applied.
+
+    Returns:
+    - None: Plane TIFFs and a JSON metadata file are written to output_base.
     """
+    if apply_polarity_orientation:
+        polarity = normalize_polarity(polarity)
+        if polarity not in {"north", "south"}:
+            raise ValueError(
+                "apply_polarity_orientation=True requires a resolved north/south polarity"
+            )
+        xy_transform = "flipY" if polarity == "north" else "flipX"
+        output_xy_frame = CANONICAL_XY_FRAME
+    else:
+        polarity = None
+        polarity_source = None
+        xy_transform = "none"
+        output_xy_frame = ACQUISITION_XY_FRAME
     full_stack = concatenate_blocks(fish_id, input_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
     full_stack = correct_negative_values_mp_safe(full_stack)
+    raw_functional_dir = Path(input_base) / fish_id / "01_raw" / "2p" / "functional"
+    selected_tiffs = [
+        str(path)
+        for path in sorted(raw_functional_dir.glob("*.tif"))
+        if "anatomy" not in path.name.lower()
+        and (blocks is None or extract_block_number(path) in blocks)
+    ]
     output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -221,6 +280,8 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
             # Extract one plane across all volumes
             avg_plane = np.mean(full_stack, axis=1)[plane_idx::n_planes]
             avg_plane = np.round(avg_plane).astype(np.uint16)
+            if apply_polarity_orientation:
+                avg_plane = apply_canonical_xy(avg_plane, polarity)
             save_stack(output_path, f"{fish_id}_plane{plane_idx}.tif", avg_plane)
             print(f"  Saved plane {plane_idx}")
             del avg_plane
@@ -235,10 +296,24 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
             "remove_first_frame": remove_first_frame,
             "fish_id": fish_id,
             "output_path": str(output_path),
+            "apply_polarity_orientation": bool(apply_polarity_orientation),
+            "polarity": polarity,
+            "polarity_source": polarity_source,
+            "input_xy_frame": ACQUISITION_XY_FRAME,
+            "output_xy_frame": output_xy_frame,
+            "xy_transform": xy_transform,
+            "sessions": [{
+                "session_label": "r1",
+                "session_number": 1,
+                "output_planes": list(range(int(n_planes))),
+                "selected_tiffs": selected_tiffs,
+            }],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
     elif protocol == "linear":
+        if apply_polarity_orientation:
+            full_stack = apply_canonical_xy(full_stack, polarity)
         save_stack(output_path, f"{fish_id}_stack.tif", full_stack)
 
         metadata = {
@@ -246,6 +321,18 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
             "blocks": blocks,
             "fish_id": fish_id,
             "output_path": str(output_path),
+            "apply_polarity_orientation": bool(apply_polarity_orientation),
+            "polarity": polarity,
+            "polarity_source": polarity_source,
+            "input_xy_frame": ACQUISITION_XY_FRAME,
+            "output_xy_frame": output_xy_frame,
+            "xy_transform": xy_transform,
+            "sessions": [{
+                "session_label": "r1",
+                "session_number": 1,
+                "output_planes": [0],
+                "selected_tiffs": selected_tiffs,
+            }],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
 
@@ -260,7 +347,21 @@ def process_fish(fish_id, input_base, output_base, protocol="resonant", blocks=N
 
     print(f"✅ Finished processing {fish_id}")
 
-def parallel_preprocess(fish_ids, input_base, output_base, protocol="resonant", blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
+def parallel_preprocess(
+    fish_ids,
+    input_base,
+    output_base,
+    protocol="resonant",
+    blocks=None,
+    n_planes=None,
+    n_frames_per_plane=None,
+    volume_flyback_frames=1,
+    remove_first_frame=False,
+    *,
+    apply_polarity_orientation=False,
+    polarity_by_fish=None,
+    polarity_source_by_fish=None,
+):
     """
     Run preprocessing across multiple fish using multiprocessing.
 
@@ -274,15 +375,33 @@ def parallel_preprocess(fish_ids, input_base, output_base, protocol="resonant", 
     - n_frames_per_plane (int): Frames per plane (only resonant).
     - vflyback_frames (int): Flyback frames (only resonant).
     - remove_first_frame (bool): Whether to remove the first frame in resonant protocol.
+    - apply_polarity_orientation (bool): Apply both polarity interpretation and
+      the matching X/Y reorientation when True; do neither when False.
+    - polarity_by_fish (dict[str, str] or None): North/south value for each fish
+      when polarity orientation is enabled.
+    - polarity_source_by_fish (dict[str, str] or None): Where each saved
+      polarity value came from.
 
+    Returns:
+    - None: Waits for every fish-processing job to finish.
     """
-    jobs = []
-    for fish_id in fish_ids:
-        # Prepare arguments for each fish to be processed in parallel
-        jobs.append((fish_id, input_base, output_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame))
-
     with mp.Pool(processes=mp.cpu_count()) as pool:
-        pool.starmap(process_fish, jobs)
+        jobs = []
+        for fish_id in fish_ids:
+            jobs.append(pool.apply_async(
+                process_fish,
+                args=(
+                    fish_id, input_base, output_base, protocol, blocks,
+                    n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame,
+                ),
+                kwds={
+                    "apply_polarity_orientation": apply_polarity_orientation,
+                    "polarity": (polarity_by_fish or {}).get(fish_id),
+                    "polarity_source": (polarity_source_by_fish or {}).get(fish_id),
+                },
+            ))
+        for job in jobs:
+            job.get()
 
 
 if __name__ == "__main__":
