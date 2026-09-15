@@ -1,21 +1,17 @@
+"""Create and expose the standard directory tree for imaging experiments."""
+
 from pathlib import Path
 
+
 def init_experiment_tree(base_dir, fish_name):
-    """
-    Create standard folder tree for a 2p experiment and return key paths.
+    """Create the standard folder tree for a 2P experiment.
 
-    Parameters
-    ----------
-    base_dir : Path
-        Root directory like Z:/.../07_Data/<experimenter>.
-    fish name : str
-        Experiment folder name (e.g., metadata['fish_ID'] as string).
+    Args:
+        base_dir (Path): Root directory containing experiment folders.
+        fish_name (str): Experiment folder name, normally based on ``fish_id``.
 
-    Returns
-    -------
-    dict
-        Useful paths: root, raw_2p_metadata, raw_2p_functional, raw_2p_anatomy,
-        analysis_suite2p, plots.
+    Returns:
+        dict: Paths used by acquisition, preprocessing, analysis, and plotting.
     """
     root = base_dir / fish_name
 
@@ -53,9 +49,11 @@ def init_experiment_tree(base_dir, fish_name):
         # 03_analysis
         "03_analysis/structural/cellpose",
         "03_analysis/functional/suite2P",
+        "03_analysis/functional/suite2P/merged_dFoF",
 
         # 04_plots
         "04_plots",
+        "04_plots/basic_calcium_analysis",
     ]
 
     for rd in rel_dirs:
@@ -68,4 +66,6 @@ def init_experiment_tree(base_dir, fish_name):
         "raw_2p_anatomy": root / "01_raw/2p/anatomy",
         "analysis_suite2p": root / "03_analysis/functional/suite2P",
         "plots": root / "04_plots",
+        "merged_dfof": root / "03_analysis/functional/suite2P/merged_dFoF",
+        "basic_analysis_plots": root / "04_plots/basic_calcium_analysis",
     }
