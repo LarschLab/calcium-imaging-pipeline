@@ -1,4 +1,5 @@
 video_stimuli/
 data/
 04_plots/
+tests/
 .idea/
