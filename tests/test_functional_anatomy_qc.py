@@ -31,11 +31,10 @@ from preprocessing.drift_analysis import (
     anatomy_z_spacing_um,
     block_third_bounds,
     block_third_labels,
-    quadratic_peak_z,
-    read_raw_anatomy,
     run_drift_analysis,
 )
 from preprocessing.preprocessing_tiff import process_fish
+from registration.plane_matching import refine_peak_depth
 
 
 def _spot(shape, y, x):
@@ -141,7 +140,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
         """
         for name in (
             "norm01",
-            "corrcoef_img",
+            "normalized_cross_correlation",
             "load_preprocessing_sessions",
             "build_window_references",
             "search_scale",
@@ -309,24 +308,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             None: The test passes if the assertion holds; otherwise it
             raises an assertion error.
         """
-        self.assertTrue(np.isclose(quadratic_peak_z(np.asarray([0.0, 0.5, 1.0, 0.75, 0.0])), 2.1666666667))
-
-    def test_raw_anatomy_preserves_page_order_and_signed_dtype(self):
-        """Raw anatomy reading must not reorder pages or discard signed values.
-
-        Returns:
-            None: The test passes if all assertions hold; otherwise it
-            raises an assertion error.
-        """
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            stack = (np.arange(5 * 8 * 9).reshape(5, 8, 9) - 100).astype(np.int16)
-            path = root / "fish_anatomy_00001.tif"
-            tifffile.imwrite(path, stack, photometric="minisblack")
-            loaded = read_raw_anatomy(path)
-            self.assertEqual(loaded.data_zyx.shape, stack.shape)
-            self.assertEqual(loaded.source_dtype, "int16")
-            np.testing.assert_array_equal(loaded.data_zyx, stack)
+        self.assertTrue(np.isclose(refine_peak_depth(np.asarray([0.0, 0.5, 1.0, 0.75, 0.0])), 2.1666666667))
 
     def test_anatomy_spacing_comes_from_metadata_and_must_agree(self):
         """Conflicting anatomy slice spacing must stop instead of being guessed.

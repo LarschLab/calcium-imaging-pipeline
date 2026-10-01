@@ -1,11 +1,25 @@
-"""Run anatomy-depth matching and drift analysis on preprocessed fish data.
+"""Functional-to-anatomy NCC quality control: best anatomy depth and Z drift per plane.
 
-This module is independent of raw TIFF preprocessing and Suite2P registration.
-It can be run later on a fish that already has canonical anatomy,
-preprocessing metadata, motion-corrected plane TIFFs, and the spatial manifest
-declaring those files. The main Suite2P workflow calls the same public function
-after motion correction, so prospective and retrospective runs use identical
-calculations.
+For every motion-corrected plane of a fish (`run_drift_analysis`):
+1. Build a pooled reference image (after block 0) and find its scale, best
+   anatomy depth and X/Y position on the canonical anatomy NRRD (NCC search;
+   the matching functions come from `registration/`).
+2. Track the best depth through each acquisition block, in thirds, to measure
+   Z drift over the recording. Block 0 is shown for settling but excluded
+   from the decision.
+3. Summarize per session (pass / review / fail candidate) and write CSV
+   tables, QC plots and a JSON manifest to the output folder.
+
+Inputs: the canonical anatomy NRRD, the preprocessing metadata (sessions) and
+the motion-corrected plane TIFFs declared in the spatial manifest -- so it
+runs only on fish from the canonical spatial workflow.
+
+Used by:
+- `drift_analysis_cli.py`: retrospective run on an already processed fish.
+- `motion_segmentation_suite2p.py`: the NCC-gated Suite2P run, after motion
+  correction and before ROI segmentation (report only, or stop on a bad result).
+- `functional_anatomy_qc.py` / `_cli.py`: the module's old names, kept for
+  existing scripts.
 """
 
 from __future__ import annotations
@@ -29,7 +43,6 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage as ndi
 from skimage.registration import phase_cross_correlation
-from skimage.transform import resize
 import tifffile
 
 from preprocessing.spatial_preprocessing import (
@@ -38,6 +51,8 @@ from preprocessing.spatial_preprocessing import (
     canonical_manifest_path,
     validate_spatial_manifest,
 )
+from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
+from registration.plane_matching import find_best_xy_at_each_depth, refine_peak_depth, scale_image, search_scale
 
 
 @dataclass(frozen=True)
@@ -70,143 +85,6 @@ class RawAnatomy:
     page_count: int
     series_shape: tuple[int, ...]
     used_page_stack_fallback: bool
-
-
-def norm01(image):
-    """Scale an image to 0-1 using brightness limits that ignore rare extremes.
-
-    Args:
-        image (numpy.ndarray): Image array to normalize.
-
-    Returns:
-        numpy.ndarray: Float32 array with values clipped to [0, 1], or the
-        original empty array unchanged if `image` has no elements.
-    """
-    arr = np.asarray(image, dtype=np.float32)
-    if arr.size == 0:
-        return arr
-    low, high = np.percentile(arr, (1.0, 99.8))
-    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
-        low = float(np.min(arr))
-        high = float(np.max(arr))
-    if high <= low:
-        return np.zeros(arr.shape, dtype=np.float32)
-    return np.clip((arr - low) / (high - low), 0.0, 1.0).astype(np.float32)
-
-
-def local_unsharp(image, sigma, amount):
-    """Gently sharpen local anatomy detail without changing image size.
-
-    Args:
-        image (numpy.ndarray): Image to sharpen, expected in the 0-1 range.
-        sigma (float): Standard deviation of the Gaussian blur used to build
-            the smoothed base image.
-        amount (float): Strength of the unsharp-mask boost added back on top
-            of the blurred base.
-
-    Returns:
-        numpy.ndarray: Sharpened image, clipped to [0, 1].
-    """
-    base = ndi.gaussian_filter(np.asarray(image, dtype=np.float32), sigma)
-    return np.clip(base + amount * (np.asarray(image) - base), 0.0, 1.0)
-
-
-def corrcoef_img(first, second):
-    """Measure how similar two images are on a scale from -1 to 1.
-
-    Args:
-        first (numpy.ndarray): First image.
-        second (numpy.ndarray): Second image; must have the same shape as
-            `first`.
-
-    Returns:
-        float: Zero-mean normalized cross-correlation between the two
-        images, or 0.0 if the denominator is numerically negligible.
-    """
-    a = np.asarray(first, dtype=np.float32)
-    b = np.asarray(second, dtype=np.float32)
-    if a.shape != b.shape:
-        raise ValueError(f"NCC arrays must have equal shape, got {a.shape} and {b.shape}")
-    a = a - float(a.mean())
-    b = b - float(b.mean())
-    denominator = float(np.sqrt(np.sum(a * a) * np.sum(b * b)))
-    if denominator <= 1e-12:
-        return 0.0
-    return float(np.sum(a * b) / denominator)
-
-
-def discover_raw_in_vivo_anatomy(fish_dir):
-    """Find the single raw in-vivo anatomy TIFF for one fish.
-
-    Args:
-        fish_dir (str or Path): Fish root directory containing
-            `01_raw/2p/anatomy`.
-
-    Returns:
-        Path: Path to the one raw in-vivo anatomy TIFF found (files with
-        "ex_vivo" or "exvivo" in the stem are excluded).
-    """
-    raw_dir = Path(fish_dir) / "01_raw" / "2p" / "anatomy"
-    candidates = [
-        path
-        for path in sorted(raw_dir.glob("*.tif*"))
-        if "ex_vivo" not in path.stem.lower() and "exvivo" not in path.stem.lower()
-    ]
-    if len(candidates) != 1:
-        listed = ", ".join(path.name for path in candidates) or "<none>"
-        raise ValueError(f"Expected exactly one raw in-vivo anatomy TIFF under {raw_dir}; found {listed}")
-    return candidates[0]
-
-
-def read_raw_anatomy(path):
-    """Read raw anatomy while preserving TIFF page order and signed values.
-
-    Reads the anatomy stack as a Z,Y,X volume, falling back to stacking
-    individual TIFF pages when the file's series shape does not match the
-    per-page shape.
-
-    Args:
-        path (str or Path): Path to the raw anatomy TIFF.
-
-    Returns:
-        RawAnatomy: The loaded volume plus metadata about how it was read.
-    """
-    source = Path(path)
-    with tifffile.TiffFile(source) as tif:
-        if not tif.pages:
-            raise ValueError(f"Raw anatomy TIFF contains no pages: {source}")
-        page_count = len(tif.pages)
-        series_shape = tuple(int(value) for value in tif.series[0].shape)
-        first_shape = tuple(int(value) for value in tif.pages[0].shape)
-        if len(first_shape) != 2:
-            raise ValueError(f"Expected 2D anatomy pages, got {first_shape}: {source}")
-        inconsistent_series = (
-            len(series_shape) != 3
-            or int(series_shape[0]) != page_count
-            or tuple(series_shape[-2:]) != first_shape
-        )
-        if inconsistent_series:
-            pages = [np.asarray(page.asarray()) for page in tif.pages]
-            if any(tuple(page.shape) != first_shape for page in pages):
-                raise ValueError(f"Raw anatomy TIFF has inconsistent page shapes: {source}")
-            data = np.stack(pages, axis=0)
-            reader = "tifffile_pages"
-        else:
-            data = np.asarray(tif.asarray())
-            reader = "tifffile_series"
-    if data.ndim != 3 or data.shape[0] != page_count:
-        raise ValueError(f"Expected anatomy Z,Y,X with {page_count} pages, got {data.shape}: {source}")
-    if not np.issubdtype(data.dtype, np.integer):
-        raise TypeError(f"Expected integer raw anatomy, got {data.dtype}: {source}")
-    return RawAnatomy(
-        data_zyx=data,
-        source_path=source,
-        reader=reader,
-        source_dtype=str(data.dtype),
-        page_count=page_count,
-        series_shape=series_shape,
-        used_page_stack_fallback=inconsistent_series,
-    )
 
 
 def read_canonical_anatomy(path):
@@ -243,6 +121,10 @@ def read_canonical_anatomy(path):
     ), spacing
 
 
+# TODO: the anatomy Z step has two sources that could disagree: this reads
+# `step_size_um_anatomy` from the metadata CSVs (also used by the canonical
+# workflow), while the registration notebook reads ScanImage's
+# `SI.hStackManager.stackZStepSize` from the anatomy TIFF. Pick one with Danin.
 def anatomy_z_spacing_um(metadata_dir):
     """Read anatomy slice spacing and ensure all metadata files agree.
 
@@ -420,7 +302,7 @@ def top_correlated_mean(
     correlations = np.empty(frames.shape[0], dtype=np.float32)
     for index, frame in enumerate(frames):
         compare = ndi.gaussian_filter(frame, pre_smooth_sigma) if pre_smooth_sigma > 0 else frame
-        correlations[index] = corrcoef_img(compare, compare_reference)
+        correlations[index] = normalized_cross_correlation(compare, compare_reference)
     selected = np.argsort(correlations)[-min(int(take_k), frames.shape[0]) :]
     return frames[selected].mean(axis=0)
 
@@ -549,179 +431,6 @@ def pooled_analysis_reference(
     return local_unsharp(norm01(reference), config.sharpen_sigma, config.sharpen_amount)
 
 
-def scale_image(image, scale):
-    """Resize a functional image by a candidate anatomy-matching scale.
-
-    Args:
-        image (numpy.ndarray): Image to resize.
-        scale (float): Scale factor applied to both dimensions; a value
-            close to 1.0 returns the image unchanged.
-
-    Returns:
-        numpy.ndarray: Resized float32 image.
-    """
-    arr = np.asarray(image, dtype=np.float32)
-    if np.isclose(scale, 1.0):
-        return arr
-    shape = tuple(max(1, int(round(value * float(scale)))) for value in arr.shape)
-    return resize(arr, shape, order=1, preserve_range=True, anti_aliasing=True).astype(np.float32)
-
-
-def global_xy_depth_profile(
-    template,
-    anatomy_zyx,
-):
-    """Find the best X/Y placement and similarity at every anatomy depth.
-
-    Runs an exhaustive normalized cross-correlation template match of
-    `template` against every anatomy Z-slice.
-
-    Args:
-        template (numpy.ndarray): Functional reference image to place
-            within the anatomy volume.
-        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
-
-    Returns:
-        tuple: `(scores, xs, ys)`, three arrays of length equal to the
-        number of anatomy slices, giving the best-match NCC score and the
-        top-left X and Y pixel coordinates of that match at each depth.
-        Slices too small to fit the template keep a score of `-inf` and
-        coordinates of `-1`.
-    """
-    moving = norm01(template)
-    scores = np.full(anatomy_zyx.shape[0], -np.inf, dtype=np.float32)
-    xs = np.full(anatomy_zyx.shape[0], -1, dtype=np.int32)
-    ys = np.full(anatomy_zyx.shape[0], -1, dtype=np.int32)
-    for z_index, anatomy_slice in enumerate(anatomy_zyx):
-        fixed = norm01(anatomy_slice)
-        if moving.shape[0] > fixed.shape[0] or moving.shape[1] > fixed.shape[1]:
-            continue
-        response = cv2.matchTemplate(fixed, moving, cv2.TM_CCORR_NORMED)
-        _, maximum, _, location = cv2.minMaxLoc(response)
-        scores[z_index] = float(maximum)
-        xs[z_index], ys[z_index] = int(location[0]), int(location[1])
-    if not np.isfinite(scores).any():
-        raise ValueError(f"Template {moving.shape} does not fit anatomy slices {anatomy_zyx.shape[1:]}")
-    return scores, xs, ys
-
-
-def quadratic_peak_z(scores):
-    """Estimate a best depth between slices around the strongest score.
-
-    Fits a parabola through the score at the argmax and its two neighbors
-    to refine the integer peak index to a sub-slice position.
-
-    Args:
-        scores (numpy.ndarray): Per-depth similarity scores.
-
-    Returns:
-        float: Sub-slice depth estimate of the peak. Falls back to the
-        integer argmax when the peak is at an array boundary or the
-        parabola fit is numerically degenerate.
-    """
-    values = np.asarray(scores, dtype=np.float64)
-    peak = int(np.nanargmax(values))
-    if peak == 0 or peak == values.size - 1:
-        return float(peak)
-    left, center, right = values[peak - 1 : peak + 2]
-    denominator = left - 2.0 * center + right
-    if not np.isfinite(denominator) or abs(denominator) < 1e-12:
-        return float(peak)
-    offset = 0.5 * (left - right) / denominator
-    return float(peak + np.clip(offset, -1.0, 1.0))
-
-
-def _scale_candidates(center, half_window, step):
-    """Create an inclusive sequence of image-scale values to test.
-
-    Args:
-        center (float): Scale value around which to search.
-        half_window (float): Half-width of the search window around
-            `center`.
-        step (float): Spacing between candidate scale values.
-
-    Returns:
-        numpy.ndarray: Array of candidate scale values from
-        `max(step, center - half_window)` to `center + half_window`
-        inclusive.
-    """
-    return np.arange(max(step, center - half_window), center + half_window + step * 0.25, step)
-
-
-def search_scale(
-    reference,
-    anatomy_zyx,
-    config,
-):
-    """Find the image scale producing the clearest anatomy-depth match.
-
-    NCC means normalized cross-correlation: a similarity score where a larger
-    value means the functional and anatomy images look more alike. Searches
-    a coarse scale grid first, then refines around the best candidate with
-    progressively finer grids as configured.
-
-    Args:
-        reference (numpy.ndarray): Functional reference image to place
-            within the anatomy volume.
-        anatomy_zyx (numpy.ndarray): Anatomy volume, shaped (Z, Y, X).
-        config (FunctionalAnatomyQCConfig): Coarse and fine scale-search
-            settings.
-
-    Returns:
-        dict: Best-scoring result with keys `scale` (float), `best_z`
-        (int), `score` (float), `x` (int), `y` (int), and `scores`
-        (numpy.ndarray of per-depth NCC scores at that scale).
-    """
-    start, stop, step = config.scale_coarse
-    candidates = np.arange(start, stop + step * 0.25, step)
-
-    def evaluate(scale):
-        """Score one candidate scale, or skip it when it cannot fit.
-
-        Args:
-            scale (float): Candidate image scale to test.
-
-        Returns:
-            dict or None: Dict with keys `scale` (float), `best_z` (int),
-            `score` (float), `x` (int), `y` (int), and `scores`
-            (numpy.ndarray of per-depth NCC scores), or None if the scaled
-            reference is larger than the anatomy canvas in either
-            dimension.
-        """
-        scaled = scale_image(reference, float(scale))
-        if any(scaled.shape[index] > anatomy_zyx.shape[index + 1] for index in range(2)):
-            return None
-        scores, xs, ys = global_xy_depth_profile(scaled, anatomy_zyx)
-        best_z = int(np.nanargmax(scores))
-        return {
-            "scale": float(scale),
-            "best_z": best_z,
-            "score": float(scores[best_z]),
-            "x": int(xs[best_z]),
-            "y": int(ys[best_z]),
-            "scores": scores,
-        }
-
-    evaluated = [result for scale in candidates if (result := evaluate(float(scale))) is not None]
-    if not evaluated:
-        raise RuntimeError("No valid scale candidates fit the anatomy canvas")
-    best = max(evaluated, key=lambda result: result["score"])
-    for half_window, refine_step in (
-        (config.scale_fine_half_window, config.scale_fine_step),
-        (config.scale_xfine_half_window, config.scale_xfine_step),
-    ):
-        if half_window <= 0 or refine_step <= 0:
-            continue
-        refined = [
-            result
-            for scale in _scale_candidates(float(best["scale"]), half_window, refine_step)
-            if (result := evaluate(float(scale))) is not None
-        ]
-        if refined:
-            best = max(refined, key=lambda result: result["score"])
-    return best
-
-
 def _bounded_xy_depth_profile(
     template,
     anatomy_zyx,
@@ -839,12 +548,12 @@ def tracked_local_depth_profile(
     elif bool(touched[best_z]):
         fallback_reason = "local_search_boundary"
     if fallback_reason:
-        scores, xs, ys = global_xy_depth_profile(interval_scaled, anatomy_zyx)
+        scores, xs, ys = find_best_xy_at_each_depth(interval_scaled, anatomy_zyx)
         best_z = int(np.nanargmax(scores))
     return {
         "scores": scores,
         "best_z": best_z,
-        "best_z_subslice": quadratic_peak_z(scores),
+        "best_z_subslice": refine_peak_depth(scores),
         "max_score": float(scores[best_z]),
         "x": int(xs[best_z]),
         "y": int(ys[best_z]),
@@ -934,7 +643,11 @@ def _run_plane(
     block_count = len(session["selected_tiffs"])
     canonical = pooled_analysis_reference(movie_path, block_count=block_count, config=config)
     scale_started = time.perf_counter()
-    placement = search_scale(canonical, anatomy_filtered, config)
+    placement = search_scale(
+        canonical, anatomy_filtered, *config.scale_coarse,
+        refine_windows=((config.scale_fine_half_window, config.scale_fine_step),
+                        (config.scale_xfine_half_window, config.scale_xfine_step)),
+    )
     scale_seconds = time.perf_counter() - scale_started
     references, bounds, labels = build_window_references(movie_path, block_count=block_count, config=config)
 
@@ -1007,7 +720,7 @@ def _run_plane(
         "reference_selection": "pooled_post_block0",
         "scale": float(placement["scale"]),
         "best_z": int(placement["best_z"]),
-        "best_z_subslice": quadratic_peak_z(anchor_scores),
+        "best_z_subslice": refine_peak_depth(anchor_scores),
         "max_ncc": float(placement["score"]),
         "placement_x": int(placement["x"]),
         "placement_y": int(placement["y"]),
@@ -1017,7 +730,7 @@ def _run_plane(
         "reference_height": int(canonical.shape[0]),
         "reference_width": int(canonical.shape[1]),
         "canonical_best_z": int(placement["best_z"]),
-        "canonical_best_z_subslice": quadratic_peak_z(anchor_scores),
+        "canonical_best_z_subslice": refine_peak_depth(anchor_scores),
         "canonical_ncc": float(placement["score"]),
         "canonical_x": int(placement["x"]),
         "canonical_y": int(placement["y"]),
@@ -1582,11 +1295,7 @@ __all__ = [
     "anatomy_z_spacing_um",
     "block_third_bounds",
     "block_third_labels",
-    "discover_raw_in_vivo_anatomy",
-    "global_xy_depth_profile",
-    "quadratic_peak_z",
     "read_canonical_anatomy",
-    "read_raw_anatomy",
     "run_drift_analysis",
     "run_functional_anatomy_qc",
     "tracked_local_depth_profile",
