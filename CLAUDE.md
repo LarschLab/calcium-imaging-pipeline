@@ -78,7 +78,9 @@ reviewing code in this repository.
   data instead — one bad item shouldn't crash a run processing many others.
   Reserve raising for invalid config or programmer errors.
 - Don't add inline type hints (`def f(name: str) -> int:`) — document
-  argument and return types in the docstring instead.
+  argument and return types in the docstring instead. Exception: dataclass
+  fields, which need annotations — use built-in types (`str | None`,
+  `dict | None`) so no `typing` import is needed.
 - Add short inline comments on lines doing non-obvious work (a tricky slice,
   why a constant has the value it does, what a loop iteration represents) —
   the goal is that a reader can follow the logic without re-deriving it.
