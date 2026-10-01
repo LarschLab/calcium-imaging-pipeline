@@ -12,7 +12,7 @@ import tifffile
 from scipy.ndimage import gaussian_filter
 
 
-def normalize_to_unit_range(image, low_percentile=1.0, high_percentile=99.8):
+def norm01(image, low_percentile=1.0, high_percentile=99.8):
     """Rescale an image to the 0-1 range, robust to rare outlier pixels.
 
     Uses the `low_percentile`-to-`high_percentile`
@@ -20,6 +20,11 @@ def normalize_to_unit_range(image, low_percentile=1.0, high_percentile=99.8):
     min/max, so a handful of extreme pixels (hot pixels, saturation) don't
     compress the rest of the image toward one end of the range. Falls back
     to the true min/max if the percentile range is degenerate.
+
+    Port of Danin's `norm01` from `drift_analysis.py` (defaults 1-99.8).
+    His `ddharmap-ANTs` `spatial.py` has a `norm01` with (1, 99) and a
+    `_clip_norm01` with (5, 95), used for the ANTs inputs; pass those
+    percentiles to reproduce them.
 
     Args:
         image (numpy.ndarray): Image of any numeric dtype.
@@ -49,7 +54,7 @@ def normalize_to_unit_range(image, low_percentile=1.0, high_percentile=99.8):
     return normalized_image
 
 
-def sharpen_with_unsharp_mask(image, sigma=1.0, amount=0.6):
+def local_unsharp(image, sigma=1.0, amount=0.6):
     """Boost fine detail in an image using unsharp masking.
 
     Blurs the image, subtracts the blur from the original to isolate fine
@@ -58,11 +63,12 @@ def sharpen_with_unsharp_mask(image, sigma=1.0, amount=0.6):
     original image, and `amount` above 1 extrapolates past the original for
     a genuine sharpening boost. This makes small structures (cell bodies,
     tissue edges) more distinct before comparing two images, which improves
-    cross-correlation matching. Matches `drift_analysis.py`'s
-    `local_unsharp` (anchored at the blur, not at the original image).
+    cross-correlation matching. Port of Danin's `local_unsharp` (anchored at
+    the blur, not at the original image); as in his code, normalize first:
+    `local_unsharp(norm01(image))`.
 
     Args:
-        image (numpy.ndarray): Image to sharpen.
+        image (numpy.ndarray): Image to sharpen, in the 0-1 range.
         sigma (float): Standard deviation of the Gaussian blur used to
             estimate the smooth, low-frequency part of the image.
         amount (float): Blend factor between the blurred base (0) and the
@@ -71,10 +77,10 @@ def sharpen_with_unsharp_mask(image, sigma=1.0, amount=0.6):
     Returns:
         numpy.ndarray: Sharpened image, clipped to [0, 1].
     """
-    normalized = normalize_to_unit_range(image)
-    blurred = gaussian_filter(normalized, sigma=sigma)
+    image = np.asarray(image, dtype=np.float32)
+    blurred = gaussian_filter(image, sigma=sigma)
     # What the blur smoothed away: the image's fine, high-frequency detail.
-    fine_detail = normalized - blurred
+    fine_detail = image - blurred
     # Blend from the blurred base toward the original (and past it, for
     # amount > 1) rather than boosting on top of the original image.
     boosted = blurred + amount * fine_detail
@@ -82,21 +88,21 @@ def sharpen_with_unsharp_mask(image, sigma=1.0, amount=0.6):
     return sharpened_image
 
 
-def normalized_cross_correlation(image_a, image_b, correlation_denominator_epsilon=1e-12):
+def normalized_cross_correlation(image_a, image_b, denominator_epsilon=1e-8):
     """Measure how similar two same-shaped images are, ignoring brightness.
 
     Subtracts each image's mean before comparing, so the score reflects
-    shared structure rather than overall brightness. This is the score used
-    to test how well a functional plane matches a candidate anatomy slice.
+    shared structure rather than overall brightness. Port of Danin's
+    `corrcoef_img` (`ddharmap-ANTs` `spatial.py`).
 
     Args:
         image_a (numpy.ndarray): First image.
         image_b (numpy.ndarray): Second image, same shape as `image_a`.
+        denominator_epsilon (float): Added to the denominator so a blank
+            image (zero variance) gives 0.0 instead of dividing by zero.
 
     Returns:
         float: Correlation score in [-1, 1], where 1 is a perfect match.
-        Returns 0.0 if the denominator is numerically negligible (e.g.
-        either image has ~zero variance).
 
     Raises:
         ValueError: If `image_a` and `image_b` have different shapes.
@@ -110,12 +116,7 @@ def normalized_cross_correlation(image_a, image_b, correlation_denominator_epsil
     # shared brightness.
     centered_a = image_a - float(image_a.mean())
     centered_b = image_b - float(image_b.mean())
-    denominator = float(np.sqrt(np.sum(centered_a * centered_a) * np.sum(centered_b * centered_b)))
-    if denominator <= correlation_denominator_epsilon:
-        # Denominator is negligible (e.g. one image is blank); no
-        # meaningful correlation to report, and dividing by it below would
-        # blow up on numerical noise.
-        return 0.0
+    denominator = float(np.sqrt(np.sum(centered_a * centered_a) * np.sum(centered_b * centered_b))) + denominator_epsilon
     correlation_score = float(np.sum(centered_a * centered_b) / denominator)
     return correlation_score
 

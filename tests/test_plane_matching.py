@@ -1,11 +1,13 @@
 """Tests for the plane-to-anatomy matching primitives."""
 
 import unittest
+from unittest import mock
 
 import numpy as np
 from skimage.transform import resize
 
-from registration.plane_matching import match_plane_to_anatomy, refine_peak_depth
+from registration import plane_matching
+from registration.plane_matching import _resized_shape, match_plane_to_anatomy, refine_peak_depth
 
 ANATOMY_DEPTH = 12
 ANATOMY_HEIGHT = 120
@@ -70,11 +72,21 @@ class PlaneMatchingTests(unittest.TestCase):
         # (~0.83), which the default scale range brackets.
         match = match_plane_to_anatomy(reference_image, anatomy_stack)
 
-        self.assertEqual(match["best_depth"], TRUE_DEPTH)
-        self.assertAlmostEqual(match["best_depth_subslice"], TRUE_DEPTH, delta=0.6)
+        self.assertEqual(match["best_z"], TRUE_DEPTH)
+        self.assertAlmostEqual(match["best_z_subslice"], TRUE_DEPTH, delta=0.6)
         self.assertAlmostEqual(match["scale"], 1.0 / TRUE_SCALE, delta=0.1)
         self.assertAlmostEqual(match["x"], TRUE_X, delta=3)
         self.assertAlmostEqual(match["y"], TRUE_Y, delta=3)
+
+    def test_scale_search_scores_each_resized_shape_once(self):
+        anatomy_stack = _build_synthetic_anatomy_stack()
+        reference_image = _build_synthetic_reference_image(anatomy_stack)
+
+        with mock.patch("registration.plane_matching._evaluate", wraps=plane_matching._evaluate) as evaluate_scale:
+            match_plane_to_anatomy(reference_image, anatomy_stack)
+
+        scored_shapes = [_resized_shape(reference_image.shape, call.args[0]) for call in evaluate_scale.call_args_list]
+        self.assertEqual(len(scored_shapes), len(set(scored_shapes)))
 
     def test_refine_peak_depth_recovers_known_non_integer_peak(self):
         # Samples of the parabola f(i) = 1 - (i - 2.25) ** 2, whose true
