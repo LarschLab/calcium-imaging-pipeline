@@ -103,9 +103,9 @@ def join_reg_tiffs_to_one(reg_folder, out_tiff):
     # Ensure the destination directory exists (create parents as needed)
     out_tiff.parent.mkdir(parents=True, exist_ok=True)
 
-    # If an output file already exists, remove it so we overwrite cleanly
+    # Never overwrite an existing movie (process_fish skips planes that have one).
     if out_tiff.exists():
-        out_tiff.unlink()
+        raise FileExistsError(f"{out_tiff} already exists; delete it to rerun this plane.")
 
     # Open a writer for the output stack; BigTIFF handles >4 GB files safely
     with tf.TiffWriter(out_tiff, bigtiff=True) as tw:
@@ -152,12 +152,13 @@ def move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish
     for seg_file in sorted(s2p_folder.glob('*.npy')):
         new_name = f"{fish_id}_plane{plane_idx}_{seg_file.name}"
         dest_file = destination / new_name
-        if dest_file.exists():
-            dest_file.unlink()
+        if dest_file.exists():  # never overwrite existing results
+            raise FileExistsError(f"{dest_file} already exists; delete it to rerun this plane.")
         shutil.move(str(seg_file), str(dest_file))
         print(f"✅ Moved {seg_file.name} → {dest_file}")
 
-    # Clean up Suite2p temporary folder
+    # Clean up Suite2p's own temporary output folder: its results were moved out
+    # above, and nothing else should be stored there.
     shutil.rmtree(analysis_s2p_folder / "suite2p")
 
     return destination
@@ -183,7 +184,7 @@ def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
     ops['data_path'] = [str(plane_file.parent)]
     ops['save_path0'] = str(save_path0)
     ops['keep_movie_raw'] = False
-    ops['delete_bin'] = True
+    ops['delete_bin'] = True  # Suite2p deletes its temporary binary (data.bin) when done
 
     if fast_disk is not None:
         ops['fast_disk'] = str(fast_disk)
@@ -289,11 +290,76 @@ def move_segmentation_files(plane_idx, suite2p_plane_dir, analysis_s2p_folder, f
     for seg_file in sorted(source.glob('*.npy')):
         new_name = f"{fish_id}_plane{plane_idx}_{seg_file.name}"
         dest_file = destination / new_name
-        if dest_file.exists():
-            dest_file.unlink()
+        if dest_file.exists():  # never overwrite existing results
+            raise FileExistsError(f"{dest_file} already exists; delete it to rerun this plane.")
         shutil.move(str(seg_file), str(dest_file))
         print(f"Moved {seg_file.name} -> {dest_file}")
     return destination
+
+
+def _existing_plane_outputs(fish_folder, plane_idx):
+    """List a plane's Suite2p results that already exist in the fish folder.
+
+    Args:
+        fish_folder (Path): Folder of one fish (base directory).
+        plane_idx (int): Plane index.
+
+    Returns:
+        list: Paths of the plane's motion-corrected movie and ROI `.npy`
+        files that already exist (empty if the plane hasn't been processed).
+    """
+    fish_folder = Path(fish_folder)
+    movie = fish_folder / "02_reg/00_preprocessing/2p_functional/02_motionCorrected" / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif"
+    roi_folder = fish_folder / "03_analysis/functional/suite2P" / f"plane{plane_idx}"
+    existing_outputs = [movie] if movie.exists() else []
+    if roi_folder.is_dir():
+        existing_outputs += sorted(roi_folder.glob("*.npy"))
+    return existing_outputs
+
+
+def _report_skipped_plane(plane_idx, existing_outputs):
+    """Print why a plane is skipped and how to rerun it.
+
+    Args:
+        plane_idx (int): Plane index.
+        existing_outputs (list): Its results that already exist.
+
+    Returns:
+        None
+    """
+    listed = "\n    ".join(str(path) for path in existing_outputs)
+    print(f"⚠️ Plane {plane_idx}: results already exist, so it is skipped (nothing is overwritten).\n"
+          f"  To rerun this plane, delete these files first:\n    {listed}")
+
+
+def mirror_results_to_storage(results_folder, fish_folder, storage_root):
+    """Copy a plane's Suite2p results to the storage drive, never overwriting files there.
+
+    The folder is copied to the same relative location under
+    `storage_root/<fish>`. Files already on the drive are kept, with a
+    warning, so a rerun can't silently replace stored results.
+
+    Args:
+        results_folder (Path): Local folder with the plane's result files.
+        fish_folder (Path): Local folder of the fish (base directory).
+        storage_root (str or Path): Root of the storage drive.
+
+    Returns:
+        None
+    """
+    results_folder = Path(results_folder)
+    storage_folder = Path(storage_root) / Path(fish_folder).name / results_folder.relative_to(fish_folder)
+    storage_folder.mkdir(parents=True, exist_ok=True)
+    for result_file in results_folder.iterdir():
+        if not result_file.is_file():
+            continue
+        storage_file = storage_folder / result_file.name
+        if storage_file.exists():
+            print(f"⚠️ Not copied, already on the storage drive (kept as is): {storage_file}\n"
+                  f"  To replace it, delete it on the drive first.")
+            continue
+        shutil.copy2(str(result_file), str(storage_file))
+        print(f"📁 Mirrored segmentation file: {result_file} → {storage_file}")
 
 
 def find_plane_file(pre_dir, plane_idx):
@@ -355,6 +421,10 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
         if plane_file is None:
             print(f"⚠️ Plane {plane_idx} not found.")
             continue
+        existing_outputs = _existing_plane_outputs(fish_folder, plane_idx)
+        if existing_outputs:
+            _report_skipped_plane(plane_idx, existing_outputs)
+            continue
         if has_spatial_manifest:
             validate_canonical_plane_input(fish_folder, plane_file)
         print(f"Processing plane {plane_idx} → {plane_file.name}")
@@ -369,17 +439,7 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
             )
         
         if storage_root is not None and src_folder:
-            storage_root_p = Path(storage_root)
-            storage_fish_base = storage_root_p / fish_folder.name
-
-            rel_folder = src_folder.relative_to(fish_folder)
-            dst_folder = storage_fish_base / rel_folder
-            dst_folder.mkdir(parents=True, exist_ok=True)
-            for f in src_folder.iterdir():
-                if f.is_file():
-                    dst_file = dst_folder / f.name
-                    shutil.copy2(str(f), str(dst_file))
-                    print(f"📁 Mirrored segmentation file: {f} → {dst_file}")
+            mirror_results_to_storage(src_folder, fish_folder, storage_root)
         
         gc.collect()
 
@@ -448,6 +508,10 @@ def process_fish_with_ncc_gate(
         plane_file = find_plane_file(pre_dir, plane_idx)
         if plane_file is None:
             raise FileNotFoundError(f"Preprocessed plane {plane_idx} not found under {pre_dir}")
+        existing_outputs = _existing_plane_outputs(fish_folder, plane_idx)
+        if existing_outputs:
+            _report_skipped_plane(plane_idx, existing_outputs)
+            continue
         validate_canonical_plane_input(fish_folder, plane_file)
         stage_root = gate_root / f"plane{plane_idx}"
         plane_fast_disk = None
@@ -538,12 +602,11 @@ def process_fish_with_ncc_gate(
         )
         destinations[str(plane_idx)] = str(destination)
         if storage_root is not None:
-            storage_destination = Path(storage_root) / fish_folder.name / destination.relative_to(fish_folder)
-            storage_destination.mkdir(parents=True, exist_ok=True)
-            for file_path in destination.iterdir():
-                if file_path.is_file():
-                    shutil.copy2(file_path, storage_destination / file_path.name)
-    shutil.rmtree(gate_root)
+            mirror_results_to_storage(destination, fish_folder, storage_root)
+    # The staging folder only holds this run's temporary Suite2p files (results
+    # were moved out above); nothing else should be stored there.
+    if gate_root.exists():
+        shutil.rmtree(gate_root)
     return {
         "ncc_gate_mode": mode,
         "ncc_manifest": manifest,

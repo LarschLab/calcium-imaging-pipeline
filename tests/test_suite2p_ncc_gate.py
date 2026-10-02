@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -78,6 +80,67 @@ class Suite2PNCCGateTests(unittest.TestCase):
                 stage.process_fish(fish, {}, [0], fps=2.0)
             self.assertEqual(run_suite2p.call_count, 1)
             self.assertFalse(stage.canonical_manifest_path(fish).exists())
+
+    def test_plane_with_existing_results_is_skipped_not_overwritten(self):
+        """A plane whose motion-corrected movie exists must be skipped, with a hint to delete it.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            planes = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            planes.mkdir(parents=True)
+            (planes / "L000_f00_plane0.tif").touch()
+            movie = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "02_motionCorrected" / "L000_f00_plane0_mcorrected.tif"
+            movie.parent.mkdir(parents=True)
+            movie.write_bytes(b"earlier result")
+            printed = io.StringIO()
+            with mock.patch.object(stage, "run_suite2p") as run_suite2p, contextlib.redirect_stdout(printed):
+                stage.process_fish(fish, {}, [0], fps=2.0)
+            run_suite2p.assert_not_called()
+            self.assertEqual(movie.read_bytes(), b"earlier result")
+            self.assertIn("delete these files first", printed.getvalue())
+            self.assertIn(str(movie), printed.getvalue())
+
+    def test_joining_registered_tiffs_refuses_to_overwrite(self):
+        """The motion-corrected movie writer must not replace an existing file.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            movie = Path(temporary) / "plane0_mcorrected.tif"
+            movie.write_bytes(b"earlier result")
+            with self.assertRaises(FileExistsError):
+                stage.join_reg_tiffs_to_one(Path(temporary) / "reg_tif", movie)
+            self.assertEqual(movie.read_bytes(), b"earlier result")
+
+    def test_mirroring_keeps_files_already_on_the_storage_drive(self):
+        """Copying results to storage must add new files but never replace existing ones.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "local" / "L000_f00"
+            results = fish / "03_analysis" / "functional" / "suite2P" / "plane0"
+            results.mkdir(parents=True)
+            (results / "L000_f00_plane0_stat.npy").write_bytes(b"new stat")
+            (results / "L000_f00_plane0_F.npy").write_bytes(b"new F")
+            storage_root = Path(temporary) / "drive"
+            stored = storage_root / "L000_f00" / "03_analysis" / "functional" / "suite2P" / "plane0"
+            stored.mkdir(parents=True)
+            (stored / "L000_f00_plane0_stat.npy").write_bytes(b"stored stat")
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                stage.mirror_results_to_storage(results, fish, storage_root)
+            self.assertEqual((stored / "L000_f00_plane0_stat.npy").read_bytes(), b"stored stat")
+            self.assertEqual((stored / "L000_f00_plane0_F.npy").read_bytes(), b"new F")
+            self.assertIn("already on the storage drive", printed.getvalue())
 
     def test_fish_with_spatial_manifest_still_checks_declared_planes(self):
         """A plane missing from an existing manifest must stop before Suite2P.
