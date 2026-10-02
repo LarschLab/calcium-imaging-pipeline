@@ -6,6 +6,8 @@ import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+
 from preprocessing.drift_analysis import FunctionalAnatomyQCConfig, run_drift_analysis
 
 
@@ -23,6 +25,7 @@ def build_parser():
     parser.add_argument("--anatomy-path", type=Path)
     parser.add_argument("--preprocessing-metadata-path", type=Path)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--windows-per-block", type=int, default=3)
     parser.add_argument("--sampled-frames-per-third", type=int, default=80)
     parser.add_argument("--top-correlated-frames", type=int, default=20)
     parser.add_argument("--local-xy-radius", type=int, default=8)
@@ -41,6 +44,8 @@ def main(argv=None):
         int: Process exit code; always 0 on success.
     """
     args = build_parser().parse_args(argv)
+    # Save-only plotting backend: the command often runs on servers without a screen.
+    matplotlib.use("Agg")
     fish_dir = args.fish_dir.resolve()
     output_dir = args.output_dir or (
         fish_dir / "03_analysis" / "functional" / "ncc" / "validation" / "current"
@@ -52,6 +57,7 @@ def main(argv=None):
         preprocessing_metadata_path=args.preprocessing_metadata_path,
         config=FunctionalAnatomyQCConfig(
             workers=args.workers,
+            windows_per_block=args.windows_per_block,
             sampled_frames_per_window=args.sampled_frames_per_third,
             top_correlated_frames=args.top_correlated_frames,
             local_xy_radius_px=args.local_xy_radius,

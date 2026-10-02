@@ -183,6 +183,44 @@ def read_raw_metadata_polarity(fish_dir):
     return polarity, polarity_source
 
 
+# TODO: the anatomy Z step has two sources that could disagree: this reads
+# `step_size_um_anatomy` from the metadata CSVs (the canonical workflow reads the
+# same value with its own `_metadata_float`), while the registration notebook
+# reads ScanImage's `SI.hStackManager.stackZStepSize` from the anatomy TIFF.
+# Pick one with Danin.
+def anatomy_z_spacing_um(metadata_dir):
+    """Read anatomy slice spacing and ensure all metadata files agree.
+
+    Args:
+        metadata_dir (str or Path): Directory searched (via
+            `*_metadata.csv`) for a `step_size_um_anatomy` row.
+
+    Returns:
+        tuple: A `(spacing_um, sources)` pair, where `spacing_um` (float) is
+        the agreed anatomy Z spacing in micrometers and `sources` (list of
+        Path) lists the metadata files it was read from.
+
+    Raises:
+        ValueError: If no file records the spacing, files disagree, or it isn't positive.
+    """
+    values = []  # every step_size_um_anatomy value found
+    sources = []  # the file each value came from
+    for path in sorted(Path(metadata_dir).glob("*_metadata.csv")):
+        with path.open(newline="", encoding="utf-8-sig") as metadata_file:
+            for row in csv.reader(metadata_file):
+                if len(row) >= 2 and row[0].strip() == "step_size_um_anatomy":
+                    values.append(float(row[1]))
+                    sources.append(path)
+    if not values:
+        raise ValueError(f"No step_size_um_anatomy found under {metadata_dir}")
+    if any(not np.isclose(value, values[0]) for value in values[1:]):
+        raise ValueError(f"Conflicting anatomy Z spacing values under {metadata_dir}: {values}")
+    if values[0] <= 0:
+        raise ValueError(f"Anatomy Z spacing must be positive, got {values[0]}")
+    spacing_um = float(values[0])
+    return spacing_um, sources
+
+
 def _prediction_dict(prediction):
     """Convert an optional prediction record to an ordinary dictionary.
 
@@ -644,6 +682,7 @@ __all__ = [
     "VALID_POLARITIES",
     "XY_TRANSFORM_BY_POLARITY",
     "Z_TRANSFORM",
+    "anatomy_z_spacing_um",
     "apply_canonical_xy",
     "canonical_manifest_path",
     "normalize_polarity",

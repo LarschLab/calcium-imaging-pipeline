@@ -17,6 +17,7 @@ import preprocessing.drift_analysis as drift_analysis
 import preprocessing.functional_anatomy_qc as compatibility_qc
 from preprocessing.spatial_preprocessing import (
     PolarityResolution,
+    anatomy_z_spacing_um,
     apply_canonical_xy,
     canonical_manifest_path,
     preprocess_anatomy,
@@ -28,9 +29,8 @@ from preprocessing.spatial_preprocessing import (
 
 from preprocessing.drift_analysis import (
     FunctionalAnatomyQCConfig,
-    anatomy_z_spacing_um,
-    block_third_bounds,
-    block_third_labels,
+    block_window_bounds,
+    block_window_labels,
     run_drift_analysis,
 )
 from preprocessing.preprocessing_tiff import process_fish
@@ -276,7 +276,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             raises an assertion error.
         """
         self.assertEqual(
-            block_third_bounds(30, 3),
+            block_window_bounds(30, 3),
             (
                 (0, 3),
                 (3, 6),
@@ -290,7 +290,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            block_third_labels(2),
+            block_window_labels(2),
             (
                 "Block 0\nfirst third",
                 "Block 0\nmiddle third",
