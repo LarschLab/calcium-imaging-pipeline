@@ -48,7 +48,7 @@ import tifffile
 from preprocessing.spatial_preprocessing import (
     CANONICAL_XY_FRAME,
     REGISTRATION_Z_FRAME,
-    canonical_manifest_path,
+    spatial_manifest_path,
     validate_spatial_manifest,
 )
 from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
@@ -1238,7 +1238,6 @@ def run_drift_analysis(
     anatomy_path=None,
     preprocessing_metadata_path=None,
     config=None,
-    spatial_manifest_path=None,
 ):
     """Run functional-to-anatomy depth placement and temporal drift QC.
 
@@ -1254,8 +1253,6 @@ def run_drift_analysis(
             metadata override.
         config (FunctionalAnatomyQCConfig or None): Sampling and decision
             settings.
-        spatial_manifest_path (str or Path or None): Optional spatial
-            manifest override.
 
     Returns:
         dict: QC status, inputs, settings, runtime, and output paths.
@@ -1273,7 +1270,7 @@ def run_drift_analysis(
         raise FileExistsError(f"NCC QC output directory is not empty: {output_folder}")
     output_folder.mkdir(parents=True, exist_ok=True)
     # Inputs come from the spatial manifest, so only canonical-workflow fish can run.
-    spatial_manifest_file = Path(spatial_manifest_path) if spatial_manifest_path else canonical_manifest_path(fish_folder)
+    spatial_manifest_file = spatial_manifest_path(fish_folder)
     spatial_manifest = validate_spatial_manifest(spatial_manifest_file)
     manifest_anatomy = spatial_manifest.get("anatomy", {}).get("output_path")
     anatomy_source = Path(anatomy_path) if anatomy_path else Path(str(manifest_anatomy or ""))

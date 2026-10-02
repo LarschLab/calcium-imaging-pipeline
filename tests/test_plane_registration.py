@@ -13,7 +13,7 @@ from preprocessing.spatial_preprocessing import (
     ACQUISITION_XY_FRAME,
     CANONICAL_XY_FRAME,
     REGISTRATION_Z_FRAME,
-    canonical_manifest_path,
+    spatial_manifest_path,
 )
 from registration.image_utils import norm01
 from registration.plane_matching import scale_image
@@ -238,7 +238,7 @@ class FunctionalXyFrameTests(unittest.TestCase):
     def test_canonical_manifest_means_flipped(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             fish_dir = Path(temporary_directory) / "L000_f00"
-            manifest_path = canonical_manifest_path(fish_dir)
+            manifest_path = spatial_manifest_path(fish_dir)
             manifest_path.parent.mkdir(parents=True)
             manifest_path.write_text(json.dumps({
                 "stage": "canonical_spatial_preprocessing",

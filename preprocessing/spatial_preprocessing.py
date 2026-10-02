@@ -510,7 +510,7 @@ def preprocess_anatomy(
     return anatomy_record
 
 
-def canonical_manifest_path(fish_dir):
+def spatial_manifest_path(fish_dir):
     """Return the standard spatial-manifest path for one fish.
 
     Args:
@@ -550,7 +550,7 @@ def write_spatial_manifest(
         sessions (Sequence[dict]): Optional per-session records
             to include in the manifest. Defaults to an empty sequence.
         output_path (str | Path | None): Optional explicit manifest path.
-            Defaults to None, which uses `canonical_manifest_path`.
+            Defaults to None, which uses `spatial_manifest_path`.
 
     Returns:
         dict: The manifest payload that was written to disk.
@@ -559,7 +559,7 @@ def write_spatial_manifest(
         FileExistsError: If the manifest already exists.
     """
     root = Path(fish_dir)
-    path = Path(output_path) if output_path else canonical_manifest_path(root)
+    path = Path(output_path) if output_path else spatial_manifest_path(root)
     # Never overwrite an existing manifest.
     if path.exists():
         raise FileExistsError(f"Spatial preprocessing manifest already exists: {path}")
@@ -626,21 +626,25 @@ def validate_spatial_manifest(path):
     return payload
 
 
-def record_motion_corrected_output(
+def add_suite2p_record_to_manifest(
     fish_dir,
     *,
     plane_index,
     output_path,
     suite2p_plane_dir,
 ):
-    """Append a Suite2P-derived canonical movie without changing frame semantics.
+    """Add a plane's Suite2P record to the fish's spatial preprocessing manifest.
+
+    The record lists the plane's motion-corrected recording (canonical
+    orientation) and points to its Suite2P folder (with `ops.npy`). A later
+    call for the same plane replaces its record.
 
     Args:
         fish_dir (str | Path): Root directory for one fish, used to locate
             the existing spatial preprocessing manifest.
-        plane_index (int): Index of the plane the motion-corrected movie
+        plane_index (int): Index of the plane the motion-corrected recording
             belongs to; replaces any existing record for the same plane.
-        output_path (str | Path): Path to the motion-corrected movie output.
+        output_path (str | Path): Path to the motion-corrected recording.
         suite2p_plane_dir (str | Path): Path to the Suite2P plane directory
             that produced the output.
 
@@ -648,7 +652,7 @@ def record_motion_corrected_output(
         dict: The updated manifest payload that was written to
         disk.
     """
-    path = canonical_manifest_path(fish_dir)
+    path = spatial_manifest_path(fish_dir)
     payload = validate_spatial_manifest(path)
     # Keep every other plane's record; this plane's is replaced below.
     records = [
@@ -684,12 +688,12 @@ __all__ = [
     "Z_TRANSFORM",
     "anatomy_z_spacing_um",
     "apply_canonical_xy",
-    "canonical_manifest_path",
+    "spatial_manifest_path",
     "normalize_polarity",
     "preprocess_anatomy",
     "read_anatomy_pages",
     "read_raw_metadata_polarity",
-    "record_motion_corrected_output",
+    "add_suite2p_record_to_manifest",
     "resolve_polarity",
     "signed_integer_to_uint8",
     "validate_spatial_manifest",

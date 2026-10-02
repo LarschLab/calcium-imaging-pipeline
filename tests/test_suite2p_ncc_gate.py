@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import tifffile
 
 from preprocessing import motion_segmentation_suite2p as stage
 from preprocessing.spatial_preprocessing import PolarityResolution, write_spatial_manifest
@@ -75,11 +76,11 @@ class Suite2PNCCGateTests(unittest.TestCase):
             planes.mkdir(parents=True)
             (planes / "L000_f00_plane0.tif").touch()
             with mock.patch.object(stage, "run_suite2p") as run_suite2p, mock.patch.object(
-                stage, "move_processed_files", return_value=None
+                stage, "collect_suite2p_results", return_value=None
             ):
-                stage.process_fish(fish, {}, [0], fps=2.0)
+                stage.run_suite2p_for_fish(fish, {}, [0], fps=2.0)
             self.assertEqual(run_suite2p.call_count, 1)
-            self.assertFalse(stage.canonical_manifest_path(fish).exists())
+            self.assertFalse(stage.spatial_manifest_path(fish).exists())
 
     def test_plane_with_existing_results_is_skipped_not_overwritten(self):
         """A plane whose motion-corrected movie exists must be skipped, with a hint to delete it.
@@ -98,7 +99,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             movie.write_bytes(b"earlier result")
             printed = io.StringIO()
             with mock.patch.object(stage, "run_suite2p") as run_suite2p, contextlib.redirect_stdout(printed):
-                stage.process_fish(fish, {}, [0], fps=2.0)
+                stage.run_suite2p_for_fish(fish, {}, [0], fps=2.0)
             run_suite2p.assert_not_called()
             self.assertEqual(movie.read_bytes(), b"earlier result")
             self.assertIn("delete these files first", printed.getvalue())
@@ -115,7 +116,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             movie = Path(temporary) / "plane0_mcorrected.tif"
             movie.write_bytes(b"earlier result")
             with self.assertRaises(FileExistsError):
-                stage.join_reg_tiffs_to_one(Path(temporary) / "reg_tif", movie)
+                stage.join_registered_tiffs(Path(temporary) / "reg_tif", movie)
             self.assertEqual(movie.read_bytes(), b"earlier result")
 
     def test_mirroring_keeps_files_already_on_the_storage_drive(self):
@@ -142,6 +143,101 @@ class Suite2PNCCGateTests(unittest.TestCase):
             self.assertEqual((stored / "L000_f00_plane0_F.npy").read_bytes(), b"new F")
             self.assertIn("already on the storage drive", printed.getvalue())
 
+    def test_plain_results_end_up_in_the_standard_folders(self):
+        """The plain workflow's movie and ROI files must land in their usual places, named per plane.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            analysis = fish / "03_analysis" / "functional" / "suite2P"
+            suite2p_plane = analysis / "suite2p" / "plane0"
+            (suite2p_plane / "reg_tif").mkdir(parents=True)
+            tifffile.imwrite(suite2p_plane / "reg_tif" / "file000000_chan0.tif", np.zeros((2, 8, 8), dtype=np.int16))
+            np.save(suite2p_plane / "stat.npy", np.zeros(1))
+            mcorrected = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "02_motionCorrected"
+            with contextlib.redirect_stdout(io.StringIO()):
+                destination = stage.collect_suite2p_results(0, analysis, mcorrected, fish.name)
+            self.assertEqual(destination, analysis / "plane0")
+            self.assertTrue((mcorrected / "L000_f00_plane0_mcorrected.tif").exists())
+            self.assertTrue((analysis / "plane0" / "L000_f00_plane0_stat.npy").exists())
+            self.assertFalse((analysis / "suite2p").exists())  # Suite2p's temporary folder is removed
+
+    def test_drift_check_in_a_separate_python_reads_back_its_manifest(self):
+        """With `drift_python`, the drift command runs in that Python and its manifest is returned.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            output_dir = Path(temporary) / "ncc_out"
+
+            def fake_drift_command(command, **_kwargs):
+                """Stand in for the drift CLI: write the manifest it would write."""
+                output_dir.mkdir(parents=True)
+                (output_dir / "functional_anatomy_qc_manifest.json").write_text('{"status": "pass_candidate"}')
+
+            with mock.patch.object(stage.subprocess, "run", side_effect=fake_drift_command) as run:
+                manifest = stage._run_drift_check(fish, output_dir, drift_workers=3, drift_python="/envs/ncc/bin/python")
+            command = run.call_args.args[0]
+            self.assertEqual(command[:3], ["/envs/ncc/bin/python", "-m", "preprocessing.drift_analysis_cli"])
+            self.assertEqual(command[3:], ["--fish-dir", str(fish), "--output-dir", str(output_dir), "--workers", "3"])
+            self.assertEqual(manifest["status"], "pass_candidate")
+
+    def test_plain_run_gives_each_plane_its_own_fast_disk_folder(self):
+        """Without the drift check, planes must also get separate fast-disk folders.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            planes = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            planes.mkdir(parents=True)
+            for plane in (0, 1):
+                (planes / f"L000_f00_plane{plane}.tif").touch()
+            fast_disk = Path(temporary) / "fast"
+            with mock.patch.object(stage, "run_suite2p") as run_suite2p, mock.patch.object(
+                stage, "collect_suite2p_results", return_value=None
+            ), contextlib.redirect_stdout(io.StringIO()):
+                stage.run_suite2p_for_fish(fish, {}, [0, 1], fps=2.0, fast_disk=fast_disk)
+            used_fast_disks = [call.args[4] for call in run_suite2p.call_args_list]
+            self.assertEqual(used_fast_disks, [fast_disk / "L000_f00/plane0", fast_disk / "L000_f00/plane1"])
+
+    def test_gated_run_skips_a_missing_plane_with_a_warning(self):
+        """A missing plane must be skipped (warning), not stop the gated run.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            planes = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            planes.mkdir(parents=True)
+            plane_path = planes / "L000_f00_plane0.tif"
+            plane_path.touch()
+            _declare_planes(fish, [plane_path])
+            fake_ncc_module = types.ModuleType("preprocessing.drift_analysis")
+            fake_ncc_module.FunctionalAnatomyQCConfig = lambda **_kwargs: object()
+            fake_ncc_module.run_drift_analysis = lambda **_kwargs: {"status": "review_required"}
+            printed = io.StringIO()
+            with (
+                mock.patch.object(stage, "run_suite2p_registration_only", return_value=fish / "registered") as registration,
+                mock.patch.object(stage, "join_registered_tiffs"),
+                mock.patch.object(stage, "add_suite2p_record_to_manifest"),
+                mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
+                contextlib.redirect_stdout(printed),
+            ):
+                stage.run_suite2p_for_fish(fish, {}, [0, 1], 2.0, drift_check="enforce", drift_output_dir=fish / "ncc")
+            self.assertEqual(registration.call_count, 1)  # plane 1 doesn't exist
+            self.assertIn("Plane 1 not found", printed.getvalue())
+
     def test_fish_with_spatial_manifest_still_checks_declared_planes(self):
         """A plane missing from an existing manifest must stop before Suite2P.
 
@@ -156,7 +252,7 @@ class Suite2PNCCGateTests(unittest.TestCase):
             (planes / "L000_f00_plane0.tif").touch()
             _declare_planes(fish, [planes / "some_other_plane.tif"])
             with mock.patch.object(stage, "run_suite2p") as run_suite2p, self.assertRaises(ValueError):
-                stage.process_fish(fish, {}, [0], fps=2.0)
+                stage.run_suite2p_for_fish(fish, {}, [0], fps=2.0)
             run_suite2p.assert_not_called()
 
     def test_registration_only_sets_required_suite2p_flags(self):
@@ -249,21 +345,21 @@ class Suite2PNCCGateTests(unittest.TestCase):
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
-                mock.patch.object(stage, "join_reg_tiffs_to_one"),
+                mock.patch.object(stage, "join_registered_tiffs"),
                 mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation") as resume,
             ):
-                result = stage.process_fish_with_ncc_gate(
+                result = stage.run_suite2p_for_fish(
                     fish,
                     {},
                     [0],
                     2.0,
-                    gate_mode="enforce",
-                    ncc_output_dir=fish / "ncc",
+                    drift_check="enforce",
+                    drift_output_dir=fish / "ncc",
                 )
 
             self.assertFalse(result["segmentation_ran"])
-            self.assertEqual(result["ncc_manifest"]["status"], "review_required")
+            self.assertEqual(result["drift_manifest"]["status"], "review_required")
             self.assertTrue((fish / "03_analysis/functional/suite2P/_ncc_gate_registration").exists())
             resume.assert_not_called()
 
@@ -295,18 +391,18 @@ class Suite2PNCCGateTests(unittest.TestCase):
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
-                mock.patch.object(stage, "join_reg_tiffs_to_one"),
+                mock.patch.object(stage, "join_registered_tiffs"),
                 mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation") as resume,
-                mock.patch.object(stage, "move_segmentation_files", return_value=fish / "output"),
+                mock.patch.object(stage, "move_segmented_rois", return_value=fish / "output"),
             ):
-                result = stage.process_fish_with_ncc_gate(
+                result = stage.run_suite2p_for_fish(
                     fish,
                     {},
                     [0],
                     2.0,
-                    gate_mode="report_only",
-                    ncc_output_dir=fish / "ncc",
+                    drift_check="report_only",
+                    drift_output_dir=fish / "ncc",
                 )
 
             self.assertTrue(result["segmentation_ran"])
@@ -342,19 +438,19 @@ class Suite2PNCCGateTests(unittest.TestCase):
 
             with (
                 mock.patch.object(stage, "run_suite2p_registration_only", side_effect=fake_registration),
-                mock.patch.object(stage, "join_reg_tiffs_to_one"),
+                mock.patch.object(stage, "join_registered_tiffs"),
                 mock.patch.dict(sys.modules, {"preprocessing.drift_analysis": fake_ncc_module}),
                 mock.patch.object(stage, "resume_suite2p_segmentation"),
-                mock.patch.object(stage, "move_segmentation_files", return_value=fish / "output"),
+                mock.patch.object(stage, "move_segmented_rois", return_value=fish / "output"),
             ):
-                stage.process_fish_with_ncc_gate(
+                stage.run_suite2p_for_fish(
                     fish,
                     {},
                     [0, 1],
                     2.0,
                     fast_disk=fast_disk,
-                    gate_mode="report_only",
-                    ncc_output_dir=fish / "ncc",
+                    drift_check="report_only",
+                    drift_output_dir=fish / "ncc",
                 )
 
             self.assertEqual(

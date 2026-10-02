@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from preprocessing.motion_segmentation_suite2p import process_fish_with_ncc_gate
+from preprocessing.motion_segmentation_suite2p import run_suite2p_for_fish
 
 
 def build_parser():
@@ -51,17 +51,17 @@ def main(argv=None):
     """
     args = build_parser().parse_args(argv)
     ops = np.load(args.ops_path, allow_pickle=True).item()
-    result = process_fish_with_ncc_gate(
+    result = run_suite2p_for_fish(
         args.fish_dir,
         ops,
         args.planes,
         args.fps,
         fast_disk=args.fast_disk,
         storage_root=args.storage_root,
-        gate_mode=args.gate_mode,
-        ncc_output_dir=args.ncc_output_dir,
-        ncc_workers=args.ncc_workers,
-        ncc_python=args.ncc_python,
+        drift_check=args.gate_mode,
+        drift_output_dir=args.ncc_output_dir,
+        drift_workers=args.ncc_workers,
+        drift_python=args.ncc_python,
     )
     print(json.dumps(result, indent=2, default=str))
     return 0

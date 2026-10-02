@@ -17,9 +17,9 @@ from preprocessing.spatial_preprocessing import (
     PolarityResolution,
     anatomy_z_spacing_um,
     apply_canonical_xy,
-    canonical_manifest_path,
+    spatial_manifest_path,
     preprocess_anatomy,
-    record_motion_corrected_output,
+    add_suite2p_record_to_manifest,
     resolve_polarity,
     signed_integer_to_uint8,
     write_spatial_manifest,
@@ -119,7 +119,7 @@ def _make_fish(root, *, drifting=False):
         sessions=metadata["sessions"],
     )
     for plane_index in (0, 1):
-        record_motion_corrected_output(
+        add_suite2p_record_to_manifest(
             fish,
             plane_index=plane_index,
             output_path=movie_dir / f"L000_f00_plane{plane_index}_mcorrected.tif",

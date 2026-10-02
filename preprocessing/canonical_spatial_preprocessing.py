@@ -14,7 +14,7 @@ import tifffile
 from preprocessing.anatomy_polarity import discover_anatomy, load_model, predict_fish, train_from_raw_metadata
 from preprocessing.preprocessing_tiff import process_fish
 from preprocessing.spatial_preprocessing import (
-    canonical_manifest_path,
+    spatial_manifest_path,
     preprocess_anatomy,
     resolve_polarity,
     write_spatial_manifest,
@@ -221,10 +221,10 @@ def run_canonical_spatial_preprocessing(
         anatomy=anatomy_record,
         sessions=sessions,
     )
-    validation_path = canonical_manifest_path(output).with_name("anatomy_polarity_group_validation.json")
+    validation_path = spatial_manifest_path(output).with_name("anatomy_polarity_group_validation.json")
     validation_path.write_text(json.dumps(validation, indent=2), encoding="utf-8")
     manifest["polarity"]["classifier"]["group_validation_path"] = str(validation_path)
-    canonical_manifest_path(output).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    spatial_manifest_path(output).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
     return manifest
 
 

@@ -39,7 +39,7 @@ from skimage.transform import resize
 from preprocessing.spatial_preprocessing import (
     ACQUISITION_XY_FRAME,
     CANONICAL_XY_FRAME,
-    canonical_manifest_path,
+    spatial_manifest_path,
     validate_spatial_manifest,
 )
 from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
@@ -92,7 +92,7 @@ def read_functional_xy_frame(fish_dir):
         that it was assumed).
     """
     fish_dir = pathlib.Path(fish_dir)
-    manifest_path = canonical_manifest_path(fish_dir)
+    manifest_path = spatial_manifest_path(fish_dir)
     if manifest_path.exists():
         # Raises on an incomplete or unknown manifest rather than guessing.
         validate_spatial_manifest(manifest_path)
