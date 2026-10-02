@@ -345,22 +345,28 @@ def process_fish(fish_folder, global_ops, selected_planes, fps, fast_disk=None, 
 
     print(f"Created folders: {mcorrected_folder}, {analysis_s2p_folder}")
 
+    # Only fish from the canonical spatial workflow have a spatial preprocessing
+    # manifest; plain (unflipped) fish are processed without the manifest checks.
+    has_spatial_manifest = canonical_manifest_path(fish_folder).exists()
+
     for plane_idx in selected_planes:
         # Look for TIFF file corresponding to current plane
         plane_file = find_plane_file(pre_dir, plane_idx)
         if plane_file is None:
             print(f"⚠️ Plane {plane_idx} not found.")
             continue
-        validate_canonical_plane_input(fish_folder, plane_file)
+        if has_spatial_manifest:
+            validate_canonical_plane_input(fish_folder, plane_file)
         print(f"Processing plane {plane_idx} → {plane_file.name}")
         run_suite2p(plane_file, global_ops, analysis_s2p_folder, fps, fast_disk)
         src_folder = move_processed_files(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_folder.name)
-        record_motion_corrected_output(
-            fish_folder,
-            plane_index=plane_idx,
-            output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
-            suite2p_plane_dir=src_folder,
-        )
+        if has_spatial_manifest:
+            record_motion_corrected_output(
+                fish_folder,
+                plane_index=plane_idx,
+                output_path=mcorrected_folder / f"{fish_folder.name}_plane{plane_idx}_mcorrected.tif",
+                suite2p_plane_dir=src_folder,
+            )
         
         if storage_root is not None and src_folder:
             storage_root_p = Path(storage_root)

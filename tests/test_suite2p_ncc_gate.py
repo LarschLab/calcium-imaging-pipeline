@@ -60,6 +60,42 @@ class Suite2PNCCGateTests(unittest.TestCase):
         self.assertTrue(captured["delete_bin"])
         self.assertNotIn("roidetect", captured)
 
+    def test_plain_fish_without_spatial_manifest_reaches_suite2p(self):
+        """Fish preprocessed without the canonical flip have no manifest and must still run.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            planes = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            planes.mkdir(parents=True)
+            (planes / "L000_f00_plane0.tif").touch()
+            with mock.patch.object(stage, "run_suite2p") as run_suite2p, mock.patch.object(
+                stage, "move_processed_files", return_value=None
+            ):
+                stage.process_fish(fish, {}, [0], fps=2.0)
+            self.assertEqual(run_suite2p.call_count, 1)
+            self.assertFalse(stage.canonical_manifest_path(fish).exists())
+
+    def test_fish_with_spatial_manifest_still_checks_declared_planes(self):
+        """A plane missing from an existing manifest must stop before Suite2P.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            fish = Path(temporary) / "L000_f00"
+            planes = fish / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            planes.mkdir(parents=True)
+            (planes / "L000_f00_plane0.tif").touch()
+            _declare_planes(fish, [planes / "some_other_plane.tif"])
+            with mock.patch.object(stage, "run_suite2p") as run_suite2p, self.assertRaises(ValueError):
+                stage.process_fish(fish, {}, [0], fps=2.0)
+            run_suite2p.assert_not_called()
+
     def test_registration_only_sets_required_suite2p_flags(self):
         """Registration-only mode must save the data needed for QC and resumption.
 
