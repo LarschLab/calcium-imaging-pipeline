@@ -13,8 +13,6 @@ import pandas as pd
 import tifffile
 import SimpleITK as sitk
 
-import preprocessing.drift_analysis as drift_analysis
-import preprocessing.functional_anatomy_qc as compatibility_qc
 from preprocessing.spatial_preprocessing import (
     PolarityResolution,
     anatomy_z_spacing_um,
@@ -131,24 +129,6 @@ def _make_fish(root, *, drifting=False):
 
 
 class FunctionalAnatomyQCTests(unittest.TestCase):
-    def test_historical_qc_module_preserves_direct_helper_imports(self):
-        """The renamed module must not break existing notebook imports.
-
-        Returns:
-            None: The test passes if all assertions hold; otherwise it
-            raises an assertion error.
-        """
-        for name in (
-            "norm01",
-            "normalized_cross_correlation",
-            "load_preprocessing_sessions",
-            "build_window_references",
-            "search_scale",
-            "summarize_sessions",
-            "run_functional_anatomy_qc",
-        ):
-            self.assertIs(getattr(compatibility_qc, name), getattr(drift_analysis, name))
-
     def test_functional_xy_orientation_is_one_opt_in_step(self):
         """The one flag must control both polarity use and X/Y reorientation.
 

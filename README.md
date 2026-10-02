@@ -95,9 +95,8 @@ python -m preprocessing.drift_analysis_cli \
 ```
 
 Python workflows can call `preprocessing.drift_analysis.run_drift_analysis`
-directly. The older `functional_anatomy_qc` module and CLI remain as
-backward-compatible aliases. The Suite2P workflow below calls the same drift
-module automatically after motion correction.
+directly. The Suite2P workflow below calls the same drift module
+automatically after motion correction.
 
 Retroactive runs deliberately require the canonical spatial manifest and its
 declared `*_mcorrected.tif` movies. Older folders without that manifest, or

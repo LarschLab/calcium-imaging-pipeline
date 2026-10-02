@@ -1451,9 +1451,6 @@ def run_drift_analysis(
     return manifest
 
 
-# Historical public name retained for existing notebooks and scripts.
-run_functional_anatomy_qc = run_drift_analysis
-
 
 __all__ = [
     "FunctionalAnatomyQCConfig",
@@ -1461,6 +1458,5 @@ __all__ = [
     "block_window_labels",
     "read_canonical_anatomy",
     "run_drift_analysis",
-    "run_functional_anatomy_qc",
     "tracked_local_depth_profile",
 ]
