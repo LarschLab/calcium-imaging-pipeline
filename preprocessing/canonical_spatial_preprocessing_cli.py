@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--blocks", type=int, nargs="*")
     parser.add_argument("--n-planes", type=int)
     parser.add_argument("--n-frames-per-plane", type=int)
+    # TODO: ask Danin -- default 1 flyback frame, but Matilde's recordings have 0;
+    # with 1, every (n_planes * n_frames_per_plane + 1)-th frame is dropped by mistake.
     parser.add_argument("--volume-flyback-frames", type=int, default=1)
     parser.add_argument("--remove-first-frame", action="store_true")
     parser.add_argument("--reviewed-polarity", choices=("north", "south"))

@@ -5,6 +5,14 @@ the microscope's original X/Y orientation, or optionally use a resolved fish
 polarity to place every fish in the shared codeANTs X/Y orientation.
 """
 
+# TODO: remove the linear protocol and the volume flyback removal (no longer
+# used; keep them only in the repo history), once checked:
+# - with Danin: canonical_spatial_preprocessing passes `protocol` and
+#   `volume_flyback_frames` through, and its terminal command defaults to
+#   1 flyback frame (our recordings have 0) -- do his fish have one?
+# - whether `'mode': 'linear'` in visual_stimulation/dots_continous_session.py
+#   is still used for acquisition.
+
 from pathlib import Path
 import tifffile as tf
 import numpy as np
@@ -20,6 +28,9 @@ from preprocessing.spatial_preprocessing import (
     apply_canonical_xy,
     normalize_polarity,
 )
+
+RAW_FUNCTIONAL_SUBFOLDER = Path("01_raw/2p/functional")  # raw functional TIFFs, inside the fish folder
+
 
 def correct_chunk_int16_to_uint16(chunk, offset):
     """
@@ -169,15 +180,36 @@ def extract_block_number(tif_file):
         return None
 
 
-def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
+def select_functional_tiffs(fish_id, input_base, blocks=None):
+    """Pick the raw functional TIFFs of a fish, in block order.
+
+    Args:
+        fish_id (str): Fish ID.
+        input_base (Path): Folder containing the fish folders.
+        blocks (list[int] or None): Blocks to include; None = all blocks.
+
+    Returns:
+        list[Path]: Selected functional TIFFs (anatomy TIFFs excluded).
+    """
+    raw_folder = Path(input_base) / fish_id / RAW_FUNCTIONAL_SUBFOLDER
+    selected_tiffs = []
+    for tif_file in sorted(raw_folder.glob("*.tif")):
+        if "anatomy" in tif_file.name.lower():  # the anatomy stack sits in the same folder
+            continue
+        if blocks is not None and extract_block_number(tif_file) not in blocks:
+            continue
+        selected_tiffs.append(tif_file)
+    return selected_tiffs
+
+
+def concatenate_blocks(tiff_files, protocol, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
     """
     Load and concatenate selected blocks. For resonant protocol, also remove flyback and reshape.
 
     Args:
-        fish_id (str): Fish ID.
-        input_base (Path): Root input directory.
+        tiff_files (list[Path]): Functional TIFFs to load, in block order
+            (from `select_functional_tiffs`).
         protocol (str): 'resonant' or 'linear'.
-        blocks (list[int] or None): Blocks to include.
         n_planes (int): Number of planes (only for resonant).
         n_frames_per_plane (int): Frames per plane (only for resonant).
         volume_flyback_frames (int): Volume flyback frames (only for resonant).
@@ -187,32 +219,24 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     Returns:
         np.ndarray: Full concatenated image stack.
     """
-    raw_folder = Path(input_base) / fish_id / "01_raw/2p/functional"
-    tiffs = sorted(raw_folder.glob("*.tif"))
-
     all_blocks = []
-    for tif_file in tiffs:
-        if 'anatomy' not in tif_file.name:
-            block_number = extract_block_number(tif_file)
-            if blocks is not None and block_number not in blocks:
-                continue
+    for tif_file in tiff_files:
+        print(f"  Loading {tif_file.name}")
+        frames = load_tiff_file(tif_file, n_planes, n_frames_per_plane)
 
-            print(f"  Loading {tif_file.name}")
-            frames = load_tiff_file(tif_file, n_planes, n_frames_per_plane)
+        if protocol == "resonant":
+            frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
+            if volume_flyback_frames > 0:
+                print(f"  Removing {volume_flyback_frames} flyback frames per volume.")
+                # Remove flyback frames and reshape for plane extraction
+                frames = remove_vflyback_frames(frames, frames_per_volume, volume_flyback_frames)
 
-            if protocol == "resonant":
-                frames_per_volume = n_planes * n_frames_per_plane + volume_flyback_frames
-                if volume_flyback_frames > 0:
-                    print(f"  Removing {volume_flyback_frames} flyback frames per volume.")
-                    # Remove flyback frames and reshape for plane extraction
-                    frames = remove_vflyback_frames(frames, frames_per_volume, volume_flyback_frames)
+            frames = frames.reshape(-1, n_frames_per_plane, frames.shape[1], frames.shape[2]) # Reshape to (volumes, frames_per_plane, H, W)
 
-                frames = frames.reshape(-1, n_frames_per_plane, frames.shape[1], frames.shape[2]) # Reshape to (volumes, frames_per_plane, H, W)
+            if remove_first_frame:
+                frames = frames[:, 1:, :, :]
 
-                if remove_first_frame:
-                    frames = frames[:, 1:, :, :]
-
-            all_blocks.append(frames)
+        all_blocks.append(frames)
 
     if not all_blocks:
         raise ValueError("No matching TIFF files found for selected blocks.")
@@ -221,6 +245,23 @@ def concatenate_blocks(fish_id, input_base, protocol, blocks=None, n_planes=None
     full_stack = np.concatenate(all_blocks, axis=0)
     print(f"  Full concatenated stack shape: {full_stack.shape}")
     return full_stack
+
+
+def existing_preprocessing_outputs(output_path, fish_id):
+    """List the preprocessing outputs of a fish that are already on disk.
+
+    Args:
+        output_path (Path): Folder where the fish's plane TIFFs and metadata are written.
+        fish_id (str): Fish ID.
+
+    Returns:
+        list[Path]: Existing plane TIFFs, stack TIFF and metadata JSON of
+        this fish; empty if none exist yet.
+    """
+    output_patterns = [f"{fish_id}_plane*.tif", f"{fish_id}_stack.tif", f"{fish_id}_preprocessing_metadata.json"]
+    existing_outputs = [path for pattern in output_patterns for path in sorted(Path(output_path).glob(pattern))]
+    return existing_outputs
+
 
 def process_fish(
     fish_id,
@@ -260,7 +301,17 @@ def process_fish(
 
     Returns:
         None: Plane TIFFs and a JSON metadata file are written to output_base.
+        If any of them already exist, the fish is skipped with a warning and
+        nothing is overwritten.
     """
+    output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+    # Never overwrite earlier results: checked before loading, so a skipped fish costs nothing.
+    existing_outputs = existing_preprocessing_outputs(output_path, fish_id)
+    if existing_outputs:
+        existing_names = ", ".join(path.name for path in existing_outputs)
+        print(f"⚠️ Skipping {fish_id}: preprocessing outputs already exist in {output_path} ({existing_names}). "
+              f"Delete or move them to rerun this fish.")
+        return
     if apply_polarity_orientation:
         polarity = normalize_polarity(polarity)
         if polarity not in {"north", "south"}:
@@ -274,22 +325,15 @@ def process_fish(
         polarity_source = None
         xy_transform = "none"
         output_xy_frame = ACQUISITION_XY_FRAME
-    full_stack = concatenate_blocks(fish_id, input_base, protocol, blocks, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
+    selected_tiffs = select_functional_tiffs(fish_id, input_base, blocks)
+    full_stack = concatenate_blocks(selected_tiffs, protocol, n_planes, n_frames_per_plane, volume_flyback_frames, remove_first_frame)
     full_stack = correct_negative_values_mp_safe(full_stack)
-    raw_functional_dir = Path(input_base) / fish_id / "01_raw" / "2p" / "functional"
-    selected_tiffs = [
-        str(path)
-        for path in sorted(raw_functional_dir.glob("*.tif"))
-        if "anatomy" not in path.name.lower()
-        and (blocks is None or extract_block_number(path) in blocks)
-    ]
-    output_path = Path(output_base) / fish_id / "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
     output_path.mkdir(parents=True, exist_ok=True)
 
     if protocol == "resonant":
         for plane_idx in range(n_planes):
-            # Extract one plane across all volumes
-            avg_plane = np.mean(full_stack, axis=1)[plane_idx::n_planes]
+            # Extract one plane across all volumes (every n_planes-th row), then average its repeated frames
+            avg_plane = np.mean(full_stack[plane_idx::n_planes], axis=1)
             avg_plane = np.round(avg_plane).astype(np.uint16)
             if apply_polarity_orientation:
                 avg_plane = apply_canonical_xy(avg_plane, polarity)
@@ -317,7 +361,7 @@ def process_fish(
                 "session_label": "r1",
                 "session_number": 1,
                 "output_planes": list(range(int(n_planes))),
-                "selected_tiffs": selected_tiffs,
+                "selected_tiffs": [str(path) for path in selected_tiffs],
             }],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }
@@ -342,7 +386,7 @@ def process_fish(
                 "session_label": "r1",
                 "session_number": 1,
                 "output_planes": [0],
-                "selected_tiffs": selected_tiffs,
+                "selected_tiffs": [str(path) for path in selected_tiffs],
             }],
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
         }

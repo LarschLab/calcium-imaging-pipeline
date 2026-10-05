@@ -185,6 +185,34 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                     apply_polarity_orientation=True,
                 )
 
+    def test_rerunning_a_fish_never_overwrites_its_outputs(self):
+        """A fish with existing plane TIFFs must be skipped, leaving them untouched.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw_dir = root / "L000_f00" / "01_raw" / "2p" / "functional"
+            raw_dir.mkdir(parents=True)
+            raw_file = raw_dir / "L000_f00_00001.tif"
+            tifffile.imwrite(raw_file, np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8), photometric="minisblack")
+            run_settings = {"protocol": "resonant", "n_planes": 2, "n_frames_per_plane": 1, "volume_flyback_frames": 0}
+            process_fish("L000_f00", root, root, **run_settings)
+            output_dir = root / "L000_f00" / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            first_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+
+            # Different raw data on the second run: outputs must still be the first run's.
+            tifffile.imwrite(raw_file, np.zeros((4, 8, 8), dtype=np.uint16), photometric="minisblack")
+            process_fish("L000_f00", root, root, **run_settings)
+            second_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+            self.assertEqual(
+                sorted(first_outputs),
+                ["L000_f00_plane0.tif", "L000_f00_plane1.tif", "L000_f00_preprocessing_metadata.json"],
+            )
+            self.assertEqual(second_outputs, first_outputs)
+
     def test_direct_orientation_transforms(self):
         """North and south polarity must apply their documented direct flips.
 
