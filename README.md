@@ -104,23 +104,25 @@ with manually transformed names such as `*_mcorrected_flipX.tif`, are rejected
 rather than having their orientation guessed. Validate or migrate those inputs
 into an explicitly declared coordinate frame before running this command.
 
-Run the opt-in split Suite2P workflow:
+Run the Suite2P step (settings filled in at the bottom of the file, or as options):
 
 ```bash
-python -m preprocessing.ncc_gated_suite2p_cli \
-  --fish-dir /path/to/Microscopy/L000_f00 \
+python -m preprocessing.motion_segmentation_suite2p \
+  --data-root /path/to/Microscopy \
+  --fish L000_f00 \
   --ops-path /path/to/suite2p_ops.npy \
   --fps 2 \
   --planes 0 1 2 3 4 \
-  --gate-mode report_only \
-  --ncc-python /path/to/scientific/python \
-  --ncc-workers 5
+  --drift-check report_only \
+  --drift-python /path/to/scientific/python \
+  --drift-workers 5
 ```
 
-`report_only` always resumes segmentation and is intended for validation.
-`enforce` preserves registration outputs but stops before segmentation unless
-the NCC result is `pass_candidate`. Both Suite2P paths reject plane TIFFs that
-are not declared canonical by the shared spatial manifest.
+Without `--drift-check`, Suite2P runs once per plane. `report_only` checks Z
+drift and always continues to segmentation; `enforce` keeps the registration
+but stops before segmentation unless the result is `pass_candidate`. The drift
+check needs a fish from the canonical workflow; fish preprocessed as recorded
+run without it. `--help` lists all options.
 
 The version-4 NCC bundle also saves one pooled post-Block-0 reference per
 plane, the authoritative scale/best-Z/XY placement table, complete pooled and

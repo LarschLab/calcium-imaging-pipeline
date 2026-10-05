@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover
             raise ImportError("Suite2P is required to run registration/segmentation")
 
     suite2p = _MissingSuite2P()
+import argparse
 from pathlib import Path
 import numpy as np
 import shutil
@@ -658,7 +659,7 @@ def _run_drift_check(fish_folder, drift_output_dir, drift_workers, drift_python)
 
 
 def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None, fast_disk=None, storage_root=None,
-                  drift_check=None, drift_workers=1, drift_python=None):
+                  drift_check=None, drift_workers=1, drift_python=None, drift_output_root=None):
     """
     Process multiple fish folders.
 
@@ -675,6 +676,9 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
             "report_only" or "enforce" (see `run_suite2p_for_fish`).
         drift_workers (int): Parallel workers for the drift check.
         drift_python (str or Path or None): Separate Python for the drift check.
+        drift_output_root (str or Path or None): Folder for the drift results,
+            one `<fish>/<date-time>` subfolder per fish; None keeps them inside
+            each fish folder (`03_analysis/functional/ncc/validation/<date-time>`).
 
     Returns:
         None: Each fish's motion-corrected TIFFs and segmentation outputs are
@@ -691,32 +695,63 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
 
         start_time = time.time()
         print(f"\n📂 Processing fish: {fish_folder.name}")
+        drift_output_dir = None if drift_output_root is None else Path(drift_output_root) / fish_folder.name / time.strftime("%Y%m%d-%H%M%S")
         run_suite2p_for_fish(
             fish_folder, global_ops, selected_planes, fps, fast_disk=fast_disk, storage_root=storage_root,
-            drift_check=drift_check, drift_workers=drift_workers, drift_python=drift_python,
+            drift_check=drift_check, drift_workers=drift_workers, drift_python=drift_python, drift_output_dir=drift_output_dir,
         )
         elapsed = time.time() - start_time
         print(f"⏱️ Finished processing {fish_folder.name} in {elapsed / 60:.2f} min.\n")
 
 if __name__ == "__main__":
+    # ---- Settings: fill in by hand when running this file (terminal options override them) ----
+    DATA_ROOT = "F:/Matilde/2p_data"
+    STORAGE_ROOT = "Z:/D2c/07_Data/Matilde/Microscopy"  # Root folder for data storage
 
-    data_root = "F:/Matilde/2p_data"
-    storage_root = "Z:/D2c/07_Data/Matilde/Microscopy"  # Root folder for data storage
+    OPS_FILE_PATH = DATA_ROOT + "/suite2p_ops_sep_2025_cp.npy"    # global Suite2p ops file
 
-    ops_file_path = data_root + "/suite2p_ops_sep_2025_cp.npy"    # global Suite2p ops file
+    #SELECTED_FISH = np.arange(11,12)  # Fish IDs to process
+    FISH_TO_PROCESS = ["L500_f01"]  # Fish IDs to process
+    PLANES_TO_PROCESS = [0, 1, 2, 3, 4]  # Planes to process
+    FPS = 2
 
-    #selected_fish = np.arange(11,12)  # Fish IDs to process
-    fish_to_process = ["L500_f01"]  # Fish IDs to process
-    planes_to_process = [0, 1, 2, 3, 4]  # Planes to process
-    fps = 2
+    FAST_DISK_PATH = Path("F:/Matilde")  # Optional fast disk path
 
-    fast_disk_path = Path("F:/Matilde")  # Optional fast disk path
+    DRIFT_CHECK = None  # Z-drift check before segmentation: None, "report_only" or "enforce"
+    DRIFT_WORKERS = 1  # parallel workers for the drift check
+    DRIFT_PYTHON = None  # separate Python for the drift check, if it lives in another environment
+    DRIFT_OUTPUT_ROOT = None  # folder for the drift results; None = inside each fish folder
+    # ----------------------------------------------------------------------------------------------
+
+    parser = argparse.ArgumentParser(
+        description="Suite2P motion correction (+ optional Z-drift check) and ROI segmentation.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,  # show each default in --help
+    )
+    parser.add_argument("--data-root", type=Path, default=DATA_ROOT, help="folder containing the fish folders")
+    parser.add_argument("--storage-root", type=Path, default=STORAGE_ROOT, help="storage drive where the ROI results are copied")
+    parser.add_argument("--no-storage", action="store_true", help="don't copy the ROI results to the storage drive")
+    parser.add_argument("--ops-path", type=Path, default=OPS_FILE_PATH, help="Suite2P settings file (.npy)")
+    parser.add_argument("--fish", nargs="+", default=FISH_TO_PROCESS, help="fish IDs to process")
+    parser.add_argument("--planes", type=int, nargs="+", default=PLANES_TO_PROCESS, help="list with plane indices to process")
+    parser.add_argument("--fps", type=float, default=FPS, help="frame rate of the plane recordings)")
+    parser.add_argument("--fast-disk", type=Path, default=FAST_DISK_PATH, help="local folder for Suite2P temporary files")
+    parser.add_argument("--no-fast-disk", action="store_true", help="keep Suite2P temporary files in the fish folder")
+    parser.add_argument("--drift-check", choices=sorted(DRIFT_CHECK_MODES), default=DRIFT_CHECK, help="Z-drift check before segmentation (off if not given)")
+    parser.add_argument("--drift-workers", type=int, default=DRIFT_WORKERS, help="parallel workers for the drift check")
+    parser.add_argument("--drift-python", type=Path, default=DRIFT_PYTHON, help="separate Python for the drift check")
+    parser.add_argument("--drift-output-root", type=Path, default=DRIFT_OUTPUT_ROOT, help="folder for the drift results (one subfolder per fish); default: inside each fish folder")
+    args = parser.parse_args()
 
     batch_process(
-        data_root,
-        ops_file_path,
-        fps,
-        fish_ids=fish_to_process,
-        selected_planes=planes_to_process,
-        fast_disk=fast_disk_path,
-        storage_root=storage_root)
+        args.data_root,
+        args.ops_path,
+        args.fps,
+        fish_ids=args.fish,
+        selected_planes=args.planes,
+        fast_disk=None if args.no_fast_disk else args.fast_disk,
+        storage_root=None if args.no_storage else args.storage_root,
+        drift_check=args.drift_check,
+        drift_workers=args.drift_workers,
+        drift_python=args.drift_python,
+        drift_output_root=args.drift_output_root,
+    )
