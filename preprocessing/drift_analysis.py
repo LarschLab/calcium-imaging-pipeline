@@ -1273,7 +1273,6 @@ def run_drift_analysis(
     output_folder = Path(output_dir)
     if output_folder.exists() and any(output_folder.iterdir()):  # never write into a non-empty folder
         raise FileExistsError(f"NCC QC output directory is not empty: {output_folder}")
-    output_folder.mkdir(parents=True, exist_ok=True)
     # Inputs come from the spatial manifest, so only canonical-workflow fish can run.
     spatial_manifest_file = spatial_manifest_path(fish_folder)
     spatial_manifest = validate_spatial_manifest(spatial_manifest_file)
@@ -1313,6 +1312,8 @@ def run_drift_analysis(
     missing = sorted(requested_planes - set(movies))
     if missing:
         raise FileNotFoundError(f"Missing motion-corrected movies for planes: {missing}")
+    # Created only once all inputs are checked, so a failed fish leaves no empty folder behind.
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     # One task per (session, plane); run in parallel threads when workers > 1.
     tasks = []
