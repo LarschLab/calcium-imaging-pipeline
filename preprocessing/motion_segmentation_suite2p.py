@@ -19,6 +19,19 @@ Original workflow by Matilde Perrino; Danin Dharmaperwira added the Z-drift
 check and the manifest checks (Aug 2026); both merged in this version (Oct 2026).
 """
 
+import argparse
+import copy
+import gc
+import json
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import numpy as np
+import tifffile as tf
+
 # Suite2P is a heavy package, often installed only in its own environment. If it
 # is missing, a stand-in is used, so this file can still be imported and its code checked
 try:
@@ -32,17 +45,6 @@ except ImportError:  # pragma: no cover
             raise ImportError("Suite2P is required to run registration/segmentation")
 
     suite2p = _MissingSuite2P()
-import argparse
-from pathlib import Path
-import numpy as np
-import shutil
-import time
-import copy
-import re
-import gc
-import json
-import subprocess
-import tifffile as tf
 
 from preprocessing.spatial_preprocessing import (
     spatial_manifest_path,
@@ -51,7 +53,11 @@ from preprocessing.spatial_preprocessing import (
 )
 
 DRIFT_CHECK_MODES = {"report_only", "enforce"}
-MCORRECTED_MOVIE_NAME = "{fish_id}_plane{plane_idx}_mcorrected.tif"  # how motion-corrected movies are named
+MCORRECTED_MOVIE_NAME = "{fish_id}_plane{plane_idx}_mcorrected.tif"  # how motion-corrected recordings are named
+SUITE2P_OUTPUT_FOLDER = "suite2p"  # the folder Suite2P writes into, inside its save path
+SUITE2P_PLANE_SUBFOLDER = Path(SUITE2P_OUTPUT_FOLDER) / "plane0"  # Suite2P's outputs for the single plane it is given
+REGISTERED_TIFF_FOLDER = "reg_tif"  # Suite2P's motion-corrected TIFF chunks, inside the plane subfolder
+DRIFT_RESULTS_SUBFOLDER = Path("03_analysis/functional/ncc/validation")  # default drift results folder, inside the fish folder
 
 
 def check_plane_in_manifest(fish_folder, plane_file):
@@ -65,10 +71,14 @@ def check_plane_in_manifest(fish_folder, plane_file):
 
     Returns:
         dict: The validated canonical spatial manifest.
+
+    Raises:
+        ValueError: If the plane recording isn't declared in the manifest.
     """
     fish = Path(fish_folder)
     plane = Path(plane_file).resolve()
     manifest = validate_spatial_manifest(spatial_manifest_path(fish))
+    # The plane recordings the canonical workflow wrote (and flipped).
     declared = {
         Path(str(record.get("output_path"))).resolve()
         for record in manifest.get("functional_planes", [])
@@ -90,16 +100,15 @@ def get_file_index(path):
     """
     match = re.search(r"file(\d+)", path.name)
     if match:
-        return int(match.group(1))
+        file_index = int(match.group(1))
+        return file_index
     return -1  # fallback if pattern not found
 
 def join_registered_tiffs(reg_folder, out_tiff):
-    """
-    Join Suite2p motion-corrected chunks into a single BigTIFF.
+    """Join Suite2p's motion-corrected chunks into one BigTIFF recording.
 
-    - Read all `file*_chan0.tif` in `reg_folder` (sorted)
-    - Append frames to one output stack at `out_tiff`
-    - Overwrite existing file if present
+    Reads every `file*_chan0.tif` in `reg_folder`, in file order, and appends
+    their frames to `out_tiff`.
 
     Args:
         reg_folder (Path): Folder with Suite2p `reg_tif` chunks.
@@ -107,6 +116,9 @@ def join_registered_tiffs(reg_folder, out_tiff):
 
     Returns:
         None: The merged TIFF stack is written to `out_tiff`.
+
+    Raises:
+        FileExistsError: If `out_tiff` already exists (never overwritten).
     """
     tiff_files = sorted(reg_folder.glob("file*_chan0.tif"), key=get_file_index)
 
@@ -127,10 +139,11 @@ def join_registered_tiffs(reg_folder, out_tiff):
     print(f"✅ Wrote joined stack: {out_tiff}")
 
 def collect_suite2p_results(plane_idx, analysis_s2p_folder, mcorrected_folder, fish_id):
-    """
-    Move Suite2p outputs into organized folders:
-    - Move registered TIFF chunks into the motion-corrected folder
-    - Move segmentation .npy files into a plane-specific subfolder
+    """Collect a plane's Suite2p results into the standard folders, then clean up.
+
+    Joins the motion-corrected TIFF chunks into one recording in
+    `mcorrected_folder`, moves the ROI `.npy` files into `plane<i>/`, and
+    removes Suite2p's temporary output folder.
 
     Args:
         plane_idx (int): Plane index currently processed.
@@ -144,7 +157,7 @@ def collect_suite2p_results(plane_idx, analysis_s2p_folder, mcorrected_folder, f
     """
 
     # Path to the reg folder with TIFF files
-    reg_folder = analysis_s2p_folder / f"suite2p/plane0/reg_tif"
+    reg_folder = analysis_s2p_folder / SUITE2P_PLANE_SUBFOLDER / REGISTERED_TIFF_FOLDER
 
     if not reg_folder.exists():
         print(f"⚠️ Registered folder not found for plane {plane_idx} in {reg_folder}")
@@ -154,11 +167,11 @@ def collect_suite2p_results(plane_idx, analysis_s2p_folder, mcorrected_folder, f
 
     join_registered_tiffs(reg_folder, out_tiff)
     # Move the segmentation .npy files into the plane's results folder.
-    destination = move_segmented_rois(plane_idx, analysis_s2p_folder / "suite2p/plane0", analysis_s2p_folder, fish_id)
+    destination = move_segmented_rois(plane_idx, analysis_s2p_folder / SUITE2P_PLANE_SUBFOLDER, analysis_s2p_folder, fish_id)
 
     # Clean up Suite2p's own temporary output folder: its results were moved out
     # above, and nothing else should be stored there.
-    shutil.rmtree(analysis_s2p_folder / "suite2p")
+    shutil.rmtree(analysis_s2p_folder / SUITE2P_OUTPUT_FOLDER)
 
     return destination
 
@@ -191,8 +204,7 @@ def _suite2p_ops(global_ops, plane_file, save_path0, fps, fast_disk, **overrides
 
 
 def run_suite2p(plane_file, global_ops, save_path0, fps, fast_disk=None):
-    """
-    Prepare and run Suite2p segmentation on a single TIFF file.
+    """Run Suite2p (motion correction + ROI segmentation) on one plane TIFF.
 
     Args:
         plane_file (Path): TIFF file to process.
@@ -228,6 +240,9 @@ def run_suite2p_registration_only(plane_file, global_ops, save_path0, fps, fast_
     Returns:
         Path: Folder containing the registered plane's Suite2p outputs
         (``save_path0/suite2p/plane0``).
+
+    Raises:
+        RuntimeError: If Suite2P didn't write the ops, the registered binary or the TIFF chunks.
     """
     ops = _suite2p_ops(
         global_ops, plane_file, save_path0, fps, fast_disk,
@@ -236,11 +251,11 @@ def run_suite2p_registration_only(plane_file, global_ops, save_path0, fps, fast_
         roidetect=False,  # registration only
     )
     suite2p.run_s2p(ops=ops)
-    plane_dir = Path(save_path0) / "suite2p" / "plane0"
+    plane_dir = Path(save_path0) / SUITE2P_PLANE_SUBFOLDER
     ops_path = plane_dir / "ops.npy"
     saved_ops = np.load(ops_path, allow_pickle=True).item() if ops_path.exists() else {}
     registered_binary = Path(saved_ops.get("reg_file", plane_dir / "data.bin"))
-    required = (ops_path, registered_binary, plane_dir / "reg_tif")
+    required = (ops_path, registered_binary, plane_dir / REGISTERED_TIFF_FOLDER)
     missing = [path for path in required if not path.exists()]
     if missing:
         raise RuntimeError(f"Suite2P registration-only outputs are incomplete: {missing}")
@@ -260,6 +275,10 @@ def resume_suite2p_segmentation(registered_plane_dir, *, delete_bin=True):
     Returns:
         Path: The same `registered_plane_dir`, now also containing
         segmentation outputs (stat.npy, etc.).
+
+    Raises:
+        FileNotFoundError: If the saved ops or the registered binary are missing.
+        RuntimeError: If Suite2P didn't write `stat.npy`.
     """
     # Imported here, not at the top, so the file still imports without Suite2P (see the top of the file).
     from suite2p.run_s2p import run_plane
@@ -272,6 +291,7 @@ def resume_suite2p_segmentation(registered_plane_dir, *, delete_bin=True):
     binary_path = Path(ops.get("reg_file", plane_dir / "data.bin"))
     if not binary_path.exists():
         raise FileNotFoundError(f"Registered Suite2P binary is missing: {binary_path}")
+    # Reuse the saved registration: skip motion correction, run ROI detection only.
     ops['do_registration'] = 0
     ops['roidetect'] = True
     ops['delete_bin'] = bool(delete_bin)
@@ -293,6 +313,9 @@ def move_segmented_rois(plane_idx, suite2p_plane_dir, analysis_s2p_folder, fish_
 
     Returns:
         Path: Destination folder containing the moved segmentation files.
+
+    Raises:
+        FileExistsError: If a file already exists at the destination (never overwritten).
     """
     source = Path(suite2p_plane_dir)
     destination = Path(analysis_s2p_folder) / f"plane{plane_idx}"
@@ -358,6 +381,7 @@ def mirror_results_to_storage(results_folder, fish_folder, storage_root):
         None
     """
     results_folder = Path(results_folder)
+    # Same place relative to the fish folder, under storage_root/<fish>.
     storage_folder = Path(storage_root) / Path(fish_folder).name / results_folder.relative_to(fish_folder)
     storage_folder.mkdir(parents=True, exist_ok=True)
     for result_file in results_folder.iterdir():
@@ -373,8 +397,7 @@ def mirror_results_to_storage(results_folder, fish_folder, storage_root):
 
 
 def find_plane_file(pre_dir, plane_idx):
-    """
-    Find the preprocessed TIFF file for a specific plane index.
+    """Find the preprocessed TIFF file for a specific plane index.
 
     Args:
         pre_dir (Path): Folder containing preprocessed TIFF files.
@@ -388,7 +411,8 @@ def find_plane_file(pre_dir, plane_idx):
         return None
     elif len(candidates) > 1:
         print(f"⚠️ Multiple files found for plane {plane_idx}")
-    return candidates[0]
+    plane_file = candidates[0]
+    return plane_file
 
 
 def _fish_folders(fish_folder):
@@ -466,9 +490,9 @@ def _finish_plane(fish_folder, plane_idx, results_folder, storage_root):
     Returns:
         None
     """
-    if results_folder is None:
+    if results_folder is None:  # Suite2P produced no ROI files for this plane
         return
-    if spatial_manifest_path(fish_folder).exists():
+    if spatial_manifest_path(fish_folder).exists():  # canonical fish only
         add_suite2p_record_to_manifest(
             fish_folder,
             plane_index=plane_idx,
@@ -567,7 +591,7 @@ def run_suite2p_for_fish(
         )
         registered_by_plane[int(plane_idx)] = registered_plane_dir
         movie_path = mcorrected_folder / MCORRECTED_MOVIE_NAME.format(fish_id=fish_folder.name, plane_idx=plane_idx)
-        join_registered_tiffs(registered_plane_dir / "reg_tif", movie_path)
+        join_registered_tiffs(registered_plane_dir / REGISTERED_TIFF_FOLDER, movie_path)
         # The drift check only accepts movies declared in the manifest.
         add_suite2p_record_to_manifest(
             fish_folder,
@@ -616,14 +640,7 @@ def _run_drift_check(fish_folder, drift_output_dir, drift_workers, drift_python)
         dict: The drift-analysis manifest (its `status` drives the gate).
     """
     if drift_output_dir is None:
-        drift_output_dir = (
-            fish_folder
-            / "03_analysis"
-            / "functional"
-            / "ncc"
-            / "validation"
-            / time.strftime("%Y%m%d-%H%M%S")
-        )
+        drift_output_dir = fish_folder / DRIFT_RESULTS_SUBFOLDER / time.strftime("%Y%m%d-%H%M%S")
     drift_output_dir = Path(drift_output_dir)
     if drift_python is None:
         # Imported here, not at the top: the drift analysis may live in a
@@ -690,7 +707,7 @@ def batch_process(data_root, ops_path, fps, fish_ids=None, selected_planes=None,
     for fish_folder in data_root.iterdir():
         if not fish_folder.is_dir():
             continue
-        if fish_ids is not None and fish_folder.name not in fish_ids:
+        if fish_ids is not None and fish_folder.name not in fish_ids:  # only the requested fish
             continue
 
         start_time = time.time()
