@@ -88,9 +88,9 @@ Run the standalone drift analysis retroactively against existing preprocessed,
 motion-corrected movies:
 
 ```bash
-python -m preprocessing.drift_analysis_cli \
-  --fish-dir /path/to/Microscopy/L000_f00 \
-  --output-dir /path/to/validation-output \
+python -m preprocessing.drift_analysis \
+  --data-root /path/to/Microscopy \
+  --fish L000_f00 \
   --workers 8
 ```
 

@@ -58,6 +58,7 @@ SUITE2P_OUTPUT_FOLDER = "suite2p"  # the folder Suite2P writes into, inside its 
 SUITE2P_PLANE_SUBFOLDER = Path(SUITE2P_OUTPUT_FOLDER) / "plane0"  # Suite2P's outputs for the single plane it is given
 REGISTERED_TIFF_FOLDER = "reg_tif"  # Suite2P's motion-corrected TIFF chunks, inside the plane subfolder
 DRIFT_RESULTS_SUBFOLDER = Path("03_analysis/functional/ncc/validation")  # default drift results folder, inside the fish folder
+# (same as in drift_analysis.py; not imported from there because the drift analysis may live in a separate Python)
 
 
 def check_plane_in_manifest(fish_folder, plane_file):
@@ -653,13 +654,15 @@ def _run_drift_check(fish_folder, drift_output_dir, drift_workers, drift_python)
             config=FunctionalAnatomyQCConfig(workers=int(drift_workers)),
         )
         return manifest
-    # Separate Python: run the drift command-line tool, then read its manifest.
+    # Separate Python: run the drift module from the terminal, then read its manifest.
     command = [
         str(drift_python),
         "-m",
-        "preprocessing.drift_analysis_cli",
-        "--fish-dir",
-        str(fish_folder),
+        "preprocessing.drift_analysis",
+        "--data-root",
+        str(fish_folder.parent),
+        "--fish",
+        fish_folder.name,
         "--output-dir",
         str(drift_output_dir),
         "--workers",

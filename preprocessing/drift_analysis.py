@@ -24,11 +24,13 @@ Call order in `run_drift_analysis`: read inputs -> `_run_plane` per plane
 plots and manifest.
 
 Used by:
-- `drift_analysis_cli.py`: retrospective run on an already processed fish.
+- this file's `__main__`: retrospective run on already processed fish
+  (fill in the settings block, or use terminal options; see `--help`).
 - `motion_segmentation_suite2p.py`: the NCC-gated Suite2P run, after motion
   correction and before ROI segmentation (report only, or stop on a bad result).
 """
 
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -38,6 +40,7 @@ import re
 import time
 
 import cv2
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -61,6 +64,8 @@ PLACEMENT_METHOD = "tracked_local_xy_with_global_fallback"
 REFERENCE_SELECTION = "pooled_post_block0"
 MANIFEST_VERSION = 4  # layout version of the output manifest
 PHASE_CORRELATION_UPSAMPLING = 10  # sub-pixel precision of the X/Y shift: 1/10 pixel
+DRIFT_RESULTS_SUBFOLDER = Path("03_analysis/functional/ncc/validation")  # default results folder, inside the fish folder
+OUTPUT_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"  # each run gets its own dated results folder, so nothing is overwritten
 
 
 # All sampling, search and decision settings of the drift analysis (recorded in the output manifest).
@@ -1448,12 +1453,138 @@ def run_drift_analysis(
     return manifest
 
 
+def default_output_dir(fish_folder, output_root=None):
+    """Return a new dated folder for one drift-analysis run of a fish.
+
+    Args:
+        fish_folder (str or Path): Folder of one fish.
+        output_root (str or Path or None): Folder holding the results of
+            several fish (one subfolder per fish); None puts the results
+            inside the fish folder.
+
+    Returns:
+        Path: `<output_root>/<fish_id>/<date-time>`, or
+        `<fish_folder>/03_analysis/functional/ncc/validation/<date-time>`.
+    """
+    fish_folder = Path(fish_folder)
+    timestamp = time.strftime(OUTPUT_TIMESTAMP_FORMAT)
+    if output_root is None:
+        output_dir = fish_folder / DRIFT_RESULTS_SUBFOLDER / timestamp
+    else:
+        output_dir = Path(output_root) / fish_folder.name / timestamp
+    return output_dir
+
+
+def batch_drift_analysis(data_root, fish_ids, *, output_root=None, output_dir=None, anatomy_path=None,
+                         preprocessing_metadata_path=None, config=None):
+    """Run the drift analysis on several fish, skipping fish that fail.
+
+    A fish whose folder or inputs are missing or invalid gets a warning and
+    is skipped, so one bad fish doesn't stop the others.
+
+    Args:
+        data_root (str or Path): Folder containing the fish folders.
+        fish_ids (list[str]): Fish IDs to analyse (e.g. `["L500_f01"]`).
+        output_root (str or Path or None): Folder for the results of all
+            fish (one subfolder per fish); None = inside each fish folder.
+        output_dir (str or Path or None): Exact results folder; only allowed
+            with a single fish. Overrides `output_root`.
+        anatomy_path (str or Path or None): Anatomy override; single fish only.
+        preprocessing_metadata_path (str or Path or None): Session metadata
+            override; single fish only.
+        config (FunctionalAnatomyQCConfig or None): Sampling and decision settings.
+
+    Returns:
+        dict: Output manifest of each fish that ran, keyed by fish ID.
+
+    Raises:
+        ValueError: If a single-fish option is given with several fish.
+    """
+    single_fish_options = [output_dir, anatomy_path, preprocessing_metadata_path]
+    if len(fish_ids) != 1 and any(option is not None for option in single_fish_options):
+        raise ValueError("output_dir, anatomy_path and preprocessing_metadata_path need exactly one fish")
+    manifests = {}
+    for fish_id in fish_ids:
+        fish_folder = Path(data_root) / fish_id
+        if not fish_folder.is_dir():
+            print(f"⚠️ Fish folder not found, skipping: {fish_folder}")
+            continue
+        fish_output_dir = Path(output_dir) if output_dir is not None else default_output_dir(fish_folder, output_root)
+        print(f"\n📂 Drift analysis of {fish_id} -> {fish_output_dir}")
+        try:
+            manifest = run_drift_analysis(
+                fish_dir=fish_folder,
+                output_dir=fish_output_dir,
+                anatomy_path=anatomy_path,
+                preprocessing_metadata_path=preprocessing_metadata_path,
+                config=config,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError) as error:  # missing or bad inputs of this fish
+            print(f"⚠️ Skipping {fish_id}: {error}")
+            continue
+        print(f"✅ {fish_id}: {manifest['status']}")
+        manifests[fish_id] = manifest
+    return manifests
+
 
 __all__ = [
     "FunctionalAnatomyQCConfig",
+    "batch_drift_analysis",
     "block_window_bounds",
     "block_window_labels",
+    "default_output_dir",
     "read_canonical_anatomy",
     "run_drift_analysis",
     "tracked_local_depth_profile",
 ]
+
+
+if __name__ == "__main__":
+    # ---- Settings: fill in by hand when running this file (terminal options override them) ----
+    DATA_ROOT = "F:/Matilde/2p_data"  # folder containing the fish folders
+    FISH_TO_PROCESS = ["L500_f01"]  # Fish IDs to check
+    OUTPUT_ROOT = None  # folder for the drift results (one subfolder per fish); None = inside each fish folder
+
+    WORKERS = 1  # parallel workers
+    WINDOWS_PER_BLOCK = 3  # time windows each block is split into
+    SAMPLED_FRAMES_PER_WINDOW = 80  # frames read per window
+    TOP_CORRELATED_FRAMES = 20  # most typical frames averaged into each reference
+    LOCAL_XY_RADIUS = 8  # pixels searched around the expected X/Y position
+    # ----------------------------------------------------------------------------------------------
+
+    parser = argparse.ArgumentParser(
+        description="Z-drift QC: best-matching anatomy depth of each functional plane over time.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,  # show each default in --help
+    )
+    parser.add_argument("--data-root", type=Path, default=DATA_ROOT, help="folder containing the fish folders")
+    parser.add_argument("--fish", nargs="+", default=FISH_TO_PROCESS, help="fish IDs to check")
+    parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT, help="folder for the drift results (one subfolder per fish); default: inside each fish folder")
+    parser.add_argument("--workers", type=int, default=WORKERS, help="parallel workers")
+    parser.add_argument("--windows-per-block", type=int, default=WINDOWS_PER_BLOCK, help="time windows each block is split into")
+    parser.add_argument("--sampled-frames-per-window", type=int, default=SAMPLED_FRAMES_PER_WINDOW, help="frames read per window")
+    parser.add_argument("--top-correlated-frames", type=int, default=TOP_CORRELATED_FRAMES, help="most typical frames averaged into each reference")
+    parser.add_argument("--local-xy-radius", type=int, default=LOCAL_XY_RADIUS, help="pixels searched around the expected X/Y position")
+    # Single-fish options, for non-default files (terminal only).
+    parser.add_argument("--output-dir", type=Path, help="exact results folder (one fish only); overrides --output-root")
+    parser.add_argument("--anatomy-path", type=Path, help="anatomy NRRD to use instead of the one in the spatial manifest (one fish only)")
+    parser.add_argument("--preprocessing-metadata-path", type=Path, help="session metadata to use instead of the default file (one fish only)")
+    args = parser.parse_args()
+
+    # Save-only plotting backend: this often runs on servers without a screen.
+    matplotlib.use("Agg")
+
+    batch_drift_analysis(
+        args.data_root,
+        args.fish,
+        output_root=args.output_root,
+        output_dir=args.output_dir,
+        anatomy_path=args.anatomy_path,
+        preprocessing_metadata_path=args.preprocessing_metadata_path,
+        config=FunctionalAnatomyQCConfig(
+            workers=args.workers,
+            windows_per_block=args.windows_per_block,
+            sampled_frames_per_window=args.sampled_frames_per_window,
+            top_correlated_frames=args.top_correlated_frames,
+            local_xy_radius_px=args.local_xy_radius,
+        ),
+    )

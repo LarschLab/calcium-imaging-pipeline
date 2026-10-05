@@ -177,15 +177,18 @@ class Suite2PNCCGateTests(unittest.TestCase):
             output_dir = Path(temporary) / "ncc_out"
 
             def fake_drift_command(command, **_kwargs):
-                """Stand in for the drift CLI: write the manifest it would write."""
+                """Stand in for the drift run: write the manifest it would write."""
                 output_dir.mkdir(parents=True)
                 (output_dir / "functional_anatomy_qc_manifest.json").write_text('{"status": "pass_candidate"}')
 
             with mock.patch.object(stage.subprocess, "run", side_effect=fake_drift_command) as run:
                 manifest = stage._run_drift_check(fish, output_dir, drift_workers=3, drift_python="/envs/ncc/bin/python")
             command = run.call_args.args[0]
-            self.assertEqual(command[:3], ["/envs/ncc/bin/python", "-m", "preprocessing.drift_analysis_cli"])
-            self.assertEqual(command[3:], ["--fish-dir", str(fish), "--output-dir", str(output_dir), "--workers", "3"])
+            self.assertEqual(command[:3], ["/envs/ncc/bin/python", "-m", "preprocessing.drift_analysis"])
+            self.assertEqual(
+                command[3:],
+                ["--data-root", str(fish.parent), "--fish", fish.name, "--output-dir", str(output_dir), "--workers", "3"],
+            )
             self.assertEqual(manifest["status"], "pass_candidate")
 
     def test_plain_run_gives_each_plane_its_own_fast_disk_folder(self):
