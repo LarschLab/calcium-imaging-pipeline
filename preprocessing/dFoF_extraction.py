@@ -52,6 +52,9 @@ def compute_percentile_baseline(fluorescence_trace, fps, tau,
     Returns:
     - np.ndarray: Baseline matrix F0 (T x N), NaN for unstable ROIs.
     """
+    # TODO: discuss with Ale -- `window_frames` is used as a half-width (t ± window_frames),
+    # so the percentile window is 2 × window_s (8 min with tau = 6 s), while the smoothing
+    # below uses window_frames as its full width. Intended?
     T, N = fluorescence_trace.shape
     window_s = max(min_window_s, window_tau_multiplier * tau)
     window_frames = int(window_s * fps)
@@ -92,7 +95,8 @@ def compute_dff(fluorescence_trace, F0_baseline):
     return (fluorescence_trace - F0_baseline) / baseline_safe
 
 
-def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40):
+def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8, instability_ratio=0.1, min_window_s=15, window_tau_multiplier=40,
+                                 dim_threshold_std=2):
     """
     Complete extraction pipeline: from Suite2p raw output to ΔF/F traces.
 
@@ -103,11 +107,15 @@ def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8
     - tau (float): Calcium decay constant (seconds).
     - percentile (int): Percentile for baseline estimation.
     - instability_ratio (float): Instability rejection threshold.
+    - min_window_s (float): Minimum baseline window (seconds).
+    - window_tau_multiplier (float): Baseline window as a multiple of tau, if longer.
+    - dim_threshold_std (float): Drop ROIs this many SDs dimmer than the average ROI.
 
     Returns:
     - np.ndarray: ΔF/F0 traces (T x N_final).
     - np.ndarray: Retained ROI indices relative to full Suite2p ROI list.
     """
+    # TODO: discuss with Ale -- only F.npy is used, no neuropil subtraction (Fneu.npy). Intended?
     fluorescence_trace = load_fluorescence_data(s2p_folder / f"{file_prefix}_F.npy")
     iscell_mask = np.load(s2p_folder / f"{file_prefix}_iscell.npy")[:, 0].astype(bool)
 
@@ -116,7 +124,7 @@ def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8
     print(f"Excluded {np.sum(~iscell_mask)} non-cell ROIs. Remaining: {fluorescence_trace.shape[1]} cells.")
 
     # Remove dim (low-intensity) ROIs
-    filtered_trace, bright_rois_mask = filter_dim_rois(fluorescence_trace)
+    filtered_trace, bright_rois_mask = filter_dim_rois(fluorescence_trace, threshold_std=dim_threshold_std)
     print(f"Removed {np.sum(~bright_rois_mask)} dim ROIs.")
 
     # Compute percentile baseline (F0)
@@ -139,6 +147,23 @@ def process_suite2p_fluorescence(file_prefix, s2p_folder, fps, tau, percentile=8
 
     return deltaF_F, final_indices
 
+
+def existing_dff_outputs(plane_path, file_prefix):
+    """
+    List the dF/F outputs of a plane that are already on disk.
+
+    Parameters:
+    - plane_path (Path): Suite2p plane folder where the outputs are written.
+    - file_prefix (str): Filename prefix for this fish/plane (e.g. "{fish}_plane{i}").
+
+    Returns:
+    - list[Path]: Existing dF/F, ROI-index and metadata files; empty if none.
+    """
+    output_names = [f"{file_prefix}_dFoF.npy", f"{file_prefix}_filtered_roi_indices.npy", f"{file_prefix}_dFoF_metadata.json"]
+    existing_outputs = [plane_path / name for name in output_names if (plane_path / name).exists()]
+    return existing_outputs
+
+
 if __name__ == "__main__":
 
     # Parameters
@@ -152,6 +177,9 @@ if __name__ == "__main__":
     tau = 6.0 # GCaMP6s decay time (sec)
     percentile = 8 # Percentile for baseline (e.g. 8th)
     instability_ratio = 0.1 # Baseline instability check (10× drop = 0.1)
+    min_window_s = 15 # Shortest baseline window (seconds)
+    window_tau_multiplier = 40 # Baseline window = this × tau, if longer
+    dim_threshold_std = 2 # Drop ROIs this many SDs dimmer than the average ROI
 
 
     for fish in fish_selected:
@@ -164,6 +192,12 @@ if __name__ == "__main__":
             plane_path = s2p_folder / f"plane{i}"
             file_prefix = f"{fish}_plane{i}"
             f_path = plane_path / f"{file_prefix}_F.npy"
+            # Never overwrite results (they live on the storage drive, with no backup)
+            existing_outputs = existing_dff_outputs(plane_path, file_prefix)
+            if existing_outputs:
+                existing_names = ", ".join(path.name for path in existing_outputs)
+                print(f"  ⚠️ Skipping plane {i}: dF/F outputs already exist ({existing_names}). Move them to rerun this plane.")
+                continue
             if f_path.exists():
                 deltaF_F, final_indices = process_suite2p_fluorescence(
                     file_prefix,
@@ -171,12 +205,17 @@ if __name__ == "__main__":
                     fps,
                     tau,
                     percentile=percentile,
-                    instability_ratio=instability_ratio
+                    instability_ratio=instability_ratio,
+                    min_window_s=min_window_s,
+                    window_tau_multiplier=window_tau_multiplier,
+                    dim_threshold_std=dim_threshold_std,
                 )
 
-                # Save arrays
-                np.save(plane_path / f"{fish}_plane{i}_dFoF.npy", deltaF_F)  # shape T x N_final
-                np.save(plane_path / f"{fish}_plane{i}_filtered_roi_indices.npy", final_indices)
+                # Save arrays; "xb" = create only, so an existing file raises instead of being overwritten
+                with open(plane_path / f"{fish}_plane{i}_dFoF.npy", "xb") as dff_file:
+                    np.save(dff_file, deltaF_F)  # shape T x N_final
+                with open(plane_path / f"{fish}_plane{i}_filtered_roi_indices.npy", "xb") as indices_file:
+                    np.save(indices_file, final_indices)
 
                 # Save minimal metadata
                 meta = {
@@ -187,7 +226,10 @@ if __name__ == "__main__":
                         "fps": fps,
                         "tau": tau,
                         "percentile": percentile,
-                        "instability_ratio": instability_ratio
+                        "instability_ratio": instability_ratio,
+                        "min_window_s": min_window_s,
+                        "window_tau_multiplier": window_tau_multiplier,
+                        "dim_threshold_std": dim_threshold_std,
                     },
                     "shapes": {
                         "dFoF_TxN": [int(deltaF_F.shape[0]), int(deltaF_F.shape[1])],
@@ -195,7 +237,7 @@ if __name__ == "__main__":
                     },
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
                 }
-                with (plane_path / f"{fish}_plane{i}_dFoF_metadata.json").open("w", encoding="utf-8") as f:
+                with (plane_path / f"{fish}_plane{i}_dFoF_metadata.json").open("x", encoding="utf-8") as f:
                     import json
 
                     json.dump(meta, f, indent=2)
