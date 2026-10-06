@@ -29,6 +29,7 @@ import csv
 import hashlib
 import json
 from pathlib import Path
+import time
 
 import tifffile
 
@@ -52,6 +53,7 @@ ANATOMY_OUTPUT_SUBFOLDER = Path("02_reg/00_preprocessing/2p_anatomy")  # prepare
 ANATOMY_XY_SPACING_KEYS = ("pixel_size_um_anatomy", "pixel_size_anatomy_um", "anatomy_pixel_size_um")
 ANATOMY_Z_SPACING_KEYS = ("step_size_um_anatomy",)
 CLASSIFIER_VALIDATION_NAME = "anatomy_polarity_group_validation.json"  # saved next to the spatial manifest
+METADATA_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def _metadata_float(fish_dir, keys):
@@ -328,7 +330,7 @@ def preprocess_canonical_fish(
     )
 
     # 3. Anatomy prepared for registration
-    anatomy_output = output / ANATOMY_OUTPUT_SUBFOLDER / f"{source.name}_anatomy_2P_GCaMP.nrrd"
+    anatomy_output = canonical_anatomy_path(output)
     anatomy_record = preprocess_anatomy(
         anatomy_path=anatomy_source,
         output_path=anatomy_output,
@@ -399,7 +401,128 @@ def batch_canonical_preprocessing(data_root, fish_ids, output_root, *, classifie
     return manifests
 
 
-__all__ = ["batch_canonical_preprocessing", "preprocess_canonical_fish"]
+def canonical_anatomy_path(fish_dir):
+    """Return where the prepared anatomy NRRD of a fish is written.
+
+    Args:
+        fish_dir (str or Path): Folder of one fish.
+
+    Returns:
+        Path: `<fish>/02_reg/00_preprocessing/2p_anatomy/<fish>_anatomy_2P_GCaMP.nrrd`.
+    """
+    fish_folder = Path(fish_dir)
+    anatomy_path = fish_folder / ANATOMY_OUTPUT_SUBFOLDER / f"{fish_folder.name}_anatomy_2P_GCaMP.nrrd"
+    return anatomy_path
+
+
+# TODO: for Danin to check -- the name of this anatomy sidecar
+# (`..._anatomy_2P_GCaMP_metadata.json`) and whether it should be merged into the
+# spatial manifest; more generally, review all metadata files the pipeline writes.
+def preprocess_canonical_anatomy(fish_dir, *, reviewed_polarity=None, anatomy_xy_spacing_um=None,
+                                 anatomy_z_spacing_um=None, target_xy_shape=(750, 750)):
+    """Prepare only the anatomy NRRD of a fish, inside its own folder (anatomy-only mode).
+
+    For fish whose functional recordings are already preprocessed: no
+    functional step, no classifier, and no spatial manifest (the existing
+    recordings may not be flipped). The polarity comes from the raw metadata,
+    or from `reviewed_polarity` when the metadata has none. An existing NRRD is
+    kept, never overwritten.
+
+    Args:
+        fish_dir (str or Path): Folder of one fish (raw data inside).
+        reviewed_polarity (str or None): North/south, used only if the raw
+            metadata has no fish orientation.
+        anatomy_xy_spacing_um (float or None): Pixel size override; else from the metadata.
+        anatomy_z_spacing_um (float or None): Z-step override; else from the metadata.
+        target_xy_shape (tuple[int, int]): Output anatomy height and width.
+
+    Returns:
+        dict or None: The anatomy metadata written next to the NRRD, or None
+        if the NRRD already existed.
+
+    Raises:
+        ValueError: If the fish is excluded or the anatomy spacing is missing.
+        PolarityResolutionError: If no polarity can be decided.
+    """
+    fish_folder = Path(fish_dir)
+    if fish_folder.name.startswith(EXCLUDED_FISH_PREFIX):
+        raise ValueError(f"{EXCLUDED_FISH_PREFIX} interleaved two-channel fish are excluded from this workflow")
+    anatomy_output = canonical_anatomy_path(fish_folder)
+    if anatomy_output.exists():  # never overwrite files on the data drive
+        print(f"Keeping existing {anatomy_output} (delete it by hand to rebuild).")
+        return None
+    resolution = resolve_polarity(fish_folder, reviewed_polarity=reviewed_polarity)  # metadata first
+    xy_spacing, z_spacing = _anatomy_spacing(fish_folder, anatomy_xy_spacing_um, anatomy_z_spacing_um)
+    anatomy_record = preprocess_anatomy(
+        anatomy_path=discover_anatomy(fish_folder),
+        output_path=anatomy_output,
+        polarity=resolution.polarity,
+        source_spacing_xyz_um=(xy_spacing, xy_spacing, z_spacing),
+        target_xy_shape=target_xy_shape,
+    )
+    # Sidecar: preprocess_anatomy's own record (shapes, spacing, transforms) plus where the polarity came from.
+    anatomy_metadata = {
+        "fish_id": fish_folder.name,
+        "polarity": resolution.polarity,
+        "polarity_source": resolution.source,
+        **anatomy_record,
+        "timestamp": time.strftime(METADATA_TIMESTAMP_FORMAT),
+    }
+    metadata_path = anatomy_output.with_name(f"{anatomy_output.stem}_metadata.json")
+    with metadata_path.open("x", encoding="utf-8") as metadata_file:  # create only, never overwrite
+        json.dump(anatomy_metadata, metadata_file, indent=2)
+    print(f"Wrote {anatomy_output}, shape (z, y, x) = {anatomy_record['output_shape_zyx']}")
+    return anatomy_metadata
+
+
+def batch_canonical_anatomy(data_root, fish_ids, *, reviewed_polarity=None, anatomy_xy_spacing_um=None,
+                            anatomy_z_spacing_um=None, target_xy_shape=(750, 750)):
+    """Run the anatomy-only mode on several fish, skipping fish that fail.
+
+    Args:
+        data_root (str or Path): Folder containing the fish folders; each NRRD
+            is written inside its own fish folder.
+        fish_ids (list[str]): Fish IDs to process.
+        reviewed_polarity (str or None): Manually reviewed north/south; single fish only.
+        anatomy_xy_spacing_um (float or None): Pixel size override; single fish only.
+        anatomy_z_spacing_um (float or None): Z-step override; single fish only.
+        target_xy_shape (tuple[int, int]): Output anatomy height and width.
+
+    Returns:
+        dict: Anatomy metadata of each fish that was written, keyed by fish ID.
+
+    Raises:
+        ValueError: If a single-fish option is given with several fish.
+    """
+    single_fish_options = [reviewed_polarity, anatomy_xy_spacing_um, anatomy_z_spacing_um]
+    if len(fish_ids) != 1 and any(option is not None for option in single_fish_options):
+        raise ValueError("reviewed_polarity and the anatomy spacing overrides need exactly one fish")
+    written = {}
+    for fish_id in fish_ids:
+        print(f"\n📂 Canonical anatomy of {fish_id}")
+        try:
+            anatomy_metadata = preprocess_canonical_anatomy(
+                Path(data_root) / fish_id,
+                reviewed_polarity=reviewed_polarity,
+                anatomy_xy_spacing_um=anatomy_xy_spacing_um,
+                anatomy_z_spacing_um=anatomy_z_spacing_um,
+                target_xy_shape=target_xy_shape,
+            )
+        except (FileNotFoundError, ValueError, PolarityResolutionError) as error:  # bad inputs of this fish
+            print(f"⚠️ Skipping {fish_id}: {error}")
+            continue
+        if anatomy_metadata is not None:
+            written[fish_id] = anatomy_metadata
+    return written
+
+
+__all__ = [
+    "batch_canonical_anatomy",
+    "batch_canonical_preprocessing",
+    "canonical_anatomy_path",
+    "preprocess_canonical_anatomy",
+    "preprocess_canonical_fish",
+]
 
 
 if __name__ == "__main__":
@@ -407,6 +530,7 @@ if __name__ == "__main__":
     DATA_ROOT = "F:/Matilde/2p_data"  # folder containing the raw fish folders
     FISH_TO_PROCESS = ["L500_f01"]  # Fish IDs to process
     OUTPUT_ROOT = "F:/Matilde/canonical"  # results go to OUTPUT_ROOT/<fish_id> (must not exist yet or be empty)
+    ANATOMY_ONLY = False  # True: only prepare the anatomy NRRD, inside each fish folder (e.g. fish already preprocessed)
 
     CLASSIFIER_MODEL = None  # saved polarity model; or set REFERENCE_MICROSCOPY_ROOT instead
     CLASSIFIER_VALIDATION = None  # validation report of that model
@@ -436,6 +560,8 @@ if __name__ == "__main__":
     parser.add_argument("--data-root", type=Path, default=DATA_ROOT, help="folder containing the raw fish folders")
     parser.add_argument("--fish", nargs="+", default=FISH_TO_PROCESS, help="fish IDs to process")
     parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT, help="results go to OUTPUT_ROOT/<fish_id>")
+    parser.add_argument("--anatomy-only", action=argparse.BooleanOptionalAction, default=ANATOMY_ONLY,
+                        help="only prepare the anatomy NRRD inside each fish folder (no functional step, classifier or manifest)")
     parser.add_argument("--classifier-model", type=Path, default=CLASSIFIER_MODEL, help="saved polarity model")
     parser.add_argument("--classifier-validation", type=Path, default=CLASSIFIER_VALIDATION, help="validation report of that model")
     parser.add_argument("--reference-microscopy-root", type=Path, default=REFERENCE_MICROSCOPY_ROOT, help="reference fish to train the classifier from")
@@ -451,21 +577,31 @@ if __name__ == "__main__":
     parser.add_argument("--anatomy-z-spacing-um", type=float, default=ANATOMY_Z_SPACING_UM, help="anatomy Z-step, if missing from the metadata (one fish only)")
     args = parser.parse_args()
 
-    batch_canonical_preprocessing(
-        args.data_root,
-        args.fish,
-        args.output_root,
-        classifier_model_path=args.classifier_model,
-        classifier_validation_path=args.classifier_validation,
-        reference_microscopy_root=args.reference_microscopy_root,
-        reviewed_polarity=args.reviewed_polarity,
-        anatomy_xy_spacing_um=args.anatomy_xy_spacing_um,
-        anatomy_z_spacing_um=args.anatomy_z_spacing_um,
-        protocol=args.protocol,
-        blocks=args.blocks,
-        n_planes=args.n_planes,
-        n_frames_per_plane=args.n_frames_per_plane,
-        volume_flyback_frames=args.volume_flyback_frames,
-        remove_first_frame=args.remove_first_frame,
-        target_xy_shape=(args.target_xy, args.target_xy),
-    )
+    if args.anatomy_only:
+        batch_canonical_anatomy(
+            args.data_root,
+            args.fish,
+            reviewed_polarity=args.reviewed_polarity,
+            anatomy_xy_spacing_um=args.anatomy_xy_spacing_um,
+            anatomy_z_spacing_um=args.anatomy_z_spacing_um,
+            target_xy_shape=(args.target_xy, args.target_xy),
+        )
+    else:
+        batch_canonical_preprocessing(
+            args.data_root,
+            args.fish,
+            args.output_root,
+            classifier_model_path=args.classifier_model,
+            classifier_validation_path=args.classifier_validation,
+            reference_microscopy_root=args.reference_microscopy_root,
+            reviewed_polarity=args.reviewed_polarity,
+            anatomy_xy_spacing_um=args.anatomy_xy_spacing_um,
+            anatomy_z_spacing_um=args.anatomy_z_spacing_um,
+            protocol=args.protocol,
+            blocks=args.blocks,
+            n_planes=args.n_planes,
+            n_frames_per_plane=args.n_frames_per_plane,
+            volume_flyback_frames=args.volume_flyback_frames,
+            remove_first_frame=args.remove_first_frame,
+            target_xy_shape=(args.target_xy, args.target_xy),
+        )
