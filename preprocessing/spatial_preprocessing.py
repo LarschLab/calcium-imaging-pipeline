@@ -183,11 +183,10 @@ def read_raw_metadata_polarity(fish_dir):
     return polarity, polarity_source
 
 
-# TODO: the anatomy Z step has two sources that could disagree: this reads
-# `step_size_um_anatomy` from the metadata CSVs (the canonical workflow reads the
-# same value with its own `_metadata_float`), while the registration notebook
-# reads ScanImage's `SI.hStackManager.stackZStepSize` from the anatomy TIFF.
-# Pick one with Danin.
+# The anatomy Z step always comes from the raw metadata CSV (`step_size_um_anatomy`):
+# ScanImage doesn't record it. Used by the registration notebook.
+# TODO: the canonical workflow reads the same row with its own `_metadata_float`;
+# use this function there too, so there is one metadata reader.
 def anatomy_z_spacing_um(metadata_dir):
     """Read anatomy slice spacing and ensure all metadata files agree.
 
