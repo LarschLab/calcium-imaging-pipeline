@@ -16,9 +16,10 @@ transforms, evidence, paths, shapes, dtypes, and spacing. `L427` is rejected.
 Run into a new, empty fish directory while the migration is being validated:
 
 ```bash
-python -m preprocessing.canonical_spatial_preprocessing_cli \
-  --source-fish-dir /data/Matilde/Microscopy/L000_f00 \
-  --output-fish-dir /validation/L000_f00 \
+python -m preprocessing.canonical_spatial_preprocessing \
+  --data-root /data/Matilde/Microscopy \
+  --fish L000_f00 \
+  --output-root /validation \
   --reference-microscopy-root /data/Matilde/Microscopy \
   --protocol resonant --blocks 1 2 3 --n-planes 5 --n-frames-per-plane 3
 ```

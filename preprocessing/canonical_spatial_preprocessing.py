@@ -1,7 +1,11 @@
-"""Orchestration for one-pass canonical functional and anatomy preprocessing."""
+"""Orchestration for one-pass canonical functional and anatomy preprocessing.
+
+Run it from the terminal or fill in the settings at the bottom (see `--help`).
+"""
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import asdict
 import csv
 import hashlib
@@ -14,6 +18,7 @@ import tifffile
 from preprocessing.anatomy_polarity import discover_anatomy, load_model, predict_fish, train_from_raw_metadata
 from preprocessing.functional_preprocessing import preprocess_functional_fish
 from preprocessing.spatial_preprocessing import (
+    PolarityResolutionError,
     spatial_manifest_path,
     preprocess_anatomy,
     resolve_polarity,
@@ -228,4 +233,129 @@ def run_canonical_spatial_preprocessing(
     return manifest
 
 
-__all__ = ["run_canonical_spatial_preprocessing"]
+def batch_canonical_spatial_preprocessing(data_root, fish_ids, output_root, *, classifier_model_path=None,
+                                          reference_microscopy_root=None, reviewed_polarity=None,
+                                          anatomy_xy_spacing_um=None, anatomy_z_spacing_um=None, **settings):
+    """Run the canonical preprocessing on several fish, skipping fish that fail.
+
+    A fish whose inputs are missing or invalid, or whose polarity needs a
+    manual review, gets a warning and is skipped, so one bad fish doesn't
+    stop the others.
+
+    Args:
+        data_root (str or Path): Folder containing the raw fish folders.
+        fish_ids (list[str]): Fish IDs to process (e.g. `["L500_f01"]`).
+        output_root (str or Path): Results go to `output_root/<fish_id>`,
+            which must not exist yet or be empty.
+        classifier_model_path (str or Path or None): Saved polarity model.
+        reference_microscopy_root (str or Path or None): Reference fish to
+            train the classifier from instead (slow: retrained for every fish).
+        reviewed_polarity (str or None): Manually reviewed north/south; single fish only.
+        anatomy_xy_spacing_um (float or None): Anatomy pixel size override; single fish only.
+        anatomy_z_spacing_um (float or None): Anatomy Z-step override; single fish only.
+        **settings: Other keyword settings of `run_canonical_spatial_preprocessing`
+            (protocol, blocks, n_planes, ...).
+
+    Returns:
+        dict: Spatial manifest of each fish that ran, keyed by fish ID.
+
+    Raises:
+        ValueError: If not exactly one of the model and the reference folder is
+            given, or a single-fish option is given with several fish.
+    """
+    if (classifier_model_path is None) == (reference_microscopy_root is None):
+        raise ValueError("Give exactly one of classifier_model_path and reference_microscopy_root")
+    single_fish_options = [reviewed_polarity, anatomy_xy_spacing_um, anatomy_z_spacing_um]
+    if len(fish_ids) != 1 and any(option is not None for option in single_fish_options):
+        raise ValueError("reviewed_polarity and the anatomy spacing overrides need exactly one fish")
+    manifests = {}
+    for fish_id in fish_ids:
+        print(f"\n📂 Canonical preprocessing of {fish_id}")
+        try:
+            manifest = run_canonical_spatial_preprocessing(
+                source_fish_dir=Path(data_root) / fish_id,
+                output_fish_dir=Path(output_root) / fish_id,
+                reference_microscopy_root=reference_microscopy_root,
+                classifier_model_path=classifier_model_path,
+                reviewed_polarity=reviewed_polarity,
+                anatomy_xy_spacing_um=anatomy_xy_spacing_um,
+                anatomy_z_spacing_um=anatomy_z_spacing_um,
+                **settings,
+            )
+        except (FileExistsError, FileNotFoundError, ValueError, PolarityResolutionError) as error:  # bad inputs of this fish
+            print(f"⚠️ Skipping {fish_id}: {error}")
+            continue
+        print(f"✅ {fish_id}: {manifest['status']}")
+        manifests[fish_id] = manifest
+    return manifests
+
+
+__all__ = ["batch_canonical_spatial_preprocessing", "run_canonical_spatial_preprocessing"]
+
+
+if __name__ == "__main__":
+    # ---- Settings: fill in by hand when running this file (terminal options override them) ----
+    DATA_ROOT = "F:/Matilde/2p_data"  # folder containing the raw fish folders
+    FISH_TO_PROCESS = ["L500_f01"]  # Fish IDs to process
+    OUTPUT_ROOT = "F:/Matilde/canonical"  # results go to OUTPUT_ROOT/<fish_id> (must not exist yet or be empty)
+
+    CLASSIFIER_MODEL = None  # saved polarity model; or set REFERENCE_MICROSCOPY_ROOT instead
+    CLASSIFIER_VALIDATION = None  # validation report of that model
+    REFERENCE_MICROSCOPY_ROOT = None  # reference fish to train the classifier from (slow: retrained per fish)
+
+    PROTOCOL = "resonant"  # or "linear"
+    BLOCKS = None  # blocks to process; None = all blocks
+    N_PLANES = 5
+    N_FRAMES_PER_PLANE = 3
+    # TODO: ask Danin -- default 1 flyback frame, but Matilde's recordings have 0;
+    # with 1, every (n_planes * n_frames_per_plane + 1)-th frame is dropped by mistake.
+    VOLUME_FLYBACK_FRAMES = 1
+    REMOVE_FIRST_FRAME = False
+    TARGET_XY = 750  # anatomy output height and width (pixels)
+
+    # Single-fish values (only with one fish in FISH_TO_PROCESS):
+    REVIEWED_POLARITY = None  # "north" or "south" after a manual review
+    ANATOMY_XY_SPACING_UM = None  # anatomy pixel size, if missing from the metadata
+    ANATOMY_Z_SPACING_UM = None  # anatomy Z-step, if missing from the metadata
+    # ----------------------------------------------------------------------------------------------
+
+    parser = argparse.ArgumentParser(
+        description="Canonical functional plane recordings, anatomy NRRD and spatial manifest, per fish.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,  # show each default in --help
+    )
+    parser.add_argument("--data-root", type=Path, default=DATA_ROOT, help="folder containing the raw fish folders")
+    parser.add_argument("--fish", nargs="+", default=FISH_TO_PROCESS, help="fish IDs to process")
+    parser.add_argument("--output-root", type=Path, default=OUTPUT_ROOT, help="results go to OUTPUT_ROOT/<fish_id>")
+    parser.add_argument("--classifier-model", type=Path, default=CLASSIFIER_MODEL, help="saved polarity model")
+    parser.add_argument("--classifier-validation", type=Path, default=CLASSIFIER_VALIDATION, help="validation report of that model")
+    parser.add_argument("--reference-microscopy-root", type=Path, default=REFERENCE_MICROSCOPY_ROOT, help="reference fish to train the classifier from")
+    parser.add_argument("--protocol", choices=("resonant", "linear"), default=PROTOCOL, help="acquisition protocol")
+    parser.add_argument("--blocks", type=int, nargs="+", default=BLOCKS, help="blocks to process (default: all)")
+    parser.add_argument("--n-planes", type=int, default=N_PLANES, help="planes per volume")
+    parser.add_argument("--n-frames-per-plane", type=int, default=N_FRAMES_PER_PLANE, help="frames acquired per plane")
+    parser.add_argument("--volume-flyback-frames", type=int, default=VOLUME_FLYBACK_FRAMES, help="flyback frames per volume")
+    parser.add_argument("--remove-first-frame", action=argparse.BooleanOptionalAction, default=REMOVE_FIRST_FRAME, help="drop the first frame of each plane")
+    parser.add_argument("--target-xy", type=int, default=TARGET_XY, help="anatomy output height and width (pixels)")
+    parser.add_argument("--reviewed-polarity", choices=("north", "south"), default=REVIEWED_POLARITY, help="manually reviewed polarity (one fish only)")
+    parser.add_argument("--anatomy-xy-spacing-um", type=float, default=ANATOMY_XY_SPACING_UM, help="anatomy pixel size, if missing from the metadata (one fish only)")
+    parser.add_argument("--anatomy-z-spacing-um", type=float, default=ANATOMY_Z_SPACING_UM, help="anatomy Z-step, if missing from the metadata (one fish only)")
+    args = parser.parse_args()
+
+    batch_canonical_spatial_preprocessing(
+        args.data_root,
+        args.fish,
+        args.output_root,
+        classifier_model_path=args.classifier_model,
+        classifier_validation_path=args.classifier_validation,
+        reference_microscopy_root=args.reference_microscopy_root,
+        reviewed_polarity=args.reviewed_polarity,
+        anatomy_xy_spacing_um=args.anatomy_xy_spacing_um,
+        anatomy_z_spacing_um=args.anatomy_z_spacing_um,
+        protocol=args.protocol,
+        blocks=args.blocks,
+        n_planes=args.n_planes,
+        n_frames_per_plane=args.n_frames_per_plane,
+        volume_flyback_frames=args.volume_flyback_frames,
+        remove_first_frame=args.remove_first_frame,
+        target_xy_shape=(args.target_xy, args.target_xy),
+    )
