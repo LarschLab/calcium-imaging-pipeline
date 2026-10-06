@@ -58,7 +58,7 @@ SUITE2P_OUTPUT_FOLDER = "suite2p"  # the folder Suite2P writes into, inside its 
 SUITE2P_PLANE_SUBFOLDER = Path(SUITE2P_OUTPUT_FOLDER) / "plane0"  # Suite2P's outputs for the single plane it is given
 REGISTERED_TIFF_FOLDER = "reg_tif"  # Suite2P's motion-corrected TIFF chunks, inside the plane subfolder
 DRIFT_RESULTS_SUBFOLDER = Path("03_analysis/functional/ncc/validation")  # default drift results folder, inside the fish folder
-# (same as in drift_analysis.py; not imported from there because the drift analysis may live in a separate Python)
+# (used when the drift check runs from this step; drift_analysis.py has its own default for its own runs)
 
 
 def check_plane_in_manifest(fish_folder, plane_file):
