@@ -12,7 +12,7 @@ from typing import Any, Sequence
 import tifffile
 
 from preprocessing.anatomy_polarity import discover_anatomy, load_model, predict_fish, train_from_raw_metadata
-from preprocessing.functional_preprocessing import process_fish
+from preprocessing.functional_preprocessing import preprocess_functional_fish
 from preprocessing.spatial_preprocessing import (
     spatial_manifest_path,
     preprocess_anatomy,
@@ -172,7 +172,7 @@ def run_canonical_spatial_preprocessing(
             "Anatomy X/Y and Z spacing are required; provide explicit spacing when raw metadata lacks it"
         )
 
-    process_fish(
+    preprocess_functional_fish(
         source.name,
         source.parent,
         output.parent,

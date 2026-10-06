@@ -37,9 +37,9 @@ original X/Y orientation by default. In that mode it does not interpret or
 save fish polarity:
 
 ```python
-from preprocessing.functional_preprocessing import process_fish
+from preprocessing.functional_preprocessing import preprocess_functional_fish
 
-process_fish(
+preprocess_functional_fish(
     "L000_f00",
     input_base="/data/Matilde/Microscopy",
     output_base="/data/Matilde/Microscopy",
@@ -56,7 +56,7 @@ codeANTs X/Y orientation. This enables both use of the resolved polarity and
 the corresponding image flip; the two actions cannot be enabled separately:
 
 ```python
-process_fish(
+preprocess_functional_fish(
     "L000_f00",
     input_base="/data/Matilde/Microscopy",
     output_base="/validation",

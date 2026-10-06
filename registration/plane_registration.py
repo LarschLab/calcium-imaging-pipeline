@@ -45,7 +45,7 @@ from preprocessing.spatial_preprocessing import (
 from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
 from registration.plane_matching import scale_image
 
-# Where functional_preprocessing.process_fish writes its metadata, relative to the fish folder.
+# Where functional_preprocessing.preprocess_functional_fish writes its metadata, relative to the fish folder.
 PREPROCESSING_METADATA_DIR = "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
 
 

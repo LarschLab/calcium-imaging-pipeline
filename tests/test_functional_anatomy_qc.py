@@ -31,7 +31,7 @@ from preprocessing.drift_analysis import (
     block_window_labels,
     run_drift_analysis,
 )
-from preprocessing.functional_preprocessing import process_fish
+from preprocessing.functional_preprocessing import preprocess_functional_fish
 from registration.plane_matching import refine_peak_depth
 
 
@@ -145,7 +145,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             tifffile.imwrite(raw_dir / "L000_f00_00001.tif", raw, photometric="minisblack")
 
             unchanged_base = root / "unchanged"
-            process_fish(
+            preprocess_functional_fish(
                 "L000_f00", source_base, unchanged_base, protocol="linear",
                 apply_polarity_orientation=False, polarity="south",
                 polarity_source="ignored test value",
@@ -161,7 +161,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(unchanged_metadata["output_xy_frame"], "two_photon_acquisition_xy")
 
             oriented_base = root / "oriented"
-            process_fish(
+            preprocess_functional_fish(
                 "L000_f00", source_base, oriented_base, protocol="linear",
                 apply_polarity_orientation=True, polarity="south",
                 polarity_source="test",
@@ -180,7 +180,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(oriented_metadata["output_xy_frame"], "codeants_2p_canonical_xy_v1")
 
             with self.assertRaisesRegex(ValueError, "requires a resolved north/south polarity"):
-                process_fish(
+                preprocess_functional_fish(
                     "L000_f00", source_base, root / "invalid", protocol="linear",
                     apply_polarity_orientation=True,
                 )
@@ -199,13 +199,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             raw_file = raw_dir / "L000_f00_00001.tif"
             tifffile.imwrite(raw_file, np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8), photometric="minisblack")
             run_settings = {"protocol": "resonant", "n_planes": 2, "n_frames_per_plane": 1, "volume_flyback_frames": 0}
-            process_fish("L000_f00", root, root, **run_settings)
+            preprocess_functional_fish("L000_f00", root, root, **run_settings)
             output_dir = root / "L000_f00" / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
             first_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
 
             # Different raw data on the second run: outputs must still be the first run's.
             tifffile.imwrite(raw_file, np.zeros((4, 8, 8), dtype=np.uint16), photometric="minisblack")
-            process_fish("L000_f00", root, root, **run_settings)
+            preprocess_functional_fish("L000_f00", root, root, **run_settings)
             second_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
             self.assertEqual(
                 sorted(first_outputs),
