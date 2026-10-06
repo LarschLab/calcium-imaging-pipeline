@@ -1,9 +1,27 @@
-"""Orchestration for one-pass canonical functional and anatomy preprocessing.
+"""Canonical spatial preprocessing: rebuild a fish in a new folder, in the
+shared X/Y orientation, with everything the drift analysis needs.
 
-Run it from the terminal or fill in the settings at the bottom (see `--help`).
+For each fish:
+1. Decide the fish's direction (north/south) from the raw metadata,
+   cross-checked by the anatomy classifier.
+2. Make the functional plane recordings (with `functional_preprocessing`),
+   flipped into the shared orientation.
+3. Prepare the anatomy for registration (flip, Z reversal, 8 bit, resize).
+4. Write the spatial manifest, which records every change and where each
+   file is; the drift analysis reads its inputs from it.
+
+- Results go to a new, empty folder, so a fish can be rebuilt next to its
+  existing outputs and compared (written to validate the move to the shared
+  orientation).
+- If the direction can't be decided (no orientation in the metadata and an
+  unsure classifier, or the two disagree), the fish is skipped until it is
+  reviewed by hand (`REVIEWED_POLARITY` in the settings).
+- L427 fish (two interleaved channels) are excluded.
+- Run it from the terminal or fill in the settings at the bottom (see `--help`).
+
+Written by Danin Dharmaperwira (2026); the terminal entry point was merged
+in from `canonical_spatial_preprocessing_cli.py`.
 """
-
-from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
@@ -11,19 +29,29 @@ import csv
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Sequence
 
 import tifffile
 
 from preprocessing.anatomy_polarity import discover_anatomy, load_model, predict_fish, train_from_raw_metadata
-from preprocessing.functional_preprocessing import preprocess_functional_fish
+from preprocessing.functional_preprocessing import PLANES_SUBFOLDER, preprocess_functional_fish
 from preprocessing.spatial_preprocessing import (
+    ACQUISITION_XY_FRAME,
+    CANONICAL_XY_FRAME,
+    XY_TRANSFORM_BY_POLARITY,
     PolarityResolutionError,
     spatial_manifest_path,
     preprocess_anatomy,
     resolve_polarity,
     write_spatial_manifest,
 )
+
+EXCLUDED_FISH_PREFIX = "L427"  # interleaved two-channel fish: not supported by this workflow
+RAW_METADATA_SUBFOLDER = Path("01_raw/2p/metadata")  # raw metadata CSVs, inside the fish folder
+ANATOMY_OUTPUT_SUBFOLDER = Path("02_reg/00_preprocessing/2p_anatomy")  # prepared anatomy, inside the fish folder
+# Metadata row names accepted for the anatomy pixel size and Z-step
+ANATOMY_XY_SPACING_KEYS = ("pixel_size_um_anatomy", "pixel_size_anatomy_um", "anatomy_pixel_size_um")
+ANATOMY_Z_SPACING_KEYS = ("step_size_um_anatomy",)
+CLASSIFIER_VALIDATION_NAME = "anatomy_polarity_group_validation.json"  # saved next to the spatial manifest
 
 
 def _metadata_float(fish_dir, keys):
@@ -35,20 +63,21 @@ def _metadata_float(fish_dir, keys):
             case-insensitively.
 
     Returns:
-        float or None: The first matching positive value found, or ``None``
+        float or None: The first matching positive value found, or None
             if no metadata CSV contains a matching, positive value.
     """
     wanted = {str(value).strip().lower() for value in keys}
-    for path in sorted((fish_dir / "01_raw" / "2p" / "metadata").glob("*metadata*.csv")):
+    for path in sorted((fish_dir / RAW_METADATA_SUBFOLDER).glob("*metadata*.csv")):
         with path.open(newline="", encoding="utf-8-sig") as handle:
             for row in csv.reader(handle):
-                if len(row) >= 2 and str(row[0]).strip().lower() in wanted:
-                    try:
-                        value = float(row[1])
-                    except ValueError:
-                        continue
-                    if value > 0:
-                        return value
+                if len(row) < 2 or str(row[0]).strip().lower() not in wanted:  # rows are "name, value"
+                    continue
+                try:
+                    value = float(row[1])
+                except ValueError:
+                    continue
+                if value > 0:
+                    return value
     return None
 
 
@@ -63,23 +92,156 @@ def _functional_plane_records(output_fish_dir):
         list[dict]: One record per functional plane TIFF, describing its
             output path, shape, dtype, and coordinate frame.
     """
-    directory = output_fish_dir / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+    # TODO: ask Danin -- only `*_plane*.tif` files are recorded, so a linear
+    # recording (saved as `*_stack.tif`) gives a manifest without planes; see
+    # the "remove the linear protocol" TODO in functional_preprocessing.py.
+    directory = output_fish_dir / PLANES_SUBFOLDER
     records = []
     for path in sorted(directory.glob(f"{output_fish_dir.name}_plane*.tif")):
         with tifffile.TiffFile(path) as tif:
-            shape = [len(tif.pages), *[int(value) for value in tif.pages[0].shape]]
+            shape = [len(tif.pages), *[int(value) for value in tif.pages[0].shape]]  # (frames, Y, X)
             dtype = str(tif.pages[0].dtype)
         records.append({
-            "plane_index": int(path.stem.rsplit("plane", 1)[1]),
+            "plane_index": int(path.stem.rsplit("plane", 1)[1]),  # "<fish>_plane3" -> 3
             "output_path": str(path),
             "output_shape_tyx": shape,
             "output_dtype": dtype,
             "output_spacing_xy_um": [None, None],
             "spacing_units": "um",
-            "input_xy_frame": "two_photon_acquisition_xy",
-            "output_xy_frame": "codeants_2p_canonical_xy_v1",
+            "input_xy_frame": ACQUISITION_XY_FRAME,
+            "output_xy_frame": CANONICAL_XY_FRAME,
         })
     return records
+
+
+def _check_fish_folders(source, output):
+    """Check that a fish can run: supported fish, same fish ID, and a new output folder.
+
+    Args:
+        source (Path): Existing fish folder containing the raw data.
+        output (Path): Output folder for the same fish ID.
+
+    Returns:
+        None: Returns only if all checks pass.
+
+    Raises:
+        ValueError: If the fish is excluded or the fish IDs differ.
+        FileExistsError: If the output folder already contains files.
+    """
+    if source.name.startswith(EXCLUDED_FISH_PREFIX):
+        raise ValueError(f"{EXCLUDED_FISH_PREFIX} interleaved two-channel fish are excluded from this workflow")
+    if output.name != source.name:
+        raise ValueError("Output fish directory must retain the source fish ID")
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError(f"Isolated output fish directory is not empty: {output}")
+
+
+def _classifier_prediction(source, classifier_model_path, classifier_validation_path, reference_microscopy_root):
+    """Predict the fish's polarity with a saved or freshly trained classifier.
+
+    Args:
+        source (Path): Fish folder containing the raw anatomy.
+        classifier_model_path (str or Path or None): Saved polarity model.
+        classifier_validation_path (str or Path or None): Validation report for that model.
+        reference_microscopy_root (str or Path or None): Reference fish to train
+            the classifier from, when no saved model is given.
+
+    Returns:
+        tuple: `(prediction_payload, validation)` -- the prediction with its
+        model details (dict, recorded in the manifest), and the classifier's
+        held-out validation rows (list).
+
+    Raises:
+        ValueError: If neither a saved model nor a reference folder is given.
+    """
+    if classifier_model_path is not None:
+        model = load_model(classifier_model_path)
+        validation = (
+            json.loads(Path(classifier_validation_path).read_text(encoding="utf-8"))
+            if classifier_validation_path is not None
+            else []
+        )
+    else:
+        if reference_microscopy_root is None:
+            raise ValueError("reference_microscopy_root or classifier_model_path is required")
+        model, validation = train_from_raw_metadata(reference_microscopy_root, exclude_prefixes=(EXCLUDED_FISH_PREFIX,))
+    prediction = predict_fish(model, source)
+    prediction_payload = {
+        **asdict(prediction),
+        "calibration_floor": model.calibration_floor,
+        "reference_fish_count": len(model.reference_fish_ids),
+        "reference_fish_ids": list(model.reference_fish_ids),
+        "group_held_out_correct": sum(bool(row["correct"]) for row in validation),
+        "group_held_out_count": len(validation),
+    }
+    if classifier_model_path is not None:
+        model_path = Path(classifier_model_path)
+        prediction_payload["model_path"] = str(model_path)
+        prediction_payload["model_sha256"] = hashlib.sha256(model_path.read_bytes()).hexdigest()  # identifies the exact model file
+    return prediction_payload, validation
+
+
+def _anatomy_spacing(source, anatomy_xy_spacing_um, anatomy_z_spacing_um):
+    """Return the anatomy pixel size and Z-step: given values, else from the raw metadata.
+
+    Args:
+        source (Path): Fish folder containing the raw metadata.
+        anatomy_xy_spacing_um (float or None): Pixel size override.
+        anatomy_z_spacing_um (float or None): Z-step override.
+
+    Returns:
+        tuple: `(xy_spacing, z_spacing)` in micrometres.
+
+    Raises:
+        ValueError: If either value is neither given nor in the metadata.
+    """
+    xy_spacing = anatomy_xy_spacing_um or _metadata_float(source, ANATOMY_XY_SPACING_KEYS)
+    z_spacing = anatomy_z_spacing_um or _metadata_float(source, ANATOMY_Z_SPACING_KEYS)
+    if xy_spacing is None or z_spacing is None:
+        raise ValueError(
+            "Anatomy X/Y and Z spacing are required; provide explicit spacing when raw metadata lacks it"
+        )
+    return xy_spacing, z_spacing
+
+
+def _write_canonical_manifest(output, fish_id, resolution, anatomy_record, validation):
+    """Write the spatial manifest and the classifier validation report.
+
+    Args:
+        output (Path): Output fish folder.
+        fish_id (str): Fish ID.
+        resolution (PolarityResolution): The resolved polarity and its evidence.
+        anatomy_record (dict): Record of the prepared anatomy (from `preprocess_anatomy`).
+        validation (list): Classifier held-out validation rows.
+
+    Returns:
+        dict: The completed spatial manifest.
+    """
+    functional_records = _functional_plane_records(output)
+    metadata_path = output / PLANES_SUBFOLDER / f"{fish_id}_preprocessing_metadata.json"
+    functional_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    sessions = functional_metadata.get("sessions", [])
+    selected_sources = [
+        str(path)
+        for session in sessions
+        for path in session.get("selected_tiffs", [])
+    ]
+    for record in functional_records:
+        record["source_paths"] = selected_sources
+        record["xy_transform"] = XY_TRANSFORM_BY_POLARITY[resolution.polarity]
+    manifest = write_spatial_manifest(
+        fish_dir=output,
+        polarity=resolution,
+        functional_planes=functional_records,
+        anatomy=anatomy_record,
+        sessions=sessions,
+    )
+    validation_path = spatial_manifest_path(output).with_name(CLASSIFIER_VALIDATION_NAME)
+    validation_path.write_text(json.dumps(validation, indent=2), encoding="utf-8")
+    # Rewrite the manifest so it also points to the validation report
+    manifest["polarity"]["classifier"]["group_validation_path"] = str(validation_path)
+    spatial_manifest_path(output).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest
 
 
 def run_canonical_spatial_preprocessing(
@@ -111,7 +273,7 @@ def run_canonical_spatial_preprocessing(
         output_fish_dir (str or Path): New isolated output folder for the same fish ID.
         reference_microscopy_root (str or Path or None): Reference fish used when
             a saved classifier is not supplied.
-        protocol (str): Functional acquisition type, ``resonant`` or ``linear``.
+        protocol (str): Functional acquisition type, `resonant` or `linear`.
         blocks (Sequence[int] or None): Recording blocks to include.
         n_planes (int or None): Number of acquired functional planes.
         n_frames_per_plane (int or None): Frames averaged for each plane and volume.
@@ -126,40 +288,20 @@ def run_canonical_spatial_preprocessing(
 
     Returns:
         dict: Completed spatial manifest describing inputs, outputs, and transforms.
+
+    Raises:
+        ValueError: If the fish is excluded, inputs are missing, or no classifier is given.
+        FileExistsError: If the output folder already contains files.
+        PolarityResolutionError: If the polarity needs a manual review.
     """
     source = Path(source_fish_dir)
     output = Path(output_fish_dir)
-    if source.name.startswith("L427"):
-        raise ValueError("L427 interleaved two-channel fish are excluded from this workflow")
-    if output.name != source.name:
-        raise ValueError("Output fish directory must retain the source fish ID")
-    if output.exists() and any(output.iterdir()):
-        raise FileExistsError(f"Isolated output fish directory is not empty: {output}")
+    _check_fish_folders(source, output)
 
-    if classifier_model_path is not None:
-        model = load_model(classifier_model_path)
-        validation = (
-            json.loads(Path(classifier_validation_path).read_text(encoding="utf-8"))
-            if classifier_validation_path is not None
-            else []
-        )
-    else:
-        if reference_microscopy_root is None:
-            raise ValueError("reference_microscopy_root or classifier_model_path is required")
-        model, validation = train_from_raw_metadata(reference_microscopy_root, exclude_prefixes=("L427",))
-    prediction = predict_fish(model, source)
-    prediction_payload = {
-        **asdict(prediction),
-        "calibration_floor": model.calibration_floor,
-        "reference_fish_count": len(model.reference_fish_ids),
-        "reference_fish_ids": list(model.reference_fish_ids),
-        "group_held_out_correct": sum(bool(row["correct"]) for row in validation),
-        "group_held_out_count": len(validation),
-    }
-    if classifier_model_path is not None:
-        model_path = Path(classifier_model_path)
-        prediction_payload["model_path"] = str(model_path)
-        prediction_payload["model_sha256"] = hashlib.sha256(model_path.read_bytes()).hexdigest()
+    # 1. Polarity: raw metadata first, classifier as cross-check (or fallback)
+    prediction_payload, validation = _classifier_prediction(
+        source, classifier_model_path, classifier_validation_path, reference_microscopy_root,
+    )
     resolution = resolve_polarity(
         source,
         classifier_prediction=prediction_payload,
@@ -167,16 +309,9 @@ def run_canonical_spatial_preprocessing(
     )
 
     anatomy_source = discover_anatomy(source)
-    xy_spacing = anatomy_xy_spacing_um or _metadata_float(
-        source,
-        ("pixel_size_um_anatomy", "pixel_size_anatomy_um", "anatomy_pixel_size_um"),
-    )
-    z_spacing = anatomy_z_spacing_um or _metadata_float(source, ("step_size_um_anatomy",))
-    if xy_spacing is None or z_spacing is None:
-        raise ValueError(
-            "Anatomy X/Y and Z spacing are required; provide explicit spacing when raw metadata lacks it"
-        )
+    xy_spacing, z_spacing = _anatomy_spacing(source, anatomy_xy_spacing_um, anatomy_z_spacing_um)
 
+    # 2. Functional plane recordings, flipped into the shared orientation
     preprocess_functional_fish(
         source.name,
         source.parent,
@@ -192,10 +327,8 @@ def run_canonical_spatial_preprocessing(
         polarity_source=resolution.source,
     )
 
-    anatomy_output = (
-        output / "02_reg" / "00_preprocessing" / "2p_anatomy" /
-        f"{source.name}_anatomy_2P_GCaMP.nrrd"
-    )
+    # 3. Anatomy prepared for registration
+    anatomy_output = output / ANATOMY_OUTPUT_SUBFOLDER / f"{source.name}_anatomy_2P_GCaMP.nrrd"
     anatomy_record = preprocess_anatomy(
         anatomy_path=anatomy_source,
         output_path=anatomy_output,
@@ -204,32 +337,8 @@ def run_canonical_spatial_preprocessing(
         target_xy_shape=target_xy_shape,
     )
 
-    functional_records = _functional_plane_records(output)
-    metadata_path = (
-        output / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes" /
-        f"{source.name}_preprocessing_metadata.json"
-    )
-    functional_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    sessions = functional_metadata.get("sessions", [])
-    selected_sources = [
-        str(path)
-        for session in sessions
-        for path in session.get("selected_tiffs", [])
-    ]
-    for record in functional_records:
-        record["source_paths"] = selected_sources
-        record["xy_transform"] = "flipY" if resolution.polarity == "north" else "flipX"
-    manifest = write_spatial_manifest(
-        fish_dir=output,
-        polarity=resolution,
-        functional_planes=functional_records,
-        anatomy=anatomy_record,
-        sessions=sessions,
-    )
-    validation_path = spatial_manifest_path(output).with_name("anatomy_polarity_group_validation.json")
-    validation_path.write_text(json.dumps(validation, indent=2), encoding="utf-8")
-    manifest["polarity"]["classifier"]["group_validation_path"] = str(validation_path)
-    spatial_manifest_path(output).write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    # 4. Spatial manifest
+    manifest = _write_canonical_manifest(output, source.name, resolution, anatomy_record, validation)
     return manifest
 
 
