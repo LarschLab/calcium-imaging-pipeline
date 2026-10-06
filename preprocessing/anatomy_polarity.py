@@ -1,6 +1,6 @@
 """Anatomy-based polarity inference trained only from raw fish metadata."""
 
-# TODO: discuss with Danin whether to keep the polarity classifier in this repo
+# TODO: Danin is checking whether to keep the polarity classifier in this repo
 # (this module, tools/train_anatomy_polarity_model.py, and the classifier
 # inputs of spatial_preprocessing.resolve_polarity) or delete it as redundant.
 # No trained model is in the repo; only the canonical workflow uses it, and

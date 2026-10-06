@@ -376,11 +376,9 @@ def signed_integer_to_uint8(array):
     return output, conversion_record
 
 
-# TODO: multi-channel anatomy. Every page is read as one Z slice, so a stack
-# saved with several ScanImage channels (interleaved pages, e.g. L427) becomes
-# a wrong, double-depth stack. Decide with Danin: keep one channel here (from
-# SI.hChannels.channelSave, as the registration notebook does) or keep
-# excluding such fish.
+# Single-channel anatomy is assumed: every page is read as one Z slice. A stack
+# saved with several ScanImage channels (interleaved pages, e.g. L427) would
+# become a wrong, double-depth stack; the registration notebook checks for this.
 def read_anatomy_pages(path):
     """Read TIFF pages in file order and verify that they form one 3-D stack.
 
@@ -509,7 +507,7 @@ def preprocess_anatomy(
     return anatomy_record
 
 
-# TODO: rediscuss with Danin the spatial manifest names, to align them with the
+# TODO: for Danin to check -- the spatial manifest names, to align them with the
 # renamed workflow (canonical_preprocessing.py, preprocess_canonical_fish):
 # - stored on disk: the file name `spatial_preprocessing_manifest.json` and
 #   `"stage": "canonical_spatial_preprocessing"` inside it;
