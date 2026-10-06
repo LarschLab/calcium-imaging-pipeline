@@ -17,7 +17,7 @@ Dharmaperwira (2026). Was `preprocessing_tiff.py`.
 
 # TODO: remove the linear protocol and the volume flyback removal (no longer
 # used; keep them only in the repo history), once checked:
-# - with Danin: canonical_spatial_preprocessing passes `protocol` and
+# - with Danin: canonical_preprocessing passes `protocol` and
 #   `volume_flyback_frames` through, and its terminal command defaults to
 #   1 flyback frame (our recordings have 0) -- do his fish have one?
 # - whether `'mode': 'linear'` in visual_stimulation/dots_continous_session.py

@@ -20,7 +20,7 @@ For each fish:
 - Run it from the terminal or fill in the settings at the bottom (see `--help`).
 
 Written by Danin Dharmaperwira (2026); the terminal entry point was merged
-in from `canonical_spatial_preprocessing_cli.py`.
+in from `canonical_spatial_preprocessing_cli.py`. Was `canonical_spatial_preprocessing.py`.
 """
 
 import argparse
@@ -244,7 +244,7 @@ def _write_canonical_manifest(output, fish_id, resolution, anatomy_record, valid
     return manifest
 
 
-def run_canonical_spatial_preprocessing(
+def preprocess_canonical_fish(
     *,
     source_fish_dir,
     output_fish_dir,
@@ -342,7 +342,7 @@ def run_canonical_spatial_preprocessing(
     return manifest
 
 
-def batch_canonical_spatial_preprocessing(data_root, fish_ids, output_root, *, classifier_model_path=None,
+def batch_canonical_preprocessing(data_root, fish_ids, output_root, *, classifier_model_path=None,
                                           reference_microscopy_root=None, reviewed_polarity=None,
                                           anatomy_xy_spacing_um=None, anatomy_z_spacing_um=None, **settings):
     """Run the canonical preprocessing on several fish, skipping fish that fail.
@@ -362,7 +362,7 @@ def batch_canonical_spatial_preprocessing(data_root, fish_ids, output_root, *, c
         reviewed_polarity (str or None): Manually reviewed north/south; single fish only.
         anatomy_xy_spacing_um (float or None): Anatomy pixel size override; single fish only.
         anatomy_z_spacing_um (float or None): Anatomy Z-step override; single fish only.
-        **settings: Other keyword settings of `run_canonical_spatial_preprocessing`
+        **settings: Other keyword settings of `preprocess_canonical_fish`
             (protocol, blocks, n_planes, ...).
 
     Returns:
@@ -381,7 +381,7 @@ def batch_canonical_spatial_preprocessing(data_root, fish_ids, output_root, *, c
     for fish_id in fish_ids:
         print(f"\n📂 Canonical preprocessing of {fish_id}")
         try:
-            manifest = run_canonical_spatial_preprocessing(
+            manifest = preprocess_canonical_fish(
                 source_fish_dir=Path(data_root) / fish_id,
                 output_fish_dir=Path(output_root) / fish_id,
                 reference_microscopy_root=reference_microscopy_root,
@@ -399,7 +399,7 @@ def batch_canonical_spatial_preprocessing(data_root, fish_ids, output_root, *, c
     return manifests
 
 
-__all__ = ["batch_canonical_spatial_preprocessing", "run_canonical_spatial_preprocessing"]
+__all__ = ["batch_canonical_preprocessing", "preprocess_canonical_fish"]
 
 
 if __name__ == "__main__":
@@ -450,7 +450,7 @@ if __name__ == "__main__":
     parser.add_argument("--anatomy-z-spacing-um", type=float, default=ANATOMY_Z_SPACING_UM, help="anatomy Z-step, if missing from the metadata (one fish only)")
     args = parser.parse_args()
 
-    batch_canonical_spatial_preprocessing(
+    batch_canonical_preprocessing(
         args.data_root,
         args.fish,
         args.output_root,

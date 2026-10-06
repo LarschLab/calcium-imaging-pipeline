@@ -510,6 +510,13 @@ def preprocess_anatomy(
     return anatomy_record
 
 
+# TODO: rediscuss with Danin the spatial manifest names, to align them with the
+# renamed workflow (canonical_preprocessing.py, preprocess_canonical_fish):
+# - stored on disk: the file name `spatial_preprocessing_manifest.json` and
+#   `"stage": "canonical_spatial_preprocessing"` inside it;
+# - in the code: spatial_manifest_path, write_spatial_manifest,
+#   validate_spatial_manifest, add_suite2p_record_to_manifest.
+# Renaming the stored ones needs a migration: existing manifests would fail validation.
 def spatial_manifest_path(fish_dir):
     """Return the standard spatial-manifest path for one fish.
 
