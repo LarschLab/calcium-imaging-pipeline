@@ -32,12 +32,12 @@ for manual review. Train and validate the compact model once with
 
 ### Choosing whether to standardize functional X/Y orientation
 
-The lower-level `preprocessing_tiff.py` workflow preserves the microscope's
+The lower-level `functional_preprocessing.py` workflow preserves the microscope's
 original X/Y orientation by default. In that mode it does not interpret or
 save fish polarity:
 
 ```python
-from preprocessing.preprocessing_tiff import process_fish
+from preprocessing.functional_preprocessing import process_fish
 
 process_fish(
     "L000_f00",

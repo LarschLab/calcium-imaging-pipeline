@@ -45,7 +45,7 @@ from preprocessing.spatial_preprocessing import (
 from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
 from registration.plane_matching import scale_image
 
-# Where preprocessing_tiff.process_fish writes its metadata, relative to the fish folder.
+# Where functional_preprocessing.process_fish writes its metadata, relative to the fish folder.
 PREPROCESSING_METADATA_DIR = "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
 
 
@@ -79,7 +79,7 @@ def read_functional_xy_frame(fish_dir):
 
     Checks, in order: the canonical spatial-preprocessing manifest (it only
     exists when the functional movies were flipped into the canonical XY
-    frame), then `preprocessing_tiff`'s metadata (`output_xy_frame`). Fish
+    frame), then `functional_preprocessing`'s metadata (`output_xy_frame`). Fish
     preprocessed before either record existed have neither and were never
     flipped, so they're reported in the acquisition frame.
 

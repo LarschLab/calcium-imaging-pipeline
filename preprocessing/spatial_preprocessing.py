@@ -5,7 +5,7 @@ Raw TIFFs are never modified. Covers:
    anatomy classifier) -- `resolve_polarity`.
 2. Canonical X/Y flip by polarity, so every fish shares one orientation
    (codeANTs convention). Applied to the anatomy, and to the functional
-   movies only when `preprocessing_tiff` runs with
+   movies only when `functional_preprocessing` runs with
    `apply_polarity_orientation=True`.
 3. Anatomy preprocessing for reference registration (anatomy only): 8-bit
    conversion, X/Y flip, Z reversal, 750x750 resize, NRRD -- `preprocess_anatomy`.

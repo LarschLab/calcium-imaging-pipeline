@@ -21,7 +21,7 @@ reviewing code in this repository.
   it's the only provenance record for how an array was produced.
 - **Memory hygiene**: stacks are multi-GB; `del` big arrays and
   `gc.collect()` once no longer needed (see `process_fish` in
-  `preprocessing/preprocessing_tiff.py`).
+  `preprocessing/functional_preprocessing.py`).
 - **Never delete files on a network path.** Several lab data roots are
   network-mounted drives with no backup. Don't write code that deletes or
   overwrites files there, even in an apparently-disposable subfolder —

@@ -31,7 +31,7 @@ from preprocessing.drift_analysis import (
     block_window_labels,
     run_drift_analysis,
 )
-from preprocessing.preprocessing_tiff import process_fish
+from preprocessing.functional_preprocessing import process_fish
 from registration.plane_matching import refine_peak_depth
 
 

@@ -12,7 +12,7 @@ from typing import Any, Sequence
 import tifffile
 
 from preprocessing.anatomy_polarity import discover_anatomy, load_model, predict_fish, train_from_raw_metadata
-from preprocessing.preprocessing_tiff import process_fish
+from preprocessing.functional_preprocessing import process_fish
 from preprocessing.spatial_preprocessing import (
     spatial_manifest_path,
     preprocess_anatomy,
