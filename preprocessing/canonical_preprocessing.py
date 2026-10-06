@@ -253,7 +253,7 @@ def preprocess_canonical_fish(
     blocks,
     n_planes,
     n_frames_per_plane,
-    volume_flyback_frames=1,
+    volume_flyback_frames=0,
     remove_first_frame=False,
     reviewed_polarity=None,
     anatomy_xy_spacing_um=None,
@@ -416,9 +416,10 @@ if __name__ == "__main__":
     BLOCKS = None  # blocks to process; None = all blocks
     N_PLANES = 5
     N_FRAMES_PER_PLANE = 3
-    # TODO: ask Danin -- default 1 flyback frame, but Matilde's recordings have 0;
-    # with 1, every (n_planes * n_frames_per_plane + 1)-th frame is dropped by mistake.
-    VOLUME_FLYBACK_FRAMES = 1
+    # TODO: Danin to check -- default changed from 1 to 0 flyback frames (Matilde's
+    # recordings have 0; with 1, a real frame per volume is dropped). Ideally the value
+    # should be read from the metadata (CSV, or better the ScanImage header).
+    VOLUME_FLYBACK_FRAMES = 0
     REMOVE_FIRST_FRAME = False
     TARGET_XY = 750  # anatomy output height and width (pixels)
 

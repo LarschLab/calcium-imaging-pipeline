@@ -17,9 +17,8 @@ Dharmaperwira (2026). Was `preprocessing_tiff.py`.
 
 # TODO: remove the linear protocol and the volume flyback removal (no longer
 # used; keep them only in the repo history), once checked:
-# - with Danin: canonical_preprocessing passes `protocol` and
-#   `volume_flyback_frames` through, and its terminal command defaults to
-#   1 flyback frame (our recordings have 0) -- do his fish have one?
+# - for Danin: the flyback default is 0, as in the main pipeline; Danin's
+#   pipeline used 1, so he might need to check it.
 # - whether `'mode': 'linear'` in visual_stimulation/dots_continous_session.py
 #   is still used for acquisition.
 
@@ -215,7 +214,7 @@ def select_functional_tiffs(fish_id, input_base, blocks=None):
     return selected_tiffs
 
 
-def concatenate_blocks(tiff_files, protocol, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=1, remove_first_frame=False):
+def concatenate_blocks(tiff_files, protocol, n_planes=None, n_frames_per_plane=None, volume_flyback_frames=0, remove_first_frame=False):
     """Load and join the selected blocks. For the resonant protocol, also remove flyback and reshape.
 
     Args:
@@ -353,7 +352,7 @@ def preprocess_functional_fish(
     blocks=None,
     n_planes=None,
     n_frames_per_plane=None,
-    volume_flyback_frames=1,
+    volume_flyback_frames=0,
     remove_first_frame=False,
     *,
     apply_polarity_orientation=False,
@@ -453,7 +452,7 @@ def parallel_preprocess(
     blocks=None,
     n_planes=None,
     n_frames_per_plane=None,
-    volume_flyback_frames=1,
+    volume_flyback_frames=0,
     remove_first_frame=False,
     *,
     apply_polarity_orientation=False,
