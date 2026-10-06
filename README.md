@@ -16,9 +16,10 @@ transforms, evidence, paths, shapes, dtypes, and spacing. `L427` is rejected.
 Run into a new, empty fish directory while the migration is being validated:
 
 ```bash
-python -m preprocessing.canonical_spatial_preprocessing_cli \
-  --source-fish-dir /data/Matilde/Microscopy/L000_f00 \
-  --output-fish-dir /validation/L000_f00 \
+python -m preprocessing.canonical_preprocessing \
+  --data-root /data/Matilde/Microscopy \
+  --fish L000_f00 \
+  --output-root /validation \
   --reference-microscopy-root /data/Matilde/Microscopy \
   --protocol resonant --blocks 1 2 3 --n-planes 5 --n-frames-per-plane 3
 ```
@@ -32,14 +33,14 @@ for manual review. Train and validate the compact model once with
 
 ### Choosing whether to standardize functional X/Y orientation
 
-The lower-level `preprocessing_tiff.py` workflow preserves the microscope's
+The lower-level `functional_preprocessing.py` workflow preserves the microscope's
 original X/Y orientation by default. In that mode it does not interpret or
 save fish polarity:
 
 ```python
-from preprocessing.preprocessing_tiff import process_fish
+from preprocessing.functional_preprocessing import preprocess_functional_fish
 
-process_fish(
+preprocess_functional_fish(
     "L000_f00",
     input_base="/data/Matilde/Microscopy",
     output_base="/data/Matilde/Microscopy",
@@ -56,7 +57,7 @@ codeANTs X/Y orientation. This enables both use of the resolved polarity and
 the corresponding image flip; the two actions cannot be enabled separately:
 
 ```python
-process_fish(
+preprocess_functional_fish(
     "L000_f00",
     input_base="/data/Matilde/Microscopy",
     output_base="/validation",
@@ -88,16 +89,15 @@ Run the standalone drift analysis retroactively against existing preprocessed,
 motion-corrected movies:
 
 ```bash
-python -m preprocessing.drift_analysis_cli \
-  --fish-dir /path/to/Microscopy/L000_f00 \
-  --output-dir /path/to/validation-output \
+python -m preprocessing.drift_analysis \
+  --data-root /path/to/Microscopy \
+  --fish L000_f00 \
   --workers 8
 ```
 
 Python workflows can call `preprocessing.drift_analysis.run_drift_analysis`
-directly. The older `functional_anatomy_qc` module and CLI remain as
-backward-compatible aliases. The Suite2P workflow below calls the same drift
-module automatically after motion correction.
+directly. The Suite2P workflow below calls the same drift module
+automatically after motion correction.
 
 Retroactive runs deliberately require the canonical spatial manifest and its
 declared `*_mcorrected.tif` movies. Older folders without that manifest, or
@@ -105,23 +105,25 @@ with manually transformed names such as `*_mcorrected_flipX.tif`, are rejected
 rather than having their orientation guessed. Validate or migrate those inputs
 into an explicitly declared coordinate frame before running this command.
 
-Run the opt-in split Suite2P workflow:
+Run the Suite2P step (settings filled in at the bottom of the file, or as options):
 
 ```bash
-python -m preprocessing.ncc_gated_suite2p_cli \
-  --fish-dir /path/to/Microscopy/L000_f00 \
+python -m preprocessing.motion_segmentation_suite2p \
+  --data-root /path/to/Microscopy \
+  --fish L000_f00 \
   --ops-path /path/to/suite2p_ops.npy \
   --fps 2 \
   --planes 0 1 2 3 4 \
-  --gate-mode report_only \
-  --ncc-python /path/to/scientific/python \
-  --ncc-workers 5
+  --drift-check report_only \
+  --drift-python /path/to/scientific/python \
+  --drift-workers 5
 ```
 
-`report_only` always resumes segmentation and is intended for validation.
-`enforce` preserves registration outputs but stops before segmentation unless
-the NCC result is `pass_candidate`. Both Suite2P paths reject plane TIFFs that
-are not declared canonical by the shared spatial manifest.
+Without `--drift-check`, Suite2P runs once per plane. `report_only` checks Z
+drift and always continues to segmentation; `enforce` keeps the registration
+but stops before segmentation unless the result is `pass_candidate`. The drift
+check needs a fish from the canonical workflow; fish preprocessed as recorded
+run without it. `--help` lists all options.
 
 The version-4 NCC bundle also saves one pooled post-Block-0 reference per
 plane, the authoritative scale/best-Z/XY placement table, complete pooled and

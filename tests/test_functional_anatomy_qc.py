@@ -13,14 +13,13 @@ import pandas as pd
 import tifffile
 import SimpleITK as sitk
 
-import preprocessing.drift_analysis as drift_analysis
-import preprocessing.functional_anatomy_qc as compatibility_qc
 from preprocessing.spatial_preprocessing import (
     PolarityResolution,
+    anatomy_z_spacing_um,
     apply_canonical_xy,
-    canonical_manifest_path,
+    spatial_manifest_path,
     preprocess_anatomy,
-    record_motion_corrected_output,
+    add_suite2p_record_to_manifest,
     resolve_polarity,
     signed_integer_to_uint8,
     write_spatial_manifest,
@@ -28,24 +27,42 @@ from preprocessing.spatial_preprocessing import (
 
 from preprocessing.drift_analysis import (
     FunctionalAnatomyQCConfig,
-    anatomy_z_spacing_um,
-    block_third_bounds,
-    block_third_labels,
-    quadratic_peak_z,
-    read_raw_anatomy,
+    block_window_bounds,
+    block_window_labels,
     run_drift_analysis,
 )
-from preprocessing.preprocessing_tiff import process_fish
+from preprocessing.functional_preprocessing import preprocess_functional_fish
+from registration.plane_matching import refine_peak_depth
 
 
-def _spot(shape: tuple[int, int], y: int, x: int) -> np.ndarray:
-    """Create a small synthetic bright spot for anatomy test images."""
+def _spot(shape, y, x):
+    """Create a small synthetic bright spot for anatomy test images.
+
+    Args:
+        shape (tuple[int, int]): Height and width of the output array.
+        y (int): Row coordinate of the spot center.
+        x (int): Column coordinate of the spot center.
+
+    Returns:
+        numpy.ndarray: Float32 array of `shape` containing a Gaussian-shaped
+        bright spot centered at `(y, x)`.
+    """
     yy, xx = np.indices(shape)
     return np.exp(-((yy - y) ** 2 + (xx - x) ** 2) / 5.0).astype(np.float32)
 
 
-def _make_fish(root: Path, *, drifting: bool = False) -> Path:
-    """Create a minimal synthetic fish with either stable or drifting planes."""
+def _make_fish(root, *, drifting=False):
+    """Create a minimal synthetic fish with either stable or drifting planes.
+
+    Args:
+        root (Path): Directory under which the synthetic fish tree is built.
+        drifting (bool): Whether the synthetic functional planes should
+            simulate coherent z-drift across temporal blocks. Defaults to
+            False, producing stable planes.
+
+    Returns:
+        Path: Path to the created fish directory (`root / "L000_f00"`).
+    """
     fish = root / "L000_f00"
     anatomy_dir = fish / "01_raw" / "2p" / "anatomy"
     metadata_dir = fish / "01_raw" / "2p" / "metadata"
@@ -102,7 +119,7 @@ def _make_fish(root: Path, *, drifting: bool = False) -> Path:
         sessions=metadata["sessions"],
     )
     for plane_index in (0, 1):
-        record_motion_corrected_output(
+        add_suite2p_record_to_manifest(
             fish,
             plane_index=plane_index,
             output_path=movie_dir / f"L000_f00_plane{plane_index}_mcorrected.tif",
@@ -112,21 +129,13 @@ def _make_fish(root: Path, *, drifting: bool = False) -> Path:
 
 
 class FunctionalAnatomyQCTests(unittest.TestCase):
-    def test_historical_qc_module_preserves_direct_helper_imports(self) -> None:
-        """The renamed module must not break existing notebook imports."""
-        for name in (
-            "norm01",
-            "corrcoef_img",
-            "load_preprocessing_sessions",
-            "build_window_references",
-            "search_scale",
-            "summarize_sessions",
-            "run_functional_anatomy_qc",
-        ):
-            self.assertIs(getattr(compatibility_qc, name), getattr(drift_analysis, name))
+    def test_functional_xy_orientation_is_one_opt_in_step(self):
+        """The one flag must control both polarity use and X/Y reorientation.
 
-    def test_functional_xy_orientation_is_one_opt_in_step(self) -> None:
-        """The one flag must control both polarity use and X/Y reorientation."""
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source_base = root / "source"
@@ -136,7 +145,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             tifffile.imwrite(raw_dir / "L000_f00_00001.tif", raw, photometric="minisblack")
 
             unchanged_base = root / "unchanged"
-            process_fish(
+            preprocess_functional_fish(
                 "L000_f00", source_base, unchanged_base, protocol="linear",
                 apply_polarity_orientation=False, polarity="south",
                 polarity_source="ignored test value",
@@ -152,7 +161,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(unchanged_metadata["output_xy_frame"], "two_photon_acquisition_xy")
 
             oriented_base = root / "oriented"
-            process_fish(
+            preprocess_functional_fish(
                 "L000_f00", source_base, oriented_base, protocol="linear",
                 apply_polarity_orientation=True, polarity="south",
                 polarity_source="test",
@@ -171,19 +180,57 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(oriented_metadata["output_xy_frame"], "codeants_2p_canonical_xy_v1")
 
             with self.assertRaisesRegex(ValueError, "requires a resolved north/south polarity"):
-                process_fish(
+                preprocess_functional_fish(
                     "L000_f00", source_base, root / "invalid", protocol="linear",
                     apply_polarity_orientation=True,
                 )
 
-    def test_direct_orientation_transforms(self) -> None:
-        """North and south polarity must apply their documented direct flips."""
+    def test_rerunning_a_fish_never_overwrites_its_outputs(self):
+        """A fish with existing plane TIFFs must be skipped, leaving them untouched.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            raw_dir = root / "L000_f00" / "01_raw" / "2p" / "functional"
+            raw_dir.mkdir(parents=True)
+            raw_file = raw_dir / "L000_f00_00001.tif"
+            tifffile.imwrite(raw_file, np.arange(4 * 8 * 8, dtype=np.uint16).reshape(4, 8, 8), photometric="minisblack")
+            run_settings = {"protocol": "resonant", "n_planes": 2, "n_frames_per_plane": 1, "volume_flyback_frames": 0}
+            preprocess_functional_fish("L000_f00", root, root, **run_settings)
+            output_dir = root / "L000_f00" / "02_reg" / "00_preprocessing" / "2p_functional" / "01_individualPlanes"
+            first_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+
+            # Different raw data on the second run: outputs must still be the first run's.
+            tifffile.imwrite(raw_file, np.zeros((4, 8, 8), dtype=np.uint16), photometric="minisblack")
+            preprocess_functional_fish("L000_f00", root, root, **run_settings)
+            second_outputs = {path.name: path.read_bytes() for path in output_dir.iterdir()}
+            self.assertEqual(
+                sorted(first_outputs),
+                ["L000_f00_plane0.tif", "L000_f00_plane1.tif", "L000_f00_preprocessing_metadata.json"],
+            )
+            self.assertEqual(second_outputs, first_outputs)
+
+    def test_direct_orientation_transforms(self):
+        """North and south polarity must apply their documented direct flips.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         array = np.asarray([[1, 2], [3, 4]])
         np.testing.assert_array_equal(apply_canonical_xy(array, "north"), [[3, 4], [1, 2]])
         np.testing.assert_array_equal(apply_canonical_xy(array, "south"), [[2, 1], [4, 3]])
 
-    def test_missing_metadata_uses_accepted_classifier_but_conflict_stops(self) -> None:
-        """Classifier output may fill missing metadata but may not override it."""
+    def test_missing_metadata_uses_accepted_classifier_but_conflict_stops(self):
+        """Classifier output may fill missing metadata but may not override it.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             fish = Path(temporary) / "L000_f00"
             fish.mkdir()
@@ -202,8 +249,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                     classifier_prediction={"polarity": "south", "status": "predicted", "model_name": "test"},
                 )
 
-    def test_anatomy_preprocess_applies_xy_then_z_once(self) -> None:
-        """Anatomy preparation must apply each requested axis change exactly once."""
+    def test_anatomy_preprocess_applies_xy_then_z_once(self):
+        """Anatomy preparation must apply each requested axis change exactly once.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             raw = np.arange(2 * 3 * 4, dtype=np.int16).reshape(2, 3, 4) - 3
@@ -224,10 +276,15 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             np.testing.assert_array_equal(observed, expected)
             self.assertEqual(record["xy_transform"], "flipY")
             self.assertEqual(record["z_transform"], "flipZ")
-    def test_blocks_are_split_into_thirds_and_block_zero_is_named_explicitly(self) -> None:
-        """Temporal windows must have complete and understandable block labels."""
+    def test_blocks_are_split_into_thirds_and_block_zero_is_named_explicitly(self):
+        """Temporal windows must have complete and understandable block labels.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         self.assertEqual(
-            block_third_bounds(30, 3),
+            block_window_bounds(30, 3),
             (
                 (0, 3),
                 (3, 6),
@@ -241,7 +298,7 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            block_third_labels(2),
+            block_window_labels(2),
             (
                 "Block 0\nfirst third",
                 "Block 0\nmiddle third",
@@ -252,24 +309,22 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             ),
         )
 
-    def test_quadratic_peak_reports_subslice_location(self) -> None:
-        """A smooth peak estimate should report positions between integer slices."""
-        self.assertTrue(np.isclose(quadratic_peak_z(np.asarray([0.0, 0.5, 1.0, 0.75, 0.0])), 2.1666666667))
+    def test_quadratic_peak_reports_subslice_location(self):
+        """A smooth peak estimate should report positions between integer slices.
 
-    def test_raw_anatomy_preserves_page_order_and_signed_dtype(self) -> None:
-        """Raw anatomy reading must not reorder pages or discard signed values."""
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            stack = (np.arange(5 * 8 * 9).reshape(5, 8, 9) - 100).astype(np.int16)
-            path = root / "fish_anatomy_00001.tif"
-            tifffile.imwrite(path, stack, photometric="minisblack")
-            loaded = read_raw_anatomy(path)
-            self.assertEqual(loaded.data_zyx.shape, stack.shape)
-            self.assertEqual(loaded.source_dtype, "int16")
-            np.testing.assert_array_equal(loaded.data_zyx, stack)
+        Returns:
+            None: The test passes if the assertion holds; otherwise it
+            raises an assertion error.
+        """
+        self.assertTrue(np.isclose(refine_peak_depth(np.asarray([0.0, 0.5, 1.0, 0.75, 0.0])), 2.1666666667))
 
-    def test_anatomy_spacing_comes_from_metadata_and_must_agree(self) -> None:
-        """Conflicting anatomy slice spacing must stop instead of being guessed."""
+    def test_anatomy_spacing_comes_from_metadata_and_must_agree(self):
+        """Conflicting anatomy slice spacing must stop instead of being guessed.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name in ("first_metadata.csv", "second_metadata.csv"):
@@ -279,8 +334,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
             self.assertEqual(spacing, 2.0)
             self.assertEqual(len(sources), 2)
 
-    def test_end_to_end_qc_shows_block_zero_but_excludes_it_from_gate(self) -> None:
-        """Initial settling data should be plotted but excluded from drift decisions."""
+    def test_end_to_end_qc_shows_block_zero_but_excludes_it_from_gate(self):
+        """Initial settling data should be plotted but excluded from drift decisions.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fish = _make_fish(root)
@@ -333,8 +393,13 @@ class FunctionalAnatomyQCTests(unittest.TestCase):
                 "tracked_local_xy_with_global_fallback",
             )
 
-    def test_end_to_end_qc_fails_coherent_post_block_zero_drift(self) -> None:
-        """Consistent movement across planes after settling should fail the gate."""
+    def test_end_to_end_qc_fails_coherent_post_block_zero_drift(self):
+        """Consistent movement across planes after settling should fail the gate.
+
+        Returns:
+            None: The test passes if all assertions hold; otherwise it
+            raises an assertion error.
+        """
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             fish = _make_fish(root, drifting=True)
