@@ -11,7 +11,9 @@ stimuli are drawn live by PsychoPy instead of read from CSV files (no stimulus f
   Every block starts with a pulse on the acquisition pin (starts one 2P acquisition).
 - Inside each stimulus block every condition (one per grating direction and per loom duration)
   appears the same number of times in random order, so all stimulus blocks last the same time.
-- The aux pin is high while a stimulus is on screen.
+- One loom trial is a train of looms_per_trial looms (expand, hold at full size, blank gap),
+  counted as one stimulus like a dots CSV file; each loom onset is also logged.
+- The aux pin is high while a stimulus (a whole grating or a whole loom train) is on screen.
 - Saves experiment log, block log, trial sequence, stimuli table and metadata CSVs into
   01_raw/2p/metadata.
 
@@ -104,18 +106,23 @@ def default_stimuli_params():
         "n_pre_stim_blocks": 1,              # Blank-screen (spontaneous activity) blocks before the stimuli
         "pre_stim_resting_sec": 813.666667,  # Duration of each blank block (ignored if matched below)
         "match_pre_stim_to_block": True,     # Blank blocks last exactly as long as a stimulus block
-        "pre_stim_pause_sec": 12.5,          # Pause before stimulus
-        "post_stim_pause_sec": 12.5,         # Pause after stimulus
         "inter_block_pause_sec": 20.0,       # Pause between acquisition blocks
         "n_trials_per_block": 6,             # Trials per block (multiple of the number of conditions)
         "n_rep_stim": 6,                     # Repetitions per condition over the whole experiment
-        "grating_directions_deg": "0,180",   # One grating condition per direction (empty = no gratings)
+        "grating_directions_deg": "45,225",  # One condition per direction; 45/225 move along the fish axis (empty = no gratings)
         "grating_sec": 30.0,
         "stripe_cm": 0.5,                    # Width of one stripe (a full cycle is two stripes)
         "grating_speed_cm_s": 1.0,
-        "loom_durations_sec": "3",           # One loom condition per duration (empty = no looms)
-        "loom_start_radius_cm": 0.5,
-        "loom_end_radius_cm": 3.5
+        "grating_pre_stim_pause_sec": 12.5,  # Blank before each grating trial
+        "grating_post_stim_pause_sec": 12.5, # Blank after each grating trial
+        "loom_durations_sec": "3",           # Expansion time of one loom; one condition per value (empty = no looms)
+        "loom_start_radius_cm": 0.1,
+        "loom_end_radius_cm": 16.0,          # 16 cm (as stim1_loom_6times_isolated.csv) covers the whole screen
+        "loom_hold_sec": 1.0,                # Disc stays at full size after expanding
+        "looms_per_trial": 6,                # Looms in one loom trial (a train counted as one stimulus)
+        "loom_gap_sec": 1.0,                 # Blank between looms of the same train
+        "loom_pre_stim_pause_sec": 10.0,     # Blank before each loom train
+        "loom_post_stim_pause_sec": 21.0     # Blank after each loom train
     }
     return stimuli_params
 
@@ -236,28 +243,65 @@ def build_grating_conditions(stimuli_params, flip_coordinates):
             "screen_direction_deg": (direction_deg + direction_offset_deg) % 360,
             "stripe_cm": float(stimuli_params["stripe_cm"]),
             "speed_cm_s": float(stimuli_params["grating_speed_cm_s"]),
+            "pre_pause_sec": float(stimuli_params["grating_pre_stim_pause_sec"]),
+            "post_pause_sec": float(stimuli_params["grating_post_stim_pause_sec"]),
         })
     return grating_conditions
 
 
-def build_loom_conditions(stimuli_params):
-    """Create one looming-disc condition per requested loom duration.
+def compute_loom_train_frames(expand_sec, hold_sec, gap_sec, n_looms):
+    """Count the frames of one loom train: each loom expands then holds, with gaps between looms.
 
     Args:
-        stimuli_params (dict): Experiment parameters (loom_* entries).
+        expand_sec (float): Expansion time of one loom.
+        hold_sec (float): Time the disc stays at full size.
+        gap_sec (float): Blank time between two looms of the train.
+        n_looms (int): Looms in the train.
 
     Returns:
-        list of dict: Loom conditions.
+        int: Number of frames from the first loom onset to the end of the last hold.
     """
+    loom_frames = seconds_to_frames(expand_sec) + seconds_to_frames(hold_sec)
+    # gaps only between looms, not after the last one (the post-stimulus pause follows)
+    train_frames = n_looms * loom_frames + (n_looms - 1) * seconds_to_frames(gap_sec)
+    return train_frames
+
+
+def build_loom_conditions(stimuli_params):
+    """Create one loom-train condition per requested loom expansion time.
+
+    Args:
+        stimuli_params (dict): Experiment parameters (loom_* and looms_per_trial entries).
+
+    Returns:
+        list of dict: Loom conditions; ``duration_sec`` and ``n_frames`` cover the whole train.
+
+    Raises:
+        ValueError: If looms are requested with looms_per_trial below 1.
+    """
+    expand_durations_sec = parse_number_list(stimuli_params["loom_durations_sec"])
+    n_looms = int(stimuli_params["looms_per_trial"])
+    if expand_durations_sec and n_looms < 1:
+        raise ValueError(f"looms_per_trial must be at least 1 (got {n_looms}).")
+
+    hold_sec = float(stimuli_params["loom_hold_sec"])
+    gap_sec = float(stimuli_params["loom_gap_sec"])
     loom_conditions = []
-    for loom_sec in parse_number_list(stimuli_params["loom_durations_sec"]):
+    for expand_sec in expand_durations_sec:
+        train_frames = compute_loom_train_frames(expand_sec, hold_sec, gap_sec, n_looms)
         loom_conditions.append({
-            "stimulus": f"loom_{loom_sec:g}s",
+            "stimulus": f"loom_{expand_sec:g}s",
             "type": "loom",
-            "duration_sec": loom_sec,
-            "n_frames": seconds_to_frames(loom_sec),
+            "duration_sec": train_frames / FPS,
+            "n_frames": train_frames,
+            "expand_sec": expand_sec,
+            "hold_sec": hold_sec,
+            "gap_sec": gap_sec,
+            "n_looms": n_looms,
             "start_radius_cm": float(stimuli_params["loom_start_radius_cm"]),
             "end_radius_cm": float(stimuli_params["loom_end_radius_cm"]),
+            "pre_pause_sec": float(stimuli_params["loom_pre_stim_pause_sec"]),
+            "post_pause_sec": float(stimuli_params["loom_post_stim_pause_sec"]),
         })
     return loom_conditions
 
@@ -298,19 +342,30 @@ def build_block_sequence(conditions, n_rep_stim, n_trials_per_block):
     return block_sequence
 
 
-def compute_block_duration_sec(block_trials, stimuli_params):
-    """Compute how long one stimulus block lasts (pre-pause + stimulus + post-pause per trial).
+def compute_trial_frames(condition):
+    """Count the frames of one trial: pre-stimulus pause, stimulus, post-stimulus pause.
+
+    Args:
+        condition (dict): Stimulus condition with pre_pause_sec, n_frames and post_pause_sec.
+
+    Returns:
+        int: Number of frames in the trial.
+    """
+    trial_frames = (seconds_to_frames(condition["pre_pause_sec"]) + condition["n_frames"]
+                    + seconds_to_frames(condition["post_pause_sec"]))
+    return trial_frames
+
+
+def compute_block_duration_sec(block_trials):
+    """Compute how long one stimulus block lasts.
 
     Args:
         block_trials (list of dict): Conditions presented in the block.
-        stimuli_params (dict): Experiment parameters (pause durations).
 
     Returns:
         float: Block duration in seconds, from whole frame counts.
     """
-    pause_frames = (seconds_to_frames(stimuli_params["pre_stim_pause_sec"])
-                    + seconds_to_frames(stimuli_params["post_stim_pause_sec"]))
-    block_frames = sum(pause_frames + condition["n_frames"] for condition in block_trials)
+    block_frames = sum(compute_trial_frames(condition) for condition in block_trials)
     block_duration_sec = block_frames / FPS
     return block_duration_sec
 
@@ -455,32 +510,59 @@ def present_grating(win, grating, condition):
 
 
 def present_loom(win, loom_circle, condition):
-    """Draw a disc whose radius grows linearly from start to end radius.
+    """Draw one loom: the disc radius grows linearly from start to end radius, then holds.
 
     Args:
         win (visual.Window): Stimulus window.
         loom_circle (visual.Circle): Looming disc.
-        condition (dict): Loom condition (start_radius_cm, end_radius_cm, n_frames).
+        condition (dict): Loom condition (start_radius_cm, end_radius_cm, expand_sec, hold_sec).
 
     Returns:
         None
     """
-    n_frames = condition["n_frames"]
-    # cm per frame, chosen so the last frame is drawn exactly at the end radius
-    radius_step = (condition["end_radius_cm"] - condition["start_radius_cm"]) / max(n_frames - 1, 1)
-    for frame in range(n_frames):
+    n_expand_frames = seconds_to_frames(condition["expand_sec"])
+    # cm per frame, chosen so the last expansion frame is drawn exactly at the end radius
+    radius_step = (condition["end_radius_cm"] - condition["start_radius_cm"]) / max(n_expand_frames - 1, 1)
+    for frame in range(n_expand_frames):
         loom_circle.radius = condition["start_radius_cm"] + frame * radius_step
         loom_circle.draw()
         win.flip()
 
+    loom_circle.radius = condition["end_radius_cm"]
+    for _ in range(seconds_to_frames(condition["hold_sec"])):
+        loom_circle.draw()
+        win.flip()
 
-def present_stimulus(win, stimuli, condition):
+
+def present_loom_train(win, loom_circle, condition, logger, trial_idx):
+    """Present the n_looms looms of one loom trial, separated by blank gaps, logging each onset.
+
+    Args:
+        win (visual.Window): Stimulus window.
+        loom_circle (visual.Circle): Looming disc.
+        condition (dict): Loom condition (n_looms, gap_sec and the single-loom entries).
+        logger (ExperimentLogger): Event logger; gets one ``loom{trial_idx}_onset{i}`` event per loom.
+        trial_idx (int): Global trial index, used in the onset event names.
+
+    Returns:
+        None
+    """
+    for loom_idx in range(condition["n_looms"]):
+        if loom_idx > 0:
+            present_blank(win, condition["gap_sec"])
+        logger.log(f"loom{trial_idx}_onset{loom_idx}")
+        present_loom(win, loom_circle, condition)
+
+
+def present_stimulus(win, stimuli, condition, logger, trial_idx):
     """Present one stimulus condition with the drawing function for its type.
 
     Args:
         win (visual.Window): Stimulus window.
         stimuli (dict): Stimuli from ``create_stimuli``.
         condition (dict): Grating or loom condition.
+        logger (ExperimentLogger): Event logger (used for loom onsets).
+        trial_idx (int): Global trial index.
 
     Returns:
         None
@@ -491,7 +573,7 @@ def present_stimulus(win, stimuli, condition):
     if condition["type"] == "grating":
         present_grating(win, stimuli["grating"], condition)
     elif condition["type"] == "loom":
-        present_loom(win, stimuli["loom"], condition)
+        present_loom_train(win, stimuli["loom"], condition, logger, trial_idx)
     else:
         raise ValueError(f"Unknown stimulus type: {condition['type']}")
 
@@ -560,7 +642,7 @@ def begin_block(win, logger, pin_acq, inter_block_pause_sec):
     print(f"Block {logger.block_num} started and trigger sent")
 
 
-def run_trial(win, stimuli, pin_aux, logger, condition, stimuli_params):
+def run_trial(win, stimuli, pin_aux, logger, condition):
     """Run one trial: pre-stimulus pause, stimulus with aux pin high, post-stimulus pause.
 
     Args:
@@ -568,8 +650,7 @@ def run_trial(win, stimuli, pin_aux, logger, condition, stimuli_params):
         stimuli (dict): Stimuli from ``create_stimuli``.
         pin_aux (object): Aux trigger pin.
         logger (ExperimentLogger): Event logger; the trial is added to its trial_sequence.
-        condition (dict): Condition to present.
-        stimuli_params (dict): Experiment parameters (pause durations).
+        condition (dict): Condition to present, incl. its pre_pause_sec and post_pause_sec.
 
     Returns:
         None
@@ -579,16 +660,16 @@ def run_trial(win, stimuli, pin_aux, logger, condition, stimuli_params):
     logger.trial_sequence.append({"block": logger.block_num, "stimulus": stimulus_name})
 
     logger.log(f"prestim{trial_idx}_pause")
-    present_blank(win, stimuli_params["pre_stim_pause_sec"])
+    present_blank(win, condition["pre_pause_sec"])
 
     pin_aux.write(1)
     print(stimulus_name, "started")
     logger.log(f"stim{trial_idx}_{stimulus_name}")
-    present_stimulus(win, stimuli, condition)
+    present_stimulus(win, stimuli, condition, logger, trial_idx)
     pin_aux.write(0)
 
     logger.log(f"poststim{trial_idx}_pause")
-    present_blank(win, stimuli_params["post_stim_pause_sec"])
+    present_blank(win, condition["post_pause_sec"])
 
 
 def run_experiment(win, stimuli, pins, logger, block_sequence, stimuli_params):
@@ -616,7 +697,7 @@ def run_experiment(win, stimuli, pins, logger, block_sequence, stimuli_params):
     for block_trials in block_sequence:
         begin_block(win, logger, pin_acq, inter_block_pause_sec)
         for condition in block_trials:
-            run_trial(win, stimuli, pin_aux, logger, condition, stimuli_params)
+            run_trial(win, stimuli, pin_aux, logger, condition)
 
 
 def save_run_outputs(meta_dir, file_prefix, logger, conditions):
@@ -677,7 +758,7 @@ def collect_parameters():
     conditions = build_grating_conditions(stimuli_params, flip_coordinates) + build_loom_conditions(stimuli_params)
     block_sequence = build_block_sequence(conditions, int(stimuli_params["n_rep_stim"]),
                                           int(stimuli_params["n_trials_per_block"]))
-    stimuli_params["stimulus_block_duration_sec"] = compute_block_duration_sec(block_sequence[0], stimuli_params)
+    stimuli_params["stimulus_block_duration_sec"] = compute_block_duration_sec(block_sequence[0])
     if stimuli_params["match_pre_stim_to_block"]:
         stimuli_params["pre_stim_resting_sec"] = stimuli_params["stimulus_block_duration_sec"]
     return metadata, stimuli_params, functional_params, conditions, block_sequence
