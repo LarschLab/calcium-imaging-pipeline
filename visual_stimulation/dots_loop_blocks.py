@@ -220,7 +220,7 @@ try:
         # Post-stimulus pause
         exp_event_log.append({'event': f'B{block_num}_poststim{idx}_pause', 'timestamp': exp_clock.getTime()})
         block_event_log.append({'event': f'B{block_num}_poststim{idx}_pause', 'timestamp': block_clock.getTime()})
-        for _ in range(int(round(FPS * float(stimuli_params['pre_stim_pause_sec']), 1))):
+        for _ in range(int(round(FPS * float(stimuli_params['post_stim_pause_sec']), 1))):
             win.flip()
 
 except KeyboardInterrupt:
