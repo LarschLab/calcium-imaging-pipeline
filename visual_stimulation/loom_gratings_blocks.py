@@ -11,11 +11,17 @@ stimuli are drawn live by PsychoPy instead of read from CSV files (no stimulus f
   Every block starts with a pulse on the acquisition pin (starts one 2P acquisition).
 - Inside each stimulus block every condition (one per grating direction and per loom duration)
   appears the same number of times in random order, so all stimulus blocks last the same time.
+- A grating trial shows the pattern still for grating_static_sec, then drifts for grating_sec.
 - One loom trial is a train of looms_per_trial looms (expand, hold at full size, blank gap),
   counted as one stimulus like a dots CSV file; each loom onset is also logged.
-- The aux pin is high while a stimulus (a whole grating or a whole loom train) is on screen.
-- Saves experiment log, block log, trial sequence, stimuli table and metadata CSVs into
-  01_raw/2p/metadata.
+- Dimming control (include_dimming_control): for every loom, a matched train of a disc at the
+  loom's position and final size that never grows, only darkens, so the mean screen light equals
+  the loom's on every frame. loom - dimming then isolates expansion from the luminance drop.
+- The aux pin is high while a stimulus (a whole grating or a whole loom/dimming train) is on screen.
+- Events per trial: prestim{i}_pause, stim{i}_<name>, then grating{i}_motion (gratings) or
+  loom{i}_onset{k} / dimming{i}_onset{k} (one per disc of the train), then poststim{i}_pause.
+- Saves experiment log, block log, trial sequence, stimuli table, one luminance profile per
+  loom/dimming condition and metadata CSVs into 01_raw/2p/metadata.
 
 Based on dots_loop_blocks.py and loom_gratings.py (Matilde Perrino).
 Created: 2026-10-07
@@ -26,6 +32,7 @@ import math
 import random
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from psychopy import visual, core, monitors, gui, data
 from pyfirmata import Arduino
@@ -43,16 +50,21 @@ PIXELS_MONITOR = [1280, 800]
 STIM_SCREEN = 1
 DRY_RUN_SCREEN = 0
 FPS = 60
-BACKGROUND_COLOR = "red"
-STIMULUS_COLOR = "black"
+# PsychoPy rgb values run from -1 (off) to 1 (full). The projector only has a red light,
+# so only the red channel matters; green and blue stay off everywhere.
+BACKGROUND_RGB = (1, -1, -1)  # "red"
+OFF_CHANNEL_VALUE = -1        # green and blue of every disc colour
+LOOM_RED_VALUE = -1           # the loom disc is black
 
 # ===== Stimulus drawing =====
-SCREEN_HEIGHT_CM = MONITOR_WIDTH_CM * PIXELS_MONITOR[1] / PIXELS_MONITOR[0]
+PIXEL_SIZE_CM = MONITOR_WIDTH_CM / PIXELS_MONITOR[0]  # square pixels, as PsychoPy's cm units assume
+SCREEN_HEIGHT_CM = PIXELS_MONITOR[1] * PIXEL_SIZE_CM
 # The grating is a square as wide as the screen diagonal, so it covers the screen at any orientation
 GRATING_SIZE_CM = math.hypot(MONITOR_WIDTH_CM, SCREEN_HEIGHT_CM)
 GRATING_TEXTURE = "sin"
 LOOM_POS_CM = (0, 0)
 LOOM_CIRCLE_EDGES = 128  # more edges than PsychoPy's default 32 so the large loom looks round
+DISC_TYPES = ("loom", "dimming")  # condition types drawn as a disc train from a per-frame profile
 FLIPPED_FISH_ORIENTATION = "bottom-left"
 FLIP_DIRECTION_DEG = 180  # grating direction offset for a flipped fish (dots scripts flip x and y)
 
@@ -107,10 +119,11 @@ def default_stimuli_params():
         "pre_stim_resting_sec": 813.666667,  # Duration of each blank block (ignored if matched below)
         "match_pre_stim_to_block": True,     # Blank blocks last exactly as long as a stimulus block
         "inter_block_pause_sec": 20.0,       # Pause between acquisition blocks
-        "n_trials_per_block": 6,             # Trials per block (multiple of the number of conditions)
+        "n_trials_per_block": 4,             # Trials per block (multiple of the number of conditions)
         "n_rep_stim": 6,                     # Repetitions per condition over the whole experiment
         "grating_directions_deg": "45,225",  # One condition per direction; 45/225 move along the fish axis (empty = no gratings)
-        "grating_sec": 30.0,
+        "grating_static_sec": 5.0,           # Pattern shown still before it starts drifting
+        "grating_sec": 30.0,                 # Drift (motion) time after the static period
         "stripe_cm": 0.5,                    # Width of one stripe (a full cycle is two stripes)
         "grating_speed_cm_s": 1.0,
         "grating_pre_stim_pause_sec": 12.5,  # Blank before each grating trial
@@ -122,7 +135,9 @@ def default_stimuli_params():
         "looms_per_trial": 6,                # Looms in one loom trial (a train counted as one stimulus)
         "loom_gap_sec": 1.0,                 # Blank between looms of the same train
         "loom_pre_stim_pause_sec": 10.0,     # Blank before each loom train
-        "loom_post_stim_pause_sec": 21.0     # Blank after each loom train
+        "loom_post_stim_pause_sec": 21.0,    # Blank after each loom train
+        "include_dimming_control": True,     # Add a luminance-matched dimming condition for every loom
+        "projector_gamma": 1.0               # Light ~ pixel value ** gamma; 1 = linear (measure the projector to set it)
     }
     return stimuli_params
 
@@ -232,13 +247,18 @@ def build_grating_conditions(stimuli_params, flip_coordinates):
             ``screen_direction_deg`` is the orientation actually drawn.
     """
     direction_offset_deg = FLIP_DIRECTION_DEG if flip_coordinates else 0
+    static_sec = float(stimuli_params["grating_static_sec"])
+    motion_sec = float(stimuli_params["grating_sec"])
+    grating_frames = seconds_to_frames(static_sec) + seconds_to_frames(motion_sec)
     grating_conditions = []
     for direction_deg in parse_number_list(stimuli_params["grating_directions_deg"]):
         grating_conditions.append({
             "stimulus": f"grating_{direction_deg:g}deg",
             "type": "grating",
-            "duration_sec": float(stimuli_params["grating_sec"]),
-            "n_frames": seconds_to_frames(stimuli_params["grating_sec"]),
+            "duration_sec": grating_frames / FPS,
+            "n_frames": grating_frames,
+            "static_before_sec": static_sec,  # same field names as src/stimulus_analysis.py
+            "motion_sec": motion_sec,
             "direction_deg": direction_deg,
             "screen_direction_deg": (direction_deg + direction_offset_deg) % 360,
             "stripe_cm": float(stimuli_params["stripe_cm"]),
@@ -304,6 +324,167 @@ def build_loom_conditions(stimuli_params):
             "post_pause_sec": float(stimuli_params["loom_post_stim_pause_sec"]),
         })
     return loom_conditions
+
+
+def build_dimming_conditions(loom_conditions, stimuli_params):
+    """Create one luminance-matched dimming condition per loom condition (if enabled).
+
+    The dimming train copies the loom train (timing, pauses, position, radii); only the drawing
+    differs: a disc fixed at the loom's end radius that darkens instead of expanding.
+
+    Args:
+        loom_conditions (list of dict): Loom conditions from ``build_loom_conditions``.
+        stimuli_params (dict): Experiment parameters (include_dimming_control, projector_gamma).
+
+    Returns:
+        list of dict: Dimming conditions named ``dimming_<expand>s``; empty if disabled.
+
+    Raises:
+        ValueError: If projector_gamma is not positive.
+    """
+    if not stimuli_params["include_dimming_control"]:
+        return []
+    gamma = float(stimuli_params["projector_gamma"])
+    if gamma <= 0:
+        raise ValueError(f"projector_gamma must be positive (got {gamma}).")
+
+    dimming_conditions = []
+    for loom_condition in loom_conditions:
+        dimming_condition = dict(loom_condition)  # same train, pauses and radii as the loom
+        dimming_condition.update({
+            "stimulus": f"dimming_{loom_condition['expand_sec']:g}s",
+            "type": "dimming",
+            "disc_radius_cm": loom_condition["end_radius_cm"],
+            "projector_gamma": gamma,
+        })
+        dimming_conditions.append(dimming_condition)
+    return dimming_conditions
+
+
+def compute_loom_radii_cm(condition):
+    """Compute the loom radius on every frame of one loom: linear expansion, then hold.
+
+    Args:
+        condition (dict): Loom or dimming condition (start_radius_cm, end_radius_cm, expand_sec, hold_sec).
+
+    Returns:
+        ndarray: Radius in cm per frame (expansion frames followed by hold frames).
+    """
+    # linspace puts the last expansion frame exactly at the end radius
+    expand_radii = np.linspace(condition["start_radius_cm"], condition["end_radius_cm"],
+                               seconds_to_frames(condition["expand_sec"]))
+    hold_radii = np.full(seconds_to_frames(condition["hold_sec"]), condition["end_radius_cm"])
+    radii_cm = np.concatenate([expand_radii, hold_radii])
+    return radii_cm
+
+
+def compute_sorted_pixel_distances_cm():
+    """Compute the distance of every screen pixel centre to the loom centre, sorted.
+
+    Returns:
+        ndarray: Sorted distances in cm, one per pixel of the PIXELS_MONITOR screen.
+    """
+    width_pix, height_pix = PIXELS_MONITOR
+    # pixel centres in cm, origin at the screen centre like PsychoPy's cm units
+    x_cm = (np.arange(width_pix) + 0.5 - width_pix / 2) * PIXEL_SIZE_CM
+    y_cm = (np.arange(height_pix) + 0.5 - height_pix / 2) * PIXEL_SIZE_CM
+    distances_cm = np.hypot(x_cm[np.newaxis, :] - LOOM_POS_CM[0], y_cm[:, np.newaxis] - LOOM_POS_CM[1])
+    sorted_distances_cm = np.sort(distances_cm, axis=None)
+    return sorted_distances_cm
+
+
+def compute_screen_dark_fraction(radii_cm, sorted_distances_cm):
+    """Compute the fraction of screen pixels covered by a disc of each radius at the loom centre.
+
+    Parts of the disc outside the screen do not count, so a disc larger than the screen gives 1.
+
+    Args:
+        radii_cm (ndarray): Disc radii in cm.
+        sorted_distances_cm (ndarray): Output of ``compute_sorted_pixel_distances_cm``.
+
+    Returns:
+        ndarray: Covered fraction of the screen (0 to 1) per radius.
+    """
+    covered_pixels = np.searchsorted(sorted_distances_cm, radii_cm, side="right")
+    dark_fraction = covered_pixels / len(sorted_distances_cm)
+    return dark_fraction
+
+
+def compute_dimming_red_values(loom_dark_fraction, disc_dark_fraction, gamma):
+    """Compute the dimming disc's red value per frame so mean screen light matches the loom.
+
+    Light model: L = L_black + (L_background - L_black) * level ** gamma, with level 0 (black)
+    to 1 (background). The loom makes a fraction f_loom of the screen black; the dimming disc
+    covers f_disc at a level, so equal mean light needs level ** gamma = 1 - f_loom / f_disc.
+
+    Args:
+        loom_dark_fraction (ndarray): Screen fraction covered by the loom on each frame.
+        disc_dark_fraction (float): Screen fraction covered by the dimming disc.
+        gamma (float): Projector gamma.
+
+    Returns:
+        tuple: (dimming contrast per frame, 0 = invisible to 1 = black;
+            PsychoPy red value per frame, 1 = background to -1 = black).
+
+    Raises:
+        ValueError: If the dimming disc does not cover any screen pixel.
+    """
+    if disc_dark_fraction <= 0:
+        raise ValueError("The dimming disc does not cover any screen pixel; check loom_end_radius_cm.")
+    contrast = np.clip(loom_dark_fraction / disc_dark_fraction, 0, 1)
+    light_level = (1 - contrast) ** (1 / gamma)
+    red_values = 2 * light_level - 1  # map 0..1 to PsychoPy's -1..1
+    return contrast, red_values
+
+
+def build_disc_profile(condition, sorted_distances_cm):
+    """Build the per-frame drawing profile of one loom or dimming episode.
+
+    Args:
+        condition (dict): Loom or dimming condition.
+        sorted_distances_cm (ndarray): Output of ``compute_sorted_pixel_distances_cm``.
+
+    Returns:
+        DataFrame: One row per frame with radius_cm, red_value, loom_dark_fraction and
+            mean_light_rel (mean screen light, 1 = background, 0 = black); dimming adds
+            dimming_contrast.
+    """
+    loom_radii_cm = compute_loom_radii_cm(condition)
+    loom_dark_fraction = compute_screen_dark_fraction(loom_radii_cm, sorted_distances_cm)
+    profile = pd.DataFrame({"frame": np.arange(len(loom_radii_cm)),
+                            "loom_dark_fraction": loom_dark_fraction,
+                            "mean_light_rel": 1 - loom_dark_fraction})
+    if condition["type"] == "loom":
+        profile["radius_cm"] = loom_radii_cm
+        profile["red_value"] = LOOM_RED_VALUE
+        return profile
+
+    disc_dark_fraction = compute_screen_dark_fraction(np.array([condition["disc_radius_cm"]]),
+                                                      sorted_distances_cm)[0]
+    contrast, red_values = compute_dimming_red_values(loom_dark_fraction, disc_dark_fraction,
+                                                      condition["projector_gamma"])
+    profile["radius_cm"] = condition["disc_radius_cm"]
+    profile["dimming_contrast"] = contrast
+    profile["red_value"] = red_values
+    return profile
+
+
+def build_disc_profiles(conditions):
+    """Build the drawing profiles of all loom and dimming conditions (done once, before the run).
+
+    Args:
+        conditions (list of dict): All stimulus conditions.
+
+    Returns:
+        dict: Stimulus name -> profile DataFrame, for conditions whose type is in DISC_TYPES.
+    """
+    sorted_distances_cm = compute_sorted_pixel_distances_cm()
+    disc_profiles = {}
+    for condition in conditions:
+        if condition["type"] not in DISC_TYPES:
+            continue
+        disc_profiles[condition["stimulus"]] = build_disc_profile(condition, sorted_distances_cm)
+    return disc_profiles
 
 
 def build_block_sequence(conditions, n_rep_stim, n_trials_per_block):
@@ -448,29 +629,31 @@ def create_window():
     """Open the PsychoPy window on the projector (or windowed on the main screen in DRY_RUN).
 
     Returns:
-        visual.Window: Stimulus window with a BACKGROUND_COLOR background.
+        visual.Window: Stimulus window with a BACKGROUND_RGB background.
     """
     monitor = monitors.Monitor(MONITOR_NAME, width=MONITOR_WIDTH_CM)
     monitor.setSizePix(PIXELS_MONITOR)
     monitor.setDistance(MONITOR_DISTANCE_CM)
-    win = visual.Window(size=PIXELS_MONITOR, color=BACKGROUND_COLOR, units="pix", monitor=monitor,
-                        screen=DRY_RUN_SCREEN if DRY_RUN else STIM_SCREEN, fullscr=not DRY_RUN)
+    win = visual.Window(size=PIXELS_MONITOR, color=BACKGROUND_RGB, colorSpace="rgb", units="pix",
+                        monitor=monitor, screen=DRY_RUN_SCREEN if DRY_RUN else STIM_SCREEN,
+                        fullscr=not DRY_RUN)
     return win
 
 
-def create_stimuli(win):
-    """Create the reusable grating and looming-disc stimuli.
+def create_stimuli(win, disc_profiles):
+    """Create the reusable grating and disc stimuli.
 
     Args:
         win (visual.Window): Stimulus window.
+        disc_profiles (dict): Stimulus name -> per-frame profile, from ``build_disc_profiles``.
 
     Returns:
-        dict: ``{"grating": GratingStim, "loom": Circle}``, keyed by condition type.
+        dict: ``{"grating": GratingStim, "disc": Circle, "disc_profiles": dict}``; the one disc
+            draws both looms and dimming.
     """
     grating = visual.GratingStim(win=win, tex=GRATING_TEXTURE, units="cm", size=GRATING_SIZE_CM)
-    loom_circle = visual.Circle(win=win, units="cm", pos=LOOM_POS_CM, edges=LOOM_CIRCLE_EDGES,
-                                fillColor=STIMULUS_COLOR, lineColor=STIMULUS_COLOR)
-    stimuli = {"grating": grating, "loom": loom_circle}
+    disc = visual.Circle(win=win, units="cm", pos=LOOM_POS_CM, edges=LOOM_CIRCLE_EDGES, colorSpace="rgb")
+    stimuli = {"grating": grating, "disc": disc, "disc_profiles": disc_profiles}
     return stimuli
 
 
@@ -488,13 +671,16 @@ def present_blank(win, duration_sec):
         win.flip()
 
 
-def present_grating(win, grating, condition):
-    """Draw a drifting grating frame by frame for the condition's duration.
+def present_grating(win, grating, condition, logger, trial_idx):
+    """Show the grating still for static_before_sec, then drift it for motion_sec.
 
     Args:
         win (visual.Window): Stimulus window.
         grating (visual.GratingStim): Grating stimulus.
-        condition (dict): Grating condition (stripe_cm, speed_cm_s, screen_direction_deg, n_frames).
+        condition (dict): Grating condition (stripe_cm, speed_cm_s, screen_direction_deg,
+            static_before_sec, motion_sec).
+        logger (ExperimentLogger): Event logger; gets a ``grating{trial_idx}_motion`` event.
+        trial_idx (int): Global trial index, used in the motion event name.
 
     Returns:
         None
@@ -503,55 +689,60 @@ def present_grating(win, grating, condition):
     phase_step = condition["speed_cm_s"] * cycles_per_cm / FPS  # cycles moved per frame
     grating.sf = cycles_per_cm
     grating.ori = condition["screen_direction_deg"]
-    for frame in range(condition["n_frames"]):
-        grating.phase = -(frame * phase_step) % 1  # same drift sign as loom_gratings.py; wrap to [0, 1)
+    grating.phase = 0
+    for _ in range(seconds_to_frames(condition["static_before_sec"])):
+        grating.draw()
+        win.flip()
+
+    logger.log(f"grating{trial_idx}_motion")
+    for frame in range(seconds_to_frames(condition["motion_sec"])):
+        # starts at phase 0 like the static pattern (no jump); same drift sign as loom_gratings.py
+        grating.phase = -(frame * phase_step) % 1
         grating.draw()
         win.flip()
 
 
-def present_loom(win, loom_circle, condition):
-    """Draw one loom: the disc radius grows linearly from start to end radius, then holds.
+def present_disc(win, disc, profile):
+    """Draw one loom or dimming episode frame by frame from its profile.
 
     Args:
         win (visual.Window): Stimulus window.
-        loom_circle (visual.Circle): Looming disc.
-        condition (dict): Loom condition (start_radius_cm, end_radius_cm, expand_sec, hold_sec).
+        disc (visual.Circle): Disc stimulus.
+        profile (DataFrame): Per-frame radius_cm and red_value, from ``build_disc_profile``.
 
     Returns:
         None
     """
-    n_expand_frames = seconds_to_frames(condition["expand_sec"])
-    # cm per frame, chosen so the last expansion frame is drawn exactly at the end radius
-    radius_step = (condition["end_radius_cm"] - condition["start_radius_cm"]) / max(n_expand_frames - 1, 1)
-    for frame in range(n_expand_frames):
-        loom_circle.radius = condition["start_radius_cm"] + frame * radius_step
-        loom_circle.draw()
-        win.flip()
-
-    loom_circle.radius = condition["end_radius_cm"]
-    for _ in range(seconds_to_frames(condition["hold_sec"])):
-        loom_circle.draw()
+    for radius_cm, red_value in zip(profile["radius_cm"].to_numpy(), profile["red_value"].to_numpy()):
+        disc_rgb = (red_value, OFF_CHANNEL_VALUE, OFF_CHANNEL_VALUE)
+        disc.radius = radius_cm
+        disc.fillColor = disc_rgb
+        disc.lineColor = disc_rgb
+        disc.draw()
         win.flip()
 
 
-def present_loom_train(win, loom_circle, condition, logger, trial_idx):
-    """Present the n_looms looms of one loom trial, separated by blank gaps, logging each onset.
+def present_disc_train(win, disc, profile, condition, logger, trial_idx):
+    """Present the n_looms episodes of one loom or dimming trial, separated by blank gaps.
+
+    Looms and dimming use this same function, so their timing is identical.
 
     Args:
         win (visual.Window): Stimulus window.
-        loom_circle (visual.Circle): Looming disc.
-        condition (dict): Loom condition (n_looms, gap_sec and the single-loom entries).
-        logger (ExperimentLogger): Event logger; gets one ``loom{trial_idx}_onset{i}`` event per loom.
+        disc (visual.Circle): Disc stimulus.
+        profile (DataFrame): Per-frame profile of one episode.
+        condition (dict): Loom or dimming condition (type, n_looms, gap_sec).
+        logger (ExperimentLogger): Event logger; gets one ``<type>{trial_idx}_onset{i}`` event per episode.
         trial_idx (int): Global trial index, used in the onset event names.
 
     Returns:
         None
     """
-    for loom_idx in range(condition["n_looms"]):
-        if loom_idx > 0:
+    for episode_idx in range(condition["n_looms"]):
+        if episode_idx > 0:
             present_blank(win, condition["gap_sec"])
-        logger.log(f"loom{trial_idx}_onset{loom_idx}")
-        present_loom(win, loom_circle, condition)
+        logger.log(f"{condition['type']}{trial_idx}_onset{episode_idx}")
+        present_disc(win, disc, profile)
 
 
 def present_stimulus(win, stimuli, condition, logger, trial_idx):
@@ -560,8 +751,8 @@ def present_stimulus(win, stimuli, condition, logger, trial_idx):
     Args:
         win (visual.Window): Stimulus window.
         stimuli (dict): Stimuli from ``create_stimuli``.
-        condition (dict): Grating or loom condition.
-        logger (ExperimentLogger): Event logger (used for loom onsets).
+        condition (dict): Grating, loom or dimming condition.
+        logger (ExperimentLogger): Event logger (motion and onset events).
         trial_idx (int): Global trial index.
 
     Returns:
@@ -571,9 +762,10 @@ def present_stimulus(win, stimuli, condition, logger, trial_idx):
         ValueError: If the condition type is unknown.
     """
     if condition["type"] == "grating":
-        present_grating(win, stimuli["grating"], condition)
-    elif condition["type"] == "loom":
-        present_loom_train(win, stimuli["loom"], condition, logger, trial_idx)
+        present_grating(win, stimuli["grating"], condition, logger, trial_idx)
+    elif condition["type"] in DISC_TYPES:
+        profile = stimuli["disc_profiles"][condition["stimulus"]]
+        present_disc_train(win, stimuli["disc"], profile, condition, logger, trial_idx)
     else:
         raise ValueError(f"Unknown stimulus type: {condition['type']}")
 
@@ -719,6 +911,21 @@ def save_run_outputs(meta_dir, file_prefix, logger, conditions):
     pd.DataFrame(conditions).to_csv(meta_dir / f"{file_prefix}_stimuli_table.csv", index=False)
 
 
+def save_disc_profiles(meta_dir, file_prefix, disc_profiles):
+    """Save the per-frame profile of every loom/dimming condition (exact luminance time course).
+
+    Args:
+        meta_dir (Path): Experiment metadata folder.
+        file_prefix (str): ``{date}_f{fish_ID}`` prefix of every output file.
+        disc_profiles (dict): Stimulus name -> profile DataFrame.
+
+    Returns:
+        None
+    """
+    for stimulus_name, profile in disc_profiles.items():
+        profile.to_csv(meta_dir / f"{file_prefix}_{stimulus_name}_profile.csv", index=False)
+
+
 def save_metadata(meta_dir, file_prefix, param_dicts):
     """Save parameter dicts as one parameter/value metadata CSV (rewritten on each call).
 
@@ -739,7 +946,8 @@ def collect_parameters():
     """Ask for metadata and parameters, then build the conditions and the block sequence.
 
     Returns:
-        tuple: (metadata, stimuli_params, functional_params, conditions, block_sequence).
+        tuple: (metadata, stimuli_params, functional_params, conditions, block_sequence,
+            disc_profiles).
     """
     metadata = default_metadata()
     functional_params = default_functional_params()
@@ -755,13 +963,16 @@ def collect_parameters():
     metadata["fish_age_dpf"] = compute_age_dpf(metadata["fish_birth"])
     metadata["stimulus_script"] = Path(__file__).name
 
-    conditions = build_grating_conditions(stimuli_params, flip_coordinates) + build_loom_conditions(stimuli_params)
+    loom_conditions = build_loom_conditions(stimuli_params)
+    conditions = (build_grating_conditions(stimuli_params, flip_coordinates) + loom_conditions
+                  + build_dimming_conditions(loom_conditions, stimuli_params))
     block_sequence = build_block_sequence(conditions, int(stimuli_params["n_rep_stim"]),
                                           int(stimuli_params["n_trials_per_block"]))
     stimuli_params["stimulus_block_duration_sec"] = compute_block_duration_sec(block_sequence[0])
     if stimuli_params["match_pre_stim_to_block"]:
         stimuli_params["pre_stim_resting_sec"] = stimuli_params["stimulus_block_duration_sec"]
-    return metadata, stimuli_params, functional_params, conditions, block_sequence
+    disc_profiles = build_disc_profiles(conditions)  # computed now so trials have no setup delay
+    return metadata, stimuli_params, functional_params, conditions, block_sequence, disc_profiles
 
 
 def collect_post_run_metadata(metadata):
@@ -786,7 +997,8 @@ def main():
     Returns:
         None
     """
-    metadata, stimuli_params, functional_params, conditions, block_sequence = collect_parameters()
+    (metadata, stimuli_params, functional_params, conditions, block_sequence,
+     disc_profiles) = collect_parameters()
     print_block_summary(stimuli_params, functional_params, block_sequence)
 
     data_path = DRY_RUN_DATA_PATH if DRY_RUN else DATA_PATH
@@ -795,7 +1007,7 @@ def main():
     meta_dir = paths["raw_2p_metadata"]  # where we save logs and parameter CSVs
 
     win = create_window()
-    stimuli = create_stimuli(win)
+    stimuli = create_stimuli(win, disc_profiles)
     pin_acq, pin_aux = connect_trigger_pins()
     logger = ExperimentLogger()
 
@@ -812,6 +1024,7 @@ def main():
 
         file_prefix = f"{datetime.datetime.now().strftime(FILE_DATE_FORMAT)}_f{metadata['fish_ID']}"
         save_run_outputs(meta_dir, file_prefix, logger, conditions)
+        save_disc_profiles(meta_dir, file_prefix, disc_profiles)
         save_metadata(meta_dir, file_prefix, [metadata, stimuli_params, functional_params])
 
         anatomy_params = collect_post_run_metadata(metadata)
