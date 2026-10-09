@@ -1,5 +1,5 @@
 video_stimuli/
 data/
 04_plots/
-tests/
+__pycache__/
 .idea/
