@@ -123,7 +123,8 @@ class NotebookTests(unittest.TestCase):
                     if cell["cell_type"] != "code":
                         continue
                     source = "".join(cell["source"])
-                    if source.startswith("EXPERIMENT_DIR ="):
+                    # the configuration cell holds personal paths; the fixture replaces it
+                    if "EXPERIMENT_DIR = Path(" in source:
                         continue
                     compiled_cell = compile(
                         source,
