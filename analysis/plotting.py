@@ -4,6 +4,8 @@ Each ``draw_*`` function draws onto a Matplotlib axis passed in and takes its
 look (colormap, colour limits, colours) as arguments. Figure layout, sizes and
 colour settings live in the notebook, so they can be tweaked without editing
 this module.
+
+Adapted from two_p/plotting.py in mp_thesis_2026.
 """
 
 import time

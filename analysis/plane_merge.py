@@ -2,6 +2,8 @@
 
 The merged matrix is rebuilt each time it is needed and never saved: each
 plane's own dF/F metadata file stays the only record of how its data were made.
+
+Plane loading is adapted from the FishData class in mp_thesis_2026.
 """
 
 import gc

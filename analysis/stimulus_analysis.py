@@ -1,4 +1,8 @@
-"""Load stimulus timing, compute trial-aligned responses, and order neurons."""
+"""Load stimulus timing, compute trial-aligned responses, and order neurons.
+
+The stimulus timeline functions are adapted from mp_thesis_2026, and the
+per-stimulus trial window follows its extract_stimulus_chunks.
+"""
 
 from pathlib import Path
 
