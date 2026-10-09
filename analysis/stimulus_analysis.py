@@ -7,6 +7,9 @@ import pandas as pd
 
 
 DEFAULT_STIMULUS_FPS = 60.0
+DEFAULT_PRE_STIMULUS_SEC = 5.0
+# with 16.4 s stimuli, a 10 s margin keeps the window close to the former fixed 27 s after onset
+DEFAULT_POST_STIMULUS_MARGIN_SEC = 10.0
 
 
 def load_trajectory(trajectory_file):
@@ -235,23 +238,13 @@ def parse_stimulus_name(event_name, available_names):
     return None
 
 
-def _add_stimulus_event_to_trace(
-    event,
-    stimulus_durations,
-    stimulus_id_map,
-    stimulus_trace,
-    stimulus_trace_length,
-    stimulus_fps,
-):
-    """Add one recognized log event to a stimulus trace.
+def _stimulus_event_row(event, stimulus_durations, stimulus_id_map):
+    """Describe one recognized block-log event as a timeline row.
 
     Args:
         event (Series): One adjusted block-log event.
         stimulus_durations (dict): Per-stimulus trajectory timing metadata.
         stimulus_id_map (dict): Stimulus names mapped to integer IDs.
-        stimulus_trace (ndarray): Categorical stimulus trace to update.
-        stimulus_trace_length (int): Number of samples in the stimulus trace.
-        stimulus_fps (float): Stimulus trajectory sampling rate.
 
     Returns:
         dict or None: Timeline row for a recognized event, otherwise ``None``.
@@ -261,22 +254,43 @@ def _add_stimulus_event_to_trace(
         return None
 
     onset_time = float(event["timestamp"])
-    duration = stimulus_durations[stimulus_name]
-    onset_frame = int(round(onset_time * stimulus_fps))
-    offset_frame = onset_frame + int(duration["total_frames"])
-    clipped_start = max(0, onset_frame)
-    clipped_stop = min(stimulus_trace_length, offset_frame)
-    if clipped_start < clipped_stop:
-        stimulus_trace[clipped_start:clipped_stop] = stimulus_id_map[stimulus_name]
-
     event_row = {
         "event": event["event"],
         "stimulus_name": stimulus_name,
         "stimulus_id": stimulus_id_map[stimulus_name],
         "onset_time": onset_time,
-        "offset_time": onset_time + duration["total_sec"],
+        "offset_time": onset_time + stimulus_durations[stimulus_name]["total_sec"],
     }
     return event_row
+
+
+def _build_stimulus_rate_trace(
+    event_rows,
+    stimulus_durations,
+    stimulus_trace_length,
+    stimulus_fps,
+):
+    """Build a categorical stimulus-ID trace sampled at the stimulus rate.
+
+    Args:
+        event_rows (list): Timeline rows from :func:`_stimulus_event_row`.
+        stimulus_durations (dict): Per-stimulus trajectory timing metadata.
+        stimulus_trace_length (int): Number of samples in the trace.
+        stimulus_fps (float): Stimulus trajectory sampling rate.
+
+    Returns:
+        ndarray: Stimulus ID during each presentation and 0 elsewhere.
+    """
+    stimulus_trace = np.zeros(stimulus_trace_length, dtype=np.int16)
+    for event_row in event_rows:
+        onset_frame = int(round(event_row["onset_time"] * stimulus_fps))
+        presentation_frames = int(stimulus_durations[event_row["stimulus_name"]]["total_frames"])
+        # presentations reaching past either end of the recording are clipped to it
+        clipped_start = max(0, onset_frame)
+        clipped_stop = min(stimulus_trace_length, onset_frame + presentation_frames)
+        if clipped_start < clipped_stop:
+            stimulus_trace[clipped_start:clipped_stop] = event_row["stimulus_id"]
+    return stimulus_trace
 
 
 def _resample_stimulus_trace(
@@ -337,18 +351,9 @@ def build_stimulus_timeline(
     }
     recording_duration_sec = n_imaging_frames / float(imaging_fps)
     stimulus_trace_length = max(1, int(np.ceil(recording_duration_sec * stimulus_fps)))
-    stimulus_trace = np.zeros(stimulus_trace_length, dtype=np.int16)
     event_rows = []
-
     for _, event in adjusted_log.iterrows():
-        event_row = _add_stimulus_event_to_trace(
-            event,
-            stimulus_durations,
-            stimulus_id_map,
-            stimulus_trace,
-            stimulus_trace_length,
-            stimulus_fps,
-        )
+        event_row = _stimulus_event_row(event, stimulus_durations, stimulus_id_map)
         if event_row is not None:
             event_rows.append(event_row)
 
@@ -363,6 +368,12 @@ def build_stimulus_timeline(
         for stimulus_name in stimulus_names
         if stimulus_name in present_stimuli
     }
+    stimulus_trace = _build_stimulus_rate_trace(
+        event_rows,
+        stimulus_durations,
+        stimulus_trace_length,
+        stimulus_fps,
+    )
     imaging_stimulus_trace = _resample_stimulus_trace(
         stimulus_trace,
         n_imaging_frames,
@@ -433,24 +444,24 @@ def load_experiment_stimuli(
     return experiment_stimuli
 
 
-def _alignment_coordinates(
+def _validate_alignment_inputs(
     dfof,
     stimulus_trace,
     imaging_fps,
     pre_stimulus_sec,
-    post_stimulus_sec,
+    post_stimulus_margin_sec,
 ):
-    """Validate alignment inputs and calculate window coordinates.
+    """Validate the arrays and window settings used for trial alignment.
 
     Args:
         dfof (ndarray): Merged time-by-neuron array.
         stimulus_trace (ndarray): Stimulus IDs at the imaging rate.
         imaging_fps (float): Imaging sampling rate in frames per second.
         pre_stimulus_sec (float): Seconds retained before stimulus onset.
-        post_stimulus_sec (float): Seconds retained from onset onward.
+        post_stimulus_margin_sec (float): Seconds retained after stimulus offset.
 
     Returns:
-        tuple: Validated arrays, frame counts, and relative time axis.
+        tuple: ``dfof`` and ``stimulus_trace`` converted to arrays.
 
     Raises:
         ValueError: If shapes, rates, or requested windows are invalid.
@@ -461,21 +472,29 @@ def _alignment_coordinates(
         raise ValueError(f"dfof must be two-dimensional, got shape {dfof.shape}.")
     if stimulus_trace.ndim != 1 or stimulus_trace.size != dfof.shape[0]:
         raise ValueError("stimulus_trace must be one-dimensional and match dfof time.")
-    if imaging_fps <= 0 or pre_stimulus_sec < 0 or post_stimulus_sec <= 0:
-        raise ValueError("Imaging rate and alignment windows must be positive.")
+    if imaging_fps <= 0:
+        raise ValueError("imaging_fps must be greater than zero.")
+    if pre_stimulus_sec < 0 or post_stimulus_margin_sec < 0:
+        raise ValueError("pre_stimulus_sec and post_stimulus_margin_sec cannot be negative.")
 
-    pre_frames = int(round(pre_stimulus_sec * imaging_fps))
-    post_frames = int(round(post_stimulus_sec * imaging_fps))
-    window_frames = pre_frames + post_frames
-    time_sec = (np.arange(window_frames) - pre_frames) / float(imaging_fps)
-    coordinates = (
-        dfof,
-        stimulus_trace,
-        pre_frames,
-        post_frames,
-        time_sec,
-    )
-    return coordinates
+    validated_arrays = (dfof, stimulus_trace)
+    return validated_arrays
+
+
+def _post_onset_frames(duration, post_stimulus_margin_sec, imaging_fps):
+    """Calculate the frames kept from onset onward for one stimulus.
+
+    Args:
+        duration (dict): The stimulus's trajectory timing metadata.
+        post_stimulus_margin_sec (float): Seconds retained after stimulus offset.
+        imaging_fps (float): Imaging sampling rate in frames per second.
+
+    Returns:
+        int: Frames covering the whole stimulus plus the post-stimulus margin.
+    """
+    post_onset_sec = duration["total_sec"] + post_stimulus_margin_sec
+    post_frames = int(round(post_onset_sec * imaging_fps))
+    return post_frames
 
 
 def _align_one_stimulus(dfof, stimulus_trace, stimulus_id, pre_frames, post_frames):
@@ -528,44 +547,52 @@ def build_trial_aligned_traces(
     dfof,
     stimulus_trace,
     stimulus_id_map,
+    stimulus_durations,
     imaging_fps,
-    pre_stimulus_sec=5.0,
-    post_stimulus_sec=27.0,
+    pre_stimulus_sec=DEFAULT_PRE_STIMULUS_SEC,
+    post_stimulus_margin_sec=DEFAULT_POST_STIMULUS_MARGIN_SEC,
 ):
     """Extract complete peri-stimulus windows for every stimulus repetition.
+
+    Each stimulus gets its own window: ``pre_stimulus_sec`` before onset, then
+    the stimulus's own duration, then ``post_stimulus_margin_sec``.
 
     Args:
         dfof (ndarray): Merged array shaped time by neurons.
         stimulus_trace (ndarray): Stimulus IDs sampled at the imaging rate.
         stimulus_id_map (dict): Stimulus name to integer ID mapping.
+        stimulus_durations (dict): Per-stimulus trajectory timing metadata.
         imaging_fps (float): Imaging sampling rate in frames per second.
         pre_stimulus_sec (float): Seconds retained before stimulus onset.
-        post_stimulus_sec (float): Seconds retained from onset onward.
+        post_stimulus_margin_sec (float): Seconds retained after stimulus offset.
 
     Returns:
-        dict: Trial arrays, mean rasters, time axis, and trial counts.
+        dict: Per-stimulus trial arrays, mean rasters, trial counts, time axes
+        and ``post_frames``, plus the shared ``pre_frames`` (onset index).
 
     Raises:
         ValueError: If shapes, rates, or requested windows are invalid.
     """
-    (
-        dfof,
-        stimulus_trace,
-        pre_frames,
-        post_frames,
-        time_sec,
-    ) = _alignment_coordinates(
+    dfof, stimulus_trace = _validate_alignment_inputs(
         dfof,
         stimulus_trace,
         imaging_fps,
         pre_stimulus_sec,
-        post_stimulus_sec,
+        post_stimulus_margin_sec,
     )
+    pre_frames = int(round(pre_stimulus_sec * imaging_fps))
     trial_traces = {}
     mean_rasters = {}
     trial_counts = {}
+    time_axes = {}
+    post_frames_by_stimulus = {}
 
     for stimulus_name, stimulus_id in stimulus_id_map.items():
+        post_frames = _post_onset_frames(
+            stimulus_durations[stimulus_name],
+            post_stimulus_margin_sec,
+            imaging_fps,
+        )
         aligned_trials, mean_raster, found_trials, dropped_trials = (
             _align_one_stimulus(
                 dfof,
@@ -588,14 +615,19 @@ def build_trial_aligned_traces(
             "retained": found_trials - dropped_trials,
             "dropped": dropped_trials,
         }
+        # seconds relative to onset, negative during the pre-stimulus period
+        time_axes[stimulus_name] = (
+            np.arange(pre_frames + post_frames) - pre_frames
+        ) / float(imaging_fps)
+        post_frames_by_stimulus[stimulus_name] = post_frames
 
     aligned_result = {
         "trial_traces": trial_traces,
         "mean_rasters": mean_rasters,
         "trial_counts": trial_counts,
-        "time_sec": time_sec,
+        "time_sec": time_axes,
         "pre_frames": pre_frames,
-        "post_frames": post_frames,
+        "post_frames": post_frames_by_stimulus,
     }
     return aligned_result
 
