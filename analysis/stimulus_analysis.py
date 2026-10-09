@@ -1,9 +1,11 @@
-"""Load stimulus timing and compute basic trial-aligned response measures."""
+"""Load stimulus timing, compute trial-aligned responses, and order neurons."""
 
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import leaves_list, linkage
+from scipy.spatial.distance import pdist
 
 
 DEFAULT_STIMULUS_FPS = 60.0
@@ -444,6 +446,25 @@ def load_experiment_stimuli(
     return experiment_stimuli
 
 
+def movement_onset_times(stimulus_events, stimulus_durations):
+    """Calculate when each presented stimulus starts moving.
+
+    Args:
+        stimulus_events (DataFrame): Events with ``stimulus_name`` and ``onset_time``.
+        stimulus_durations (dict): Per-stimulus trajectory timing metadata.
+
+    Returns:
+        ndarray: Movement-onset time in seconds for each event row.
+    """
+    static_before_sec = [
+        stimulus_durations[stimulus_name]["static_before_sec"]
+        for stimulus_name in stimulus_events["stimulus_name"]
+    ]
+    # presentation onset plus the static period before the trajectory starts changing
+    onset_times = stimulus_events["onset_time"].to_numpy(dtype=float) + np.asarray(static_before_sec)
+    return onset_times
+
+
 def _validate_alignment_inputs(
     dfof,
     stimulus_trace,
@@ -857,3 +878,50 @@ def summarize_metric(metric_by_stimulus):
         )
     summary = pd.DataFrame(summary_rows)
     return summary
+
+
+def correlation_sort_order(dfof):
+    """Order neurons by average-linkage clustering of correlation distance.
+
+    Args:
+        dfof (ndarray): Calcium activity shaped time by neurons.
+
+    Returns:
+        ndarray: Original neuron-column indices in correlation-cluster order.
+
+    Raises:
+        ValueError: If the input is not a non-empty two-dimensional array.
+    """
+    dfof = np.asarray(dfof, dtype=float)
+    if dfof.ndim != 2 or min(dfof.shape) == 0:
+        raise ValueError(f"dfof must be a non-empty time x neurons array, got {dfof.shape}.")
+
+    neuron_traces = dfof.T
+    finite_neurons = np.all(np.isfinite(neuron_traces), axis=1)
+    variable_neurons = np.nanstd(neuron_traces, axis=1) > 0
+    sortable_neurons = finite_neurons & variable_neurons
+    sortable_indices = np.flatnonzero(sortable_neurons)
+    unsortable_indices = np.flatnonzero(~sortable_neurons)
+
+    if unsortable_indices.size:
+        print(
+            f"Warning: placing {unsortable_indices.size} non-finite or constant "
+            "neuron trace(s) after the correlation-sorted neurons."
+        )
+    if sortable_indices.size < 2:
+        neuron_order = np.concatenate([sortable_indices, unsortable_indices])
+        return neuron_order
+
+    correlation_distances = pdist(
+        neuron_traces[sortable_neurons],
+        metric="correlation",
+    )
+    if not np.all(np.isfinite(correlation_distances)):
+        raise ValueError("Correlation distances contain non-finite values after filtering.")
+
+    correlation_tree = linkage(correlation_distances, method="average")
+    relative_order = leaves_list(correlation_tree)
+    neuron_order = np.concatenate(
+        [sortable_indices[relative_order], unsortable_indices]
+    )
+    return neuron_order

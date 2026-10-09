@@ -13,7 +13,9 @@ from analysis.stimulus_analysis import (
     build_trial_aligned_traces,
     concatenate_stimulus_mean_rasters,
     compute_response_metrics,
+    correlation_sort_order,
     get_stimulus_duration,
+    movement_onset_times,
     summarize_metric,
 )
 
@@ -193,6 +195,33 @@ class StimulusAnalysisTests(unittest.TestCase):
             concatenated["segments"]["movement_onset_frame"].tolist(),
             [4, 9],
         )
+
+    def test_movement_onsets_add_the_static_period(self):
+        """Movement starts after each stimulus's static period."""
+        stimulus_events = pd.DataFrame(
+            {"stimulus_name": ["forward", "right"], "onset_time": [2.0, 10.0]}
+        )
+        durations = {
+            "forward": {"static_before_sec": 0.5},
+            "right": {"static_before_sec": 1.0},
+        }
+
+        onset_times = movement_onset_times(stimulus_events, durations)
+
+        np.testing.assert_allclose(onset_times, [2.5, 11.0])
+
+    def test_correlation_sort_groups_similar_traces_and_appends_constants(self):
+        """Correlation clustering should group similar traces and retain bad rows."""
+        base_trace = np.arange(6, dtype=float)
+        dfof = np.column_stack(
+            [base_trace, base_trace * 2.0, base_trace[::-1], np.ones(6)]
+        )
+        neuron_order = correlation_sort_order(dfof)
+
+        self.assertEqual(sorted(neuron_order.tolist()), [0, 1, 2, 3])
+        self.assertEqual(neuron_order[-1], 3)
+        positions = {neuron: position for position, neuron in enumerate(neuron_order)}
+        self.assertEqual(abs(positions[0] - positions[1]), 1)
 
 
 if __name__ == "__main__":
