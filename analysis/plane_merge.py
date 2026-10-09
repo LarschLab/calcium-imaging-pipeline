@@ -1,19 +1,18 @@
-"""Load, align, and concatenate per-plane dF/F traces for one experiment."""
+"""Load per-plane dF/F traces for one experiment and merge them in memory.
+
+The merged matrix is rebuilt each time it is needed and never saved: each
+plane's own dF/F metadata file stays the only record of how its data were made.
+"""
 
 import gc
-import json
 import re
-import time
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from utils import init_experiment_tree
 
-
-DEFAULT_PLANE_INDICES = tuple(range(5))
-MERGED_FOLDER_NAME = "merged_dFoF"
+ALL_PLANES = "all"
 PLANE_DIRECTORY_PATTERN = re.compile(r"^plane(\d+)$")
 
 
@@ -118,8 +117,9 @@ def find_plane_file(suite2p_dir, fish_id, plane_index, suffix):
     )
 
 
+
 def load_plane_record(suite2p_dir, fish_id, plane_index):
-    """Load and validate one plane's dF/F array and ROI indices.
+    """Load and validate one plane's dF/F array and Suite2P ROI indices.
 
     Args:
         suite2p_dir (Path): Folder containing the Suite2p plane directories.
@@ -127,18 +127,13 @@ def load_plane_record(suite2p_dir, fish_id, plane_index):
         plane_index (int): Zero-based plane number.
 
     Returns:
-        dict: Plane number, trace array, ROI indices, and source paths.
+        dict or None: Plane number, trace array, ROI indices, and source paths,
+        or ``None`` when the plane has no ROI index file or no kept ROIs.
 
     Raises:
         ValueError: If an input array has an invalid shape or index count.
     """
     dfof_path = find_plane_file(suite2p_dir, fish_id, plane_index, "dFoF.npy")
-    dfof = np.load(dfof_path)
-    if dfof.ndim != 2 or min(dfof.shape) == 0:
-        raise ValueError(
-            f"Expected a non-empty time x neurons array at {dfof_path}, got {dfof.shape}."
-        )
-
     try:
         roi_path = find_plane_file(
             suite2p_dir,
@@ -146,15 +141,25 @@ def load_plane_record(suite2p_dir, fish_id, plane_index):
             plane_index,
             "filtered_roi_indices.npy",
         )
-        roi_indices = np.asarray(np.load(roi_path), dtype=int).ravel()
     except FileNotFoundError:
-        roi_path = None
-        roi_indices = np.arange(dfof.shape[1], dtype=int)
+        # dF/F column numbers are not Suite2P ROI numbers (the dF/F step drops
+        # ROIs), so without this file the plane's ROIs cannot be identified.
         print(
             f"Warning: plane {plane_index} has no filtered ROI index file; "
-            "using dF/F column indices."
+            "skipping this plane."
         )
+        return None
 
+    dfof = np.load(dfof_path)
+    if dfof.ndim != 2 or dfof.shape[0] == 0:
+        raise ValueError(
+            f"Expected a time x neurons array with frames at {dfof_path}, got {dfof.shape}."
+        )
+    if dfof.shape[1] == 0:
+        print(f"Warning: plane {plane_index} has no kept ROIs; skipping this plane.")
+        return None
+
+    roi_indices = np.asarray(np.load(roi_path), dtype=int).ravel()
     if roi_indices.size != dfof.shape[1]:
         raise ValueError(
             f"ROI index count {roi_indices.size} does not match the {dfof.shape[1]} "
@@ -171,30 +176,46 @@ def load_plane_record(suite2p_dir, fish_id, plane_index):
     return plane_record
 
 
-def merge_plane_records(plane_records):
-    """Truncate planes to a common duration and concatenate their neurons.
+def check_matching_frame_counts(plane_records):
+    """Check that every plane has the same number of frames.
+
+    Planes from one recording come from the same volumes, so a different frame
+    count means something went wrong upstream (e.g. a plane processed from
+    different blocks).
 
     Args:
-        plane_records (list): Valid plane records ordered by plane number.
+        plane_records (list): Plane records ordered by plane number.
 
     Returns:
-        tuple: Merged time-by-neuron array, provenance DataFrame, and input shapes.
+        None: The check only raises on failure.
 
     Raises:
-        ValueError: If no plane records are provided.
+        ValueError: If any plane's frame count differs from the first plane's.
     """
-    if not plane_records:
-        raise ValueError("At least one plane record is required for merging.")
+    reference_record = plane_records[0]
+    reference_frames = reference_record["dfof"].shape[0]
+    for record in plane_records[1:]:
+        plane_frames = record["dfof"].shape[0]
+        if plane_frames != reference_frames:
+            raise ValueError(
+                f"Plane {record['plane_index']} has {plane_frames} frames but plane "
+                f"{reference_record['plane_index']} has {reference_frames}. Planes from "
+                f"one recording must have equal frame counts; check {record['dfof_path']}."
+            )
 
-    input_shapes = [list(record["dfof"].shape) for record in plane_records]
-    common_frames = min(shape[0] for shape in input_shapes)
-    merged_parts = []
+
+def build_roi_mapping(plane_records):
+    """Build the table linking merged dF/F columns back to plane and ROI.
+
+    Args:
+        plane_records (list): Plane records ordered by plane number.
+
+    Returns:
+        DataFrame: One row per merged column with plane, ROI, and source files.
+    """
     mapping_rows = []
     global_column = 0
-
     for record in plane_records:
-        truncated_dfof = record["dfof"][:common_frames, :]
-        merged_parts.append(truncated_dfof)
         for local_column, filtered_roi_index in enumerate(record["roi_indices"]):
             mapping_rows.append(
                 {
@@ -204,202 +225,54 @@ def merge_plane_records(plane_records):
                     "filtered_roi_index": int(filtered_roi_index),
                     "global_column": global_column,
                     "source_dfof_file": str(record["dfof_path"]),
-                    "source_roi_file": (
-                        str(record["roi_path"]) if record["roi_path"] else ""
-                    ),
+                    "source_roi_file": str(record["roi_path"]),
                 }
             )
             global_column += 1
 
-    merged_dfof = np.concatenate(merged_parts, axis=1)
     mapping = pd.DataFrame(mapping_rows)
-    return merged_dfof, mapping, input_shapes
+    return mapping
 
 
-def merge_five_planes(experiment_dir, fish_id, plane_indices=DEFAULT_PLANE_INDICES):
-    """Load and merge the selected planes for one experiment.
+def merge_planes(experiment_dir, fish_id, plane_indices=ALL_PLANES):
+    """Load the selected planes for one experiment and join their neurons.
 
     Args:
         experiment_dir (Path): Root of one experiment's standard folder tree.
         fish_id (str): Fish identifier used in per-plane filenames.
-        plane_indices (sequence or str): Plane numbers or ``all`` for discovery.
+        plane_indices (sequence or str): Plane numbers, or ``"all"`` to use
+            every ``plane<number>`` folder found.
 
     Returns:
-        dict: Merged dF/F, mapping table, metadata, and canonical output paths.
+        dict: Merged time-by-neuron ``dfof`` array and the ``mapping`` table
+        linking each column to its plane and Suite2P ROI.
+
+    Raises:
+        ValueError: If no selected plane can be used or frame counts differ.
     """
-    experiment_dir = Path(experiment_dir)
-    suite2p_dir = experiment_dir / "03_analysis" / "functional" / "suite2P"
+    suite2p_dir = Path(experiment_dir) / "03_analysis" / "functional" / "suite2P"
     plane_indices = resolve_plane_indices(suite2p_dir, plane_indices)
 
-    plane_records = [
+    loaded_records = [
         load_plane_record(suite2p_dir, fish_id, plane_index)
         for plane_index in plane_indices
     ]
-    merged_dfof, mapping, input_shapes = merge_plane_records(plane_records)
-    source_files = [str(record["dfof_path"]) for record in plane_records]
-    metadata = {
-        "fish_id": fish_id,
-        "params": {
-            "plane_indices": list(plane_indices),
-            "alignment_mode": "truncate",
-        },
-        "shapes": {
-            "input_time_by_neurons": input_shapes,
-            "merged_time_by_neurons": list(merged_dfof.shape),
-        },
-        "source_files": source_files,
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    output_paths = merged_output_paths(experiment_dir, fish_id, plane_indices)
+    plane_records = [record for record in loaded_records if record is not None]
+    if not plane_records:
+        raise ValueError(
+            f"None of the selected planes {list(plane_indices)} could be used for {fish_id}."
+        )
+    check_matching_frame_counts(plane_records)
 
-    for record in plane_records:
-        del record["dfof"]
-    del plane_records
+    merged_dfof = np.concatenate([record["dfof"] for record in plane_records], axis=1)
+    mapping = build_roi_mapping(plane_records)
+
+    # per-plane arrays are now duplicated inside merged_dfof
+    del loaded_records, plane_records
     gc.collect()
 
     merge_result = {
         "dfof": merged_dfof,
         "mapping": mapping,
-        "metadata": metadata,
-        "paths": output_paths,
-        "experiment_dir": experiment_dir,
     }
     return merge_result
-
-
-def merged_output_paths(experiment_dir, fish_id, plane_indices=None):
-    """Build canonical merged-output paths without creating directories.
-
-    Args:
-        experiment_dir (Path): Root of one experiment's standard folder tree.
-        fish_id (str): Fish identifier used in output filenames.
-        plane_indices (sequence or None): Selection included in filenames, when set.
-
-    Returns:
-        dict: Output directory and paths for the array, map, and metadata.
-    """
-    output_dir = (
-        Path(experiment_dir)
-        / "03_analysis"
-        / "functional"
-        / "suite2P"
-        / MERGED_FOLDER_NAME
-    )
-    if plane_indices is None:
-        output_prefix = fish_id
-    else:
-        plane_text = "-".join(str(plane_index) for plane_index in plane_indices)
-        output_prefix = f"{fish_id}_planes_{plane_text}"
-    output_paths = {
-        "output_dir": output_dir,
-        "dfof": output_dir / f"{output_prefix}_dFoF_merged.npy",
-        "mapping": output_dir / f"{output_prefix}_dFoF_merged_map.csv",
-        "metadata": output_dir / f"{output_prefix}_dFoF_merged_metadata.json",
-    }
-    return output_paths
-
-
-def save_merged_result(merge_result):
-    """Save a merged result without overwriting existing artifacts.
-
-    Args:
-        merge_result (dict): Result returned by :func:`merge_five_planes`.
-
-    Returns:
-        dict: Paths of the saved merged artifacts.
-
-    Raises:
-        FileExistsError: If any canonical output already exists.
-    """
-    paths = merge_result["paths"]
-    existing_paths = [path for key, path in paths.items() if key != "output_dir" and path.exists()]
-    if existing_paths:
-        existing_names = ", ".join(path.name for path in existing_paths)
-        raise FileExistsError(
-            f"Refusing to overwrite existing merged output(s): {existing_names}"
-        )
-
-    experiment_dir = Path(merge_result["experiment_dir"])
-    init_experiment_tree(experiment_dir.parent, experiment_dir.name)
-    np.save(paths["dfof"], merge_result["dfof"])
-    merge_result["mapping"].to_csv(paths["mapping"], index=False, encoding="utf-8")
-    with paths["metadata"].open("x", encoding="utf-8") as metadata_file:
-        json.dump(merge_result["metadata"], metadata_file, indent=2)
-    return paths
-
-
-def load_merged_result(experiment_dir, fish_id, plane_indices=None):
-    """Load a complete set of previously merged artifacts.
-
-    Args:
-        experiment_dir (Path): Root of one experiment's standard folder tree.
-        fish_id (str): Fish identifier used in output filenames.
-        plane_indices (sequence or None): Plane selection encoded in filenames.
-
-    Returns:
-        dict: Loaded dF/F array, mapping, metadata, and paths.
-
-    Raises:
-        FileNotFoundError: If the merged artifact set is incomplete.
-    """
-    paths = merged_output_paths(experiment_dir, fish_id, plane_indices)
-    required_paths = [paths["dfof"], paths["mapping"], paths["metadata"]]
-    missing_paths = [path for path in required_paths if not path.exists()]
-    if missing_paths:
-        missing_names = ", ".join(path.name for path in missing_paths)
-        raise FileNotFoundError(f"Incomplete merged output set; missing: {missing_names}")
-
-    with paths["metadata"].open("r", encoding="utf-8") as metadata_file:
-        metadata = json.load(metadata_file)
-    loaded_result = {
-        "dfof": np.load(paths["dfof"]),
-        "mapping": pd.read_csv(paths["mapping"]),
-        "metadata": metadata,
-        "paths": paths,
-        "experiment_dir": Path(experiment_dir),
-    }
-    return loaded_result
-
-
-def prepare_merged_dfof(experiment_dir, fish_id, plane_indices=DEFAULT_PLANE_INDICES):
-    """Load existing merged outputs or safely create them once.
-
-    Args:
-        experiment_dir (Path): Root of one experiment's standard folder tree.
-        fish_id (str): Fish identifier used in filenames.
-        plane_indices (sequence or str): Required plane numbers or ``all``.
-
-    Returns:
-        dict: Loaded or newly created merged result.
-    """
-    experiment_dir = Path(experiment_dir)
-    init_experiment_tree(experiment_dir.parent, experiment_dir.name)
-    suite2p_dir = experiment_dir / "03_analysis" / "functional" / "suite2P"
-    resolved_indices = resolve_plane_indices(suite2p_dir, plane_indices)
-    try:
-        merged_result = load_merged_result(
-            experiment_dir,
-            fish_id,
-            resolved_indices,
-        )
-        print(f"Loaded existing merged dF/F for {fish_id}.")
-        return merged_result
-    except FileNotFoundError:
-        pass
-
-    try:
-        legacy_result = load_merged_result(experiment_dir, fish_id)
-        legacy_indices = tuple(legacy_result["metadata"]["params"]["plane_indices"])
-        if legacy_indices == resolved_indices:
-            print(f"Loaded compatible legacy merged dF/F for {fish_id}.")
-            return legacy_result
-    except (FileNotFoundError, KeyError, TypeError):
-        pass
-
-    merged_result = merge_five_planes(experiment_dir, fish_id, resolved_indices)
-    save_merged_result(merged_result)
-    print(
-        f"Created merged dF/F for {fish_id} using planes "
-        f"{list(resolved_indices)}."
-    )
-    return merged_result

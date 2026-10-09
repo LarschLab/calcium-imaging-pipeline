@@ -49,11 +49,9 @@ def init_experiment_tree(base_dir, fish_name):
         # 03_analysis
         "03_analysis/structural/cellpose",
         "03_analysis/functional/suite2P",
-        "03_analysis/functional/suite2P/merged_dFoF",
 
         # 04_plots
         "04_plots",
-        "04_plots/basic_calcium_analysis",
     ]
 
     for rd in rel_dirs:
@@ -66,6 +64,4 @@ def init_experiment_tree(base_dir, fish_name):
         "raw_2p_anatomy": root / "01_raw/2p/anatomy",
         "analysis_suite2p": root / "03_analysis/functional/suite2P",
         "plots": root / "04_plots",
-        "merged_dfof": root / "03_analysis/functional/suite2P/merged_dFoF",
-        "basic_analysis_plots": root / "04_plots/basic_calcium_analysis",
     }
