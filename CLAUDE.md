@@ -20,8 +20,8 @@ reviewing code in this repository.
   `time.strftime(...)` timestamp). New processing steps should do the same —
   it's the only provenance record for how an array was produced.
 - **Memory hygiene**: stacks are multi-GB; `del` big arrays and
-  `gc.collect()` once no longer needed (see `process_fish` in
-  `preprocessing/preprocessing_tiff.py`).
+  `gc.collect()` once no longer needed (see `preprocess_functional_fish` in
+  `preprocessing/functional_preprocessing.py`).
 - **Never delete files on a network path.** Several lab data roots are
   network-mounted drives with no backup. Don't write code that deletes or
   overwrites files there, even in an apparently-disposable subfolder —
@@ -78,7 +78,9 @@ reviewing code in this repository.
   data instead — one bad item shouldn't crash a run processing many others.
   Reserve raising for invalid config or programmer errors.
 - Don't add inline type hints (`def f(name: str) -> int:`) — document
-  argument and return types in the docstring instead.
+  argument and return types in the docstring instead. Exception: dataclass
+  fields, which need annotations — use built-in types (`str | None`,
+  `dict | None`) so no `typing` import is needed.
 - Add short inline comments on lines doing non-obvious work (a tricky slice,
   why a constant has the value it does, what a loop iteration represents) —
   the goal is that a reader can follow the logic without re-deriving it.
@@ -92,11 +94,9 @@ reviewing code in this repository.
 
 - Structure notebooks as a sequence of short code cells each preceded by
   a markdown cell explaining what the step does — keep the markdown
-  concise (a sentence or two), not a restatement of the code.
-- Put imports and constants in cells at the top of the notebook, same
-  as a script's top-of-file imports. Constants get `UPPER_CASE` names
-  (e.g. `FRAME_RATE_HZ = 30`) so they read as configuration, distinct
-  from ordinary `snake_case` variables.
+  concise (a sentence or two), without technical details and not a restatement of the code.
+- Put imports and constants in cells at the top of the notebook if used across the whole
+  notebook, same as a script's top-of-file imports. Otherwise, put them in cells near their usage. Constants get `UPPER_CASE` names (e.g. `FRAME_RATE_HZ = 30`) so they read as configuration, distinct from ordinary `snake_case` variables.
 - It's fine to prototype computation directly in a cell while exploring,
   but the end state should have that logic moved into reusable functions
   imported from the project's `.py` modules, not left inline in the

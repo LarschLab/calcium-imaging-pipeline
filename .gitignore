@@ -1,5 +1,6 @@
 video_stimuli/
 data/
 04_plots/
-__pycache__/
 .idea/
+__pycache__/
+*.py[cod]
