@@ -25,16 +25,43 @@ from preprocessing.spatial_preprocessing import (
 )
 
 
-def _accepted_anatomy(fish: Path) -> Path:
-    """Return the expected trusted anatomy NRRD, or explain that it is missing."""
+def _accepted_anatomy(fish):
+    """Return the expected trusted anatomy NRRD, or explain that it is missing.
+
+    Args:
+        fish (Path): Path to the fish's experiment folder.
+
+    Returns:
+        Path: Path to the accepted anatomy NRRD file at
+        `02_reg/00_preprocessing/2p_anatomy/{fish_id}_anatomy_2P_GCaMP.nrrd`.
+
+    Raises:
+        FileNotFoundError: If the expected accepted anatomy NRRD does not
+            exist.
+    """
     expected = fish / "02_reg" / "00_preprocessing" / "2p_anatomy" / f"{fish.name}_anatomy_2P_GCaMP.nrrd"
     if not expected.exists():
         raise FileNotFoundError(f"Accepted anatomy NRRD not found: {expected}")
     return expected
 
 
-def _sample_functional(fish: Path, pages: int = 25) -> tuple[Path, np.ndarray]:
-    """Read a small functional sample for a quick orientation comparison."""
+def _sample_functional(fish, pages=25):
+    """Read a small functional sample for a quick orientation comparison.
+
+    Finds the first raw functional TIFF for the fish (excluding anatomy
+    files) and reads its first pages into an array.
+
+    Args:
+        fish (Path): Path to the fish's experiment folder.
+        pages (int): Number of leading TIFF pages to read.
+
+    Returns:
+        tuple[Path, np.ndarray]: The path of the functional TIFF file that
+        was read, and the stacked array of sampled pages.
+
+    Raises:
+        FileNotFoundError: If no raw functional TIFF is found for the fish.
+    """
     candidates = sorted(
         path for path in (fish / "01_raw" / "2p" / "functional").glob("*.tif*")
         if "anatomy" not in path.name.lower()
@@ -46,8 +73,20 @@ def _sample_functional(fish: Path, pages: int = 25) -> tuple[Path, np.ndarray]:
     return candidates[0], stack
 
 
-def main() -> None:
-    """Run the real-data comparison and write a detailed JSON report."""
+def main():
+    """Run the real-data comparison and write a detailed JSON report.
+
+    Parses command-line arguments, resolves the polarity for the requested
+    fish, preprocesses its anatomy with the resolved polarity, compares the
+    result against the previously accepted anatomy and functional outputs
+    under several flip transforms, and writes a detailed JSON report
+    summarizing whether the comparisons pass.
+
+    Returns:
+        None. Writes the validation report JSON file to the output
+        directory and prints a status summary to stdout; does not return a
+        value.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--microscopy-root", type=Path, required=True)
     parser.add_argument("--fish-id", default="L395_f11")

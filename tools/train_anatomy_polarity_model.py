@@ -9,8 +9,17 @@ from pathlib import Path
 from preprocessing.anatomy_polarity import save_model, train_from_raw_metadata
 
 
-def main() -> None:
-    """Train from labelled raw metadata and save model and validation files."""
+def main():
+    """Train from labelled raw metadata and save model and validation files.
+
+    Parses command-line arguments, trains the anatomy polarity model from
+    raw fish_orientation metadata, saves the trained model, writes the
+    validation results to a JSON file, and prints a summary to stdout.
+
+    Returns:
+        None. Trains the model and writes the model and validation files to
+        disk; does not return a value.
+    """
     parser = argparse.ArgumentParser(description="Train the anatomy polarity model from raw fish_orientation metadata")
     parser.add_argument("--microscopy-root", type=Path, required=True)
     parser.add_argument("--output-model", type=Path, required=True)

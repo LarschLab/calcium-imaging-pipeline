@@ -1,5 +1,11 @@
 """Anatomy-based polarity inference trained only from raw fish metadata."""
 
+# TODO: Danin is checking whether to keep the polarity classifier in this repo
+# (this module, tools/train_anatomy_polarity_model.py, and the classifier
+# inputs of spatial_preprocessing.resolve_polarity) or delete it as redundant.
+# No trained model is in the repo; only the canonical workflow uses it, and
+# the registration notebook takes polarity from metadata or FISH_POLARITY.
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,14 +46,14 @@ class AnatomyPolarityModel:
     config: AnatomyPolarityConfig
 
 
-def discover_anatomy(fish_dir: str | Path) -> Path:
+def discover_anatomy(fish_dir):
     """Find the one in-vivo anatomy TIFF belonging to a fish.
 
-    Parameters:
-    - fish_dir (str or Path): Root folder for one fish.
+    Args:
+        fish_dir (str or Path): Root folder for one fish.
 
     Returns:
-    - Path: The anatomy TIFF used for polarity prediction.
+        Path: The anatomy TIFF used for polarity prediction.
     """
     root = Path(fish_dir) / "01_raw" / "2p" / "anatomy"
     hits = sorted(
@@ -59,15 +65,15 @@ def discover_anatomy(fish_dir: str | Path) -> Path:
     return hits[0]
 
 
-def projection_variants(path: str | Path, percentiles: Sequence[int]) -> dict[int, np.ndarray]:
+def projection_variants(path, percentiles):
     """Make several top-down anatomy views at different brightness cutoffs.
 
-    Parameters:
-    - path (str or Path): Raw anatomy TIFF.
-    - percentiles (Sequence[int]): Brightness percentiles used to combine Z slices.
+    Args:
+        path (str or Path): Raw anatomy TIFF.
+        percentiles (Sequence[int]): Brightness percentiles used to combine Z slices.
 
     Returns:
-    - dict[int, np.ndarray]: One normalized projection for each percentile.
+        dict[int, np.ndarray]: One normalized projection for each percentile.
     """
     stack, _ = read_anatomy_pages(path)
     data = stack.astype(np.float32)
@@ -81,14 +87,34 @@ def projection_variants(path: str | Path, percentiles: Sequence[int]) -> dict[in
     return output
 
 
-def _keys(config: AnatomyPolarityConfig) -> tuple[tuple[int, bool], ...]:
-    """List the projection and edge-image combinations used by the model."""
+def _keys(config):
+    """List the projection and edge-image combinations used by the model.
+
+    Args:
+        config (AnatomyPolarityConfig): Model settings that define which
+            projection percentiles and edge modes are used.
+
+    Returns:
+        tuple[tuple[int, bool], ...]: Every (percentile, edge) combination
+            the model compares.
+    """
     modes = (False, True) if config.include_edges else (False,)
     return tuple((value, edge) for value in config.projection_percentiles for edge in modes)
 
 
-def _feature(image: np.ndarray, edge: bool, config: AnatomyPolarityConfig) -> np.ndarray:
-    """Turn an anatomy image into a compact pattern-comparison vector."""
+def _feature(image, edge, config):
+    """Turn an anatomy image into a compact pattern-comparison vector.
+
+    Args:
+        image (np.ndarray): Normalized top-down anatomy projection.
+        edge (bool): Whether to compute the feature from a Sobel edge map
+            instead of the raw image.
+        config (AnatomyPolarityConfig): Model settings controlling the
+            resize shape used before feature extraction.
+
+    Returns:
+        np.ndarray: Unit-norm HOG feature vector for the image.
+    """
     data = transform.resize(image, config.feature_shape, preserve_range=True, anti_aliasing=True).astype(np.float32)
     data = exposure.equalize_adapthist(np.clip(data, 0, 1), clip_limit=0.02).astype(np.float32)
     if edge:
@@ -103,8 +129,19 @@ def _feature(image: np.ndarray, edge: bool, config: AnatomyPolarityConfig) -> np
     return vector / (float(np.linalg.norm(vector)) + 1e-8)
 
 
-def _features(projections: Mapping[int, np.ndarray], config: AnatomyPolarityConfig) -> dict[tuple[int, bool, str], np.ndarray]:
-    """Build comparison vectors for every projection and possible polarity."""
+def _features(projections, config):
+    """Build comparison vectors for every projection and possible polarity.
+
+    Args:
+        projections (Mapping[int, np.ndarray]): Normalized projection for
+            each percentile, as returned by :func:`projection_variants`.
+        config (AnatomyPolarityConfig): Model settings controlling which
+            projection and edge combinations are built.
+
+    Returns:
+        dict[tuple[int, bool, str], np.ndarray]: Feature vector for every
+            (percentile, edge, polarity) combination.
+    """
     output: dict[tuple[int, bool, str], np.ndarray] = {}
     for percentile, edge in _keys(config):
         for polarity in ("north", "south"):
@@ -115,22 +152,24 @@ def _features(projections: Mapping[int, np.ndarray], config: AnatomyPolarityConf
 
 
 def build_model(
-    projections: Mapping[str, Mapping[int, np.ndarray]],
-    labels: Mapping[str, str],
+    projections,
+    labels,
     *,
-    config: AnatomyPolarityConfig | None = None,
-    calibration_floor: float = 0.0,
-) -> AnatomyPolarityModel:
+    config=None,
+    calibration_floor=0.0,
+):
     """Build a north/south reference model from labelled anatomy projections.
 
-    Parameters:
-    - projections (Mapping): Projection images grouped by fish ID.
-    - labels (Mapping): Known north/south direction for each reference fish.
-    - config (AnatomyPolarityConfig or None): Optional model settings.
-    - calibration_floor (float): Minimum confidence accepted as a prediction.
+    Args:
+        projections (Mapping[str, Mapping[int, np.ndarray]]): Projection
+            images grouped by fish ID.
+        labels (Mapping[str, str]): Known north/south direction for each
+            reference fish.
+        config (AnatomyPolarityConfig or None): Optional model settings.
+        calibration_floor (float): Minimum confidence accepted as a prediction.
 
     Returns:
-    - AnatomyPolarityModel: Model ready to predict new fish.
+        AnatomyPolarityModel: Model ready to predict new fish.
     """
     cfg = config or AnatomyPolarityConfig()
     fish_ids = tuple(sorted(projections))
@@ -145,13 +184,23 @@ def build_model(
 
 
 def predict(
-    model: AnatomyPolarityModel,
-    projections: Mapping[int, np.ndarray],
-) -> tuple[PolarityPrediction, tuple[float, ...]]:
+    model,
+    projections,
+):
     """Predict whether a fish points north or south in the raw image.
 
     Returns both the plain prediction record and the individual comparison
     margins used to judge confidence.
+
+    Args:
+        model (AnatomyPolarityModel): Trained north/south reference model.
+        projections (Mapping[int, np.ndarray]): Normalized projection for
+            each percentile, as returned by :func:`projection_variants`.
+
+    Returns:
+        tuple[PolarityPrediction, tuple[float, ...]]: The prediction record
+            and the individual north-minus-south comparison margins used to
+            judge confidence.
     """
     feature_set = _features(projections, model.config)
     margins = []
@@ -175,11 +224,24 @@ def predict(
 
 
 def _references(
-    microscopy_root: str | Path,
-    config: AnatomyPolarityConfig,
-    exclude_prefixes: Sequence[str],
-) -> tuple[dict[str, dict[int, np.ndarray]], dict[str, str]]:
-    """Collect usable labelled fish from a microscopy directory."""
+    microscopy_root,
+    config,
+    exclude_prefixes,
+):
+    """Collect usable labelled fish from a microscopy directory.
+
+    Args:
+        microscopy_root (str or Path): Folder containing the reference fish.
+        config (AnatomyPolarityConfig): Model settings used to build
+            projection variants for each reference fish.
+        exclude_prefixes (Sequence[str]): Fish groups that must not be
+            training data.
+
+    Returns:
+        tuple[dict[str, dict[int, np.ndarray]], dict[str, str]]: Projection
+            images grouped by fish ID, and the known north/south label for
+            each reference fish.
+    """
     root = Path(microscopy_root)
     projections: dict[str, dict[int, np.ndarray]] = {}
     labels: dict[str, str] = {}
@@ -202,21 +264,23 @@ def _references(
 
 
 def train_from_raw_metadata(
-    microscopy_root: str | Path,
+    microscopy_root,
     *,
-    config: AnatomyPolarityConfig | None = None,
-    exclude_prefixes: Sequence[str] = ("L427",),
-) -> tuple[AnatomyPolarityModel, list[dict[str, object]]]:
+    config=None,
+    exclude_prefixes=("L427",),
+):
     """Train the model and validate it while holding out each acquisition group.
 
-    Parameters:
-    - microscopy_root (str or Path): Folder containing the reference fish.
-    - config (AnatomyPolarityConfig or None): Optional prediction settings.
-    - exclude_prefixes (Sequence[str]): Fish groups that must not be training data.
+    Args:
+        microscopy_root (str or Path): Folder containing the reference fish.
+        config (AnatomyPolarityConfig or None): Optional prediction settings.
+        exclude_prefixes (Sequence[str]): Fish groups that must not be
+            training data.
 
     Returns:
-    - AnatomyPolarityModel: Model trained on all eligible references.
-    - list[dict]: Held-out validation result for each reference fish.
+        tuple[AnatomyPolarityModel, list[dict]]: Model trained on all
+            eligible references, and the held-out validation result for
+            each reference fish.
     """
     cfg = config or AnatomyPolarityConfig()
     projections, labels = _references(microscopy_root, cfg, exclude_prefixes)
@@ -253,15 +317,32 @@ def train_from_raw_metadata(
     return build_model(projections, labels, config=cfg, calibration_floor=floor), validation
 
 
-def predict_fish(model: AnatomyPolarityModel, fish_dir: str | Path) -> PolarityPrediction:
-    """Run a saved polarity model on one fish's raw anatomy TIFF."""
+def predict_fish(model, fish_dir):
+    """Run a saved polarity model on one fish's raw anatomy TIFF.
+
+    Args:
+        model (AnatomyPolarityModel): Trained north/south reference model.
+        fish_dir (str or Path): Root folder for one fish.
+
+    Returns:
+        PolarityPrediction: Predicted north/south direction and confidence
+            for the fish.
+    """
     path = discover_anatomy(fish_dir)
     projections = projection_variants(path, model.config.projection_percentiles)
     return predict(model, projections)[0]
 
 
-def save_model(model: AnatomyPolarityModel, path: str | Path) -> Path:
-    """Save a polarity model and its settings in one compressed file."""
+def save_model(model, path):
+    """Save a polarity model and its settings in one compressed file.
+
+    Args:
+        model (AnatomyPolarityModel): Trained north/south reference model.
+        path (str or Path): Destination for the compressed ``.npz`` file.
+
+    Returns:
+        Path: The path the model was written to.
+    """
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -284,8 +365,15 @@ def save_model(model: AnatomyPolarityModel, path: str | Path) -> Path:
     return output
 
 
-def load_model(path: str | Path) -> AnatomyPolarityModel:
-    """Load a polarity model previously written by :func:`save_model`."""
+def load_model(path):
+    """Load a polarity model previously written by :func:`save_model`.
+
+    Args:
+        path (str or Path): Location of the compressed ``.npz`` model file.
+
+    Returns:
+        AnatomyPolarityModel: The reconstructed north/south reference model.
+    """
     archive = np.load(Path(path), allow_pickle=False)
     metadata = json.loads(str(archive["metadata"].item()))
     cfg_data = metadata["config"]

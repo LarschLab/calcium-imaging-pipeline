@@ -20,15 +20,16 @@ separate reproducible environments.
 For a retroactive run:
 
 ```bash
-python -m preprocessing.drift_analysis_cli \
-  --fish-dir /path/to/Microscopy/L000_f00 \
-  --output-dir /path/to/new-empty-output \
+python -m preprocessing.drift_analysis \
+  --data-root /path/to/Microscopy \
+  --fish L000_f00 \
   --workers 8
 ```
 
 This command does not repeat raw TIFF preprocessing or motion correction. It
-reads their saved outputs and writes the drift-analysis bundle to the requested
-new directory. It requires a canonical spatial manifest and motion-corrected
+reads their saved outputs and writes the drift-analysis bundle to a new dated
+folder inside the fish folder (or under `--output-root`). Edit the settings
+block at the bottom of `drift_analysis.py`, or see `--help` for all options. It requires a canonical spatial manifest and motion-corrected
 movies declared by that manifest. Legacy folders without this record, including
 manually transformed `*_mcorrected_flipX.tif` files, fail closed because their
 coordinate direction cannot be inferred safely.
