@@ -16,11 +16,14 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import csv
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
 from skimage.transform import resize
 import tifffile
+
+from utils import itk_safe_directory
 
 
 SPATIAL_MANIFEST_VERSION = 1  # layout version written into each manifest, to detect future format changes
@@ -436,7 +439,12 @@ def write_registration_nrrd(array_zyx, path, spacing_xyz_um):
         raise ImportError("SimpleITK is required to write canonical anatomy NRRD") from exc
     image = sitk.GetImageFromArray(np.asarray(array_zyx, dtype=np.uint8))  # numpy (Z, Y, X) -> image with X, Y, Z axes
     image.SetSpacing(spacing)  # SimpleITK takes spacing in X, Y, Z order
-    sitk.WriteImage(image, str(output), useCompression=False)
+    # SimpleITK can't open non-ASCII paths on Windows ("Université"): write in
+    # an ASCII staging folder, then copy into place with Python.
+    with itk_safe_directory() as staging_directory:
+        staged_output = staging_directory / "anatomy.nrrd"
+        sitk.WriteImage(image, str(staged_output), useCompression=False)
+        shutil.copyfile(staged_output, output)
     return "SimpleITK"
 
 

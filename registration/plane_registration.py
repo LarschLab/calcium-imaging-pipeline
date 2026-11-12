@@ -27,8 +27,9 @@ Terms used below:
         ROI number.
 """
 import json
+import os
 import pathlib
-import tempfile
+import shutil
 import time
 
 import ants
@@ -44,9 +45,32 @@ from preprocessing.spatial_preprocessing import (
 )
 from registration.image_utils import local_unsharp, norm01, normalized_cross_correlation
 from registration.plane_matching import scale_image
+from utils import itk_readable_paths, itk_safe_directory
 
 # Where functional_preprocessing.preprocess_functional_fish writes its metadata, relative to the fish folder.
 PREPROCESSING_METADATA_DIR = "02_reg/00_preprocessing/2p_functional/01_individualPlanes"
+
+
+def suite2p_file_path(suite2p_plane_folder, file_prefix, file_name):
+    """Find a suite2p output file under either naming used in the lab's data.
+
+    Most fish use prefixed names (`{file_prefix}_ops.npy`); older ones keep
+    suite2p's defaults (`ops.npy`). Files are never renamed, so both are read.
+
+    Args:
+        suite2p_plane_folder (Path): The plane's suite2p folder.
+        file_prefix (str): e.g. `"{fish_id}_plane{i}"`.
+        file_name (str): suite2p's default name, e.g. `"ops.npy"`.
+
+    Returns:
+        Path: The prefixed file if present, else the default-named one if
+        present, else the prefixed path (so a missing-file error names it).
+    """
+    folder = pathlib.Path(suite2p_plane_folder)
+    prefixed_path = folder / f"{file_prefix}_{file_name}"
+    default_path = folder / file_name
+    found_path = default_path if not prefixed_path.exists() and default_path.exists() else prefixed_path
+    return found_path
 
 
 def load_suite2p_plane(suite2p_plane_folder, file_prefix):
@@ -54,22 +78,25 @@ def load_suite2p_plane(suite2p_plane_folder, file_prefix):
 
     Args:
         suite2p_plane_folder (Path): Folder with this plane's suite2p
-            outputs (`{file_prefix}_ops.npy`, `{file_prefix}_stat.npy`).
+            outputs (`{file_prefix}_ops.npy`/`_stat.npy`, or suite2p's
+            default `ops.npy`/`stat.npy`).
         file_prefix (str): Filename prefix, e.g. `"{fish_id}_plane{i}"`.
 
     Returns:
         tuple: `(reference_image, stat_array)` -- suite2p's mean image
         (`ops["meanImg"]`) and the array of per-ROI stat dicts.
     """
-    # ops.npy (from Windows Suite2P) can pickle WindowsPath objects, which
-    # crash on macOS/Linux -- alias to PosixPath just for this load.
-    original_windows_path = pathlib.WindowsPath
-    pathlib.WindowsPath = pathlib.PosixPath
+    # ops.npy can pickle the path class of the OS Suite2P ran on, which can't be
+    # created on the other OS (WindowsPath on macOS/Linux, PosixPath on Windows).
+    # Alias that foreign class to this OS's own path class just for this load.
+    foreign_class_name, native_class = ("PosixPath", pathlib.WindowsPath) if os.name == "nt" else ("WindowsPath", pathlib.PosixPath)
+    original_foreign_class = getattr(pathlib, foreign_class_name)
+    setattr(pathlib, foreign_class_name, native_class)
     try:
-        ops = np.load(suite2p_plane_folder / f"{file_prefix}_ops.npy", allow_pickle=True).item()
-        stat_array = np.load(suite2p_plane_folder / f"{file_prefix}_stat.npy", allow_pickle=True)
+        ops = np.load(suite2p_file_path(suite2p_plane_folder, file_prefix, "ops.npy"), allow_pickle=True).item()
+        stat_array = np.load(suite2p_file_path(suite2p_plane_folder, file_prefix, "stat.npy"), allow_pickle=True)
     finally:
-        pathlib.WindowsPath = original_windows_path
+        setattr(pathlib, foreign_class_name, original_foreign_class)
     reference_image = ops["meanImg"]
     return reference_image, stat_array
 
@@ -267,16 +294,19 @@ def _run_rigid_then_affine(fixed_image_ants, moving_image_ants, transform_output
         "mask_all_stages": True,
     }
 
-    # Rigid: small rotation/shift correction around the NCC placement. 
-    # ANTsPy's default start first lines up the two images'
-    # brightness centres; the square mask leaves only the plane's region of
-    # the anatomy, so that shift is small.
-    with tempfile.TemporaryDirectory() as rigid_directory:
+    affine_path = pathlib.Path(f"{transform_output_prefix}0GenericAffine.mat")
+    # ANTs writes into an ASCII-only staging folder (it can't open paths like
+    # "Université" on Windows); the Affine file is then copied out by Python.
+    with itk_safe_directory() as staging_directory:
+        # Rigid: small rotation/shift correction around the NCC placement.
+        # ANTsPy's default start first lines up the two images'
+        # brightness centres; the square mask leaves only the plane's region of
+        # the anatomy, so that shift is small.
         rigid_registration = ants.registration(
             fixed=fixed_image_ants,
             moving=moving_image_ants,
             type_of_transform="Rigid",
-            outprefix=str(pathlib.Path(rigid_directory) / "rigid_"),
+            outprefix=str(staging_directory / "rigid_"),
             **registration_kwargs,
         )
         # Affine: adds the residual scale/shear correction on top of the rigid fit.
@@ -285,14 +315,37 @@ def _run_rigid_then_affine(fixed_image_ants, moving_image_ants, transform_output
             moving=moving_image_ants,
             type_of_transform="Affine",
             initial_transform=rigid_registration["fwdtransforms"][0],
-            outprefix=str(transform_output_prefix),
+            outprefix=str(staging_directory / "affine_"),
             **registration_kwargs,
         )
-    # Named explicitly rather than taken from ANTsPy's `fwdtransforms`: ANTsPy
-    # builds that list from every file matching the output prefix, which can
-    # pick up unrelated leftovers (e.g. an older run's Rigid file).
-    transformlist = [f"{transform_output_prefix}0GenericAffine.mat"]
+        # Named explicitly rather than taken from ANTsPy's `fwdtransforms`, which
+        # lists every file matching the output prefix.
+        affine_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(staging_directory / "affine_0GenericAffine.mat", affine_path)
+    transformlist = [str(affine_path)]
     return affine_registration, transformlist
+
+
+def _apply_transforms(fixed_image_ants, moving_image_ants, transformlist, interpolator):
+    """Apply saved ANTs transforms, staging non-ASCII transform paths ANTs can't open.
+
+    Args:
+        fixed_image_ants (ants.ANTsImage): Output grid.
+        moving_image_ants (ants.ANTsImage): Image to warp.
+        transformlist (list of str): Transform files, in ANTs' order.
+        interpolator (str): ANTs interpolator name, e.g. "nearestNeighbor".
+
+    Returns:
+        ants.ANTsImage: The warped image.
+    """
+    with itk_safe_directory() as staging_directory:
+        warped_image = ants.apply_transforms(
+            fixed=fixed_image_ants,
+            moving=moving_image_ants,
+            transformlist=itk_readable_paths(transformlist, staging_directory),
+            interpolator=interpolator,
+        )
+    return warped_image
 
 
 def _post_transform_ncc(warped_image, fixed_image, zero_tolerance=1e-8, min_overlap_pixels=4, low_percentile=1.0, high_percentile=99.0):
@@ -459,11 +512,8 @@ def register_plane_to_anatomy(
 
     # 6. Warp the support image to find where the registered plane has
     # data, and zero everything else.
-    warped_support = ants.apply_transforms(
-        fixed=fixed_image_ants,
-        moving=_ants_image_from_array(moving_support, anatomy_pixel_size_um),
-        transformlist=transformlist,
-        interpolator="nearestNeighbor",
+    warped_support = _apply_transforms(
+        fixed_image_ants, _ants_image_from_array(moving_support, anatomy_pixel_size_um), transformlist, "nearestNeighbor"
     )
     valid_mask = warped_support.numpy() > support_threshold
     warped_image = np.where(valid_mask, affine_registration["warpedmovout"].numpy(), 0.0).astype(np.float32)
@@ -578,11 +628,9 @@ def _resample_labels_ants_nn(label_image, registration):
 
     # Output grid for apply_transforms -- only shape/spacing matter.
     anatomy_domain = _ants_image_from_array(np.zeros(placement["canvas_shape"], dtype=np.float32), pixel_size_um)
-    warped_labels_image = ants.apply_transforms(
-        fixed=anatomy_domain,
-        moving=_ants_image_from_array(placed_labels.astype(np.float32), pixel_size_um),
-        transformlist=registration["transformlist"],
-        interpolator="nearestNeighbor",
+    warped_labels_image = _apply_transforms(
+        anatomy_domain, _ants_image_from_array(placed_labels.astype(np.float32), pixel_size_um),
+        registration["transformlist"], "nearestNeighbor",
     )
     warped_labels = np.rint(warped_labels_image.numpy()).astype(np.int64)
     return warped_labels
@@ -604,6 +652,7 @@ def warp_roi_masks_to_anatomy(stat_array, registration, native_shape, best_depth
 
     Returns:
         list: Copies of `stat_array`'s dicts (skipped ROIs left out) with
+        `suite2p_index` (int, position in `stat_array`),
         `xpix_aligned`/`ypix_aligned` (numpy.ndarray of int) added,
         `med_aligned` ([row, col] median, `[nan, nan]` if empty), and
         `z_pix` (numpy.ndarray of int, `best_depth` repeated once per
@@ -616,6 +665,8 @@ def warp_roi_masks_to_anatomy(stat_array, registration, native_shape, best_depth
     for roi_index in kept_roi_indices:
         ypix_aligned, xpix_aligned = np.where(warped_labels == roi_index + 1)
         new_roi = dict(stat_array[roi_index])
+        # Skipped ROIs are left out, so list position != suite2p index; keep the index.
+        new_roi["suite2p_index"] = roi_index
         new_roi["xpix_aligned"] = xpix_aligned.astype(int)
         new_roi["ypix_aligned"] = ypix_aligned.astype(int)
         if xpix_aligned.size > 0:

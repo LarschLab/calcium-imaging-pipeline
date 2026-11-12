@@ -23,6 +23,7 @@ from registration.plane_registration import (
     _build_roi_label_image,
     _place_on_canvas,
     _square_around_placement,
+    load_suite2p_plane,
     read_functional_xy_frame,
     register_plane_to_anatomy,
     warp_roi_masks_to_anatomy,
@@ -254,6 +255,55 @@ class FunctionalXyFrameTests(unittest.TestCase):
 
         self.assertEqual(xy_frame, CANONICAL_XY_FRAME)
         self.assertEqual(source, str(manifest_path))
+
+
+class NonAsciiOutputPathTest(unittest.TestCase):
+    """Registration works when outputs live under a non-ASCII path (e.g. "Université")."""
+
+    def test_register_and_warp_rois_under_accented_folder(self):
+        """The transform is saved where asked and ROIs warp, though ANTs can't open such paths itself."""
+        anatomy_slice = _build_synthetic_anatomy_slice()
+        reference_image = _build_reference_image(anatomy_slice)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            transform_prefix = Path(temporary_directory) / "Université" / "transMatrices" / "plane0_to_anatomy_"
+
+            registration = register_plane_to_anatomy(reference_image, anatomy_slice, PIXEL_SIZE_UM, TRUE_SCALE, transform_prefix)
+            stat_array = np.array([_square_roi(ROI_ROW_START, ROI_COL_START, ROI_SIZE)])
+            warped_rois = warp_roi_masks_to_anatomy(stat_array, registration, reference_image.shape, best_depth=0)
+
+            self.assertTrue(Path(registration["transformlist"][0]).is_file())
+            self.assertGreater(warped_rois[0]["xpix_aligned"].size, 0)
+
+
+class LoadSuite2pPlaneTest(unittest.TestCase):
+    """Suite2p outputs that pickle path objects load on this operating system."""
+
+    def test_ops_with_native_path_loads(self):
+        """An ops.npy holding this OS's own Path loads (it crashed on Windows before)."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            plane_folder = Path(temporary_directory)
+            mean_image = np.arange(6, dtype=np.float32).reshape(2, 3)
+            ops = {"meanImg": mean_image, "save_path": Path(temporary_directory)}
+            np.save(plane_folder / "L000_f01_plane0_ops.npy", ops, allow_pickle=True)
+            np.save(plane_folder / "L000_f01_plane0_stat.npy", np.array([{"xpix": [0], "ypix": [0]}]), allow_pickle=True)
+
+            reference_image, stat_array = load_suite2p_plane(plane_folder, "L000_f01_plane0")
+
+            np.testing.assert_array_equal(reference_image, mean_image)
+            self.assertEqual(len(stat_array), 1)
+
+    def test_suite2p_default_file_names_load(self):
+        """Older fish keep suite2p's default names (ops.npy, stat.npy); they load too."""
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            plane_folder = Path(temporary_directory)
+            mean_image = np.ones((2, 3), dtype=np.float32)
+            np.save(plane_folder / "ops.npy", {"meanImg": mean_image}, allow_pickle=True)
+            np.save(plane_folder / "stat.npy", np.array([{"xpix": [0], "ypix": [0]}]), allow_pickle=True)
+
+            reference_image, stat_array = load_suite2p_plane(plane_folder, "L000_f01_plane0")
+
+            np.testing.assert_array_equal(reference_image, mean_image)
+            self.assertEqual(len(stat_array), 1)
 
 
 if __name__ == "__main__":
