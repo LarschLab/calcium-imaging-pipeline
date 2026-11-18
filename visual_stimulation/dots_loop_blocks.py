@@ -122,7 +122,7 @@ meta_dir = paths["raw_2p_metadata"]       # where we save logs and parameter CSV
 
 # ===== Load stimuli CSVs =====
 stimuli = {}
-for file_path in stimuli_path.glob("*.csv"):
+for file_path in stimuli_path.glob("*_trajectory.csv"):
     df = pd.read_csv(file_path)
     key = file_path.stem.split("_")[0]
     stimuli[key] = df
@@ -211,9 +211,10 @@ try:
                 if flip_coordinates:
                     x, y = -x, -y
                 pos = (x, y)
-                dots[dot_idx].radius = radius
-                dots[dot_idx].pos = pos
-                dots[dot_idx].draw()
+                if radius > 0:
+                    dots[dot_idx].radius = radius
+                    dots[dot_idx].pos = pos
+                    dots[dot_idx].draw()
             win.flip()
         pin_aux.write(0)
 
@@ -227,6 +228,9 @@ except KeyboardInterrupt:
     print("\nManual interruption detected. Finalizing and saving logs...")
 
 finally:
+    # Return trigger outputs to LOW on completion or interruption.
+    pin_aux.write(0)
+    pin_acq.write(0)
     # End experiment
     exp_event_log.append({'event': f'B{block_num}_end', 'timestamp': exp_clock.getTime()})
     block_event_log.append({'event': f'B{block_num}_end', 'timestamp': block_clock.getTime()})
