@@ -62,7 +62,8 @@ them with `--nas-project-root <path>` instead.
 
 - It asks for a **partition**: `test` runs one quick job directly in your
   terminal (1 CPU, 30 min, to check paths); `cpu` submits real jobs (48 CPUs,
-  up to 24 h each).
+  up to 12 h each). Jobs over 12 h land in the `cpu-long` queue, which is
+  often full.
 - It then asks for the **fish IDs**, space-separated.
 - Add `--dry-run` to see what it would do without running ANTs.
 - Check the `Manifest:` line it prints. If it says `FOUND`, it is reading a

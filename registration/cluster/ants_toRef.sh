@@ -39,7 +39,10 @@ MAIL_USER="${MAIL_USER:-}"
 MANIFEST_DIR="${MANIFEST_DIR:-${NAS:-}/Danin/regManifest}"
 MANIFEST_CSV="${MANIFEST_CSV:-$MANIFEST_DIR/regManifest.csv}"
 
-WALL_TIME="24:00:00"
+# Keep at 12 h or less: longer jobs get the cpu-long QOS, whose cluster-wide
+# node cap is often full (jobs then wait with reason QOSGrpNodeLimit).
+# One fish takes ~30-60 min on 48 CPUs.
+WALL_TIME="12:00:00"
 MAIL_TYPE="${MAIL_TYPE:-END,FAIL}"
 
 # CLI flags (supported: --dry-run / -n, --syn-only, --identity-init)
