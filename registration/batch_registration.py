@@ -17,7 +17,6 @@ Outputs follow the lab's per-fish folder convention; QC figures and the
 experiment summary go to a separate review folder chosen by the caller.
 """
 
-import csv
 import json
 import time
 from pathlib import Path
@@ -26,9 +25,10 @@ import numpy as np
 import pandas as pd
 import tifffile
 
-from preprocessing.anatomy_averaging import PARTIAL_SUFFIX, index_fish_folders, read_file_z_step_um
+from preprocessing.anatomy_averaging import PARTIAL_SUFFIX, read_file_z_step_um
 from preprocessing.canonical_preprocessing import preprocess_canonical_anatomy
 from preprocessing.spatial_preprocessing import _metadata_value, anatomy_z_spacing_um, read_raw_metadata_polarity
+from registration.experiment_fish import find_experiment_fish_folders, list_experiment_fish  # noqa: F401 (re-exported for register_experiment.ipynb)
 from registration.image_utils import read_pixel_size_um
 from registration.plane_matching import match_plane_to_anatomy
 from registration.plane_registration import (
@@ -43,31 +43,10 @@ from registration.roi_to_reference import convert_rois_to_canonical_space
 REGISTRATION_STAGE_DIR = Path("02_reg") / "07_2pf-a"  # functional plane -> 2P anatomy
 ANATOMY_DIR = Path("01_raw") / "2p" / "anatomy"
 SUITE2P_DIR = Path("03_analysis") / "functional" / "suite2P"
-EXCLUDED_DECISION = "exclude"
 CSV_Z_STEP_KEY = "step_size_um_anatomy"  # anatomy slice spacing in the experimenter's metadata CSV
 EX_VIVO_MARKERS = ("ex_vivo", "exvivo")
 QC_FIGURE_NAMES = ("registration_overlays", "depth_profiles", "roi_overlays", "mean_vs_anatomy")
 QC_FIGURE_EXTENSION = ".png"
-
-
-def list_experiment_fish(overview_csv, experiment):
-    """List one experiment's fish from the Paper overview, leaving out excluded ones.
-
-    Args:
-        overview_csv (Path): `2p_derived/global/overview.csv`.
-        experiment (str): Experiment name, e.g. "Exp_9_RF_memory_inhibition".
-
-    Returns:
-        list: dicts with `fish_id` and `final_decision`, in overview order.
-    """
-    with Path(overview_csv).open(newline="", encoding="utf-8-sig") as overview_file:
-        rows = list(csv.DictReader(overview_file))
-    experiment_fish = [
-        {"fish_id": row["Fish"], "final_decision": row["Final decision"]}
-        for row in rows
-        if row["Experiment"] == experiment and row["Final decision"] != EXCLUDED_DECISION
-    ]
-    return experiment_fish
 
 
 def roi_table_path(fish_folder, fish_id):
@@ -393,21 +372,3 @@ def collect_fish_summary(fish_folder, fish_id):
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         rows.append({"fish_id": fish_id, "plane": plane_index, **plane_summary_row(metadata)})
     return rows
-
-
-def find_experiment_fish_folders(data_root, experiment_fish):
-    """Locate each fish's data folder by the fish ID at the start of the folder name.
-
-    Args:
-        data_root (Path): Folder holding one sub-folder per fish.
-        experiment_fish (list): From `list_experiment_fish`.
-
-    Returns:
-        dict: fish_id -> Path, or None if zero or several folders match.
-    """
-    folders_by_fish = index_fish_folders(data_root)
-    fish_folders = {}
-    for fish in experiment_fish:
-        matches = folders_by_fish.get(fish["fish_id"], [])
-        fish_folders[fish["fish_id"]] = matches[0] if len(matches) == 1 else None
-    return fish_folders
