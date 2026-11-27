@@ -27,10 +27,48 @@ suite2p ROI (functional plane)
 ROI position in the fish's canonical anatomy      ← already computed, in a CSV
    │  step 3: canonical anatomy → reference brain (ANTs 3D: affine + warp)
    ▼
-ROI position in the reference brain (common space)   ← to do in the new repo
+ROI position in the reference brain (common space)   ← computed, in a second CSV
 ```
 
-Steps 1 and 2 are done. Their result is one CSV per fish. Only step 3 has to be applied.
+All three steps are done. Step 3 was applied to the ROIs with
+`notebooks/rois_to_reference.ipynb` (see "ROI positions in the reference" below):
+**use that table**; the recipe further down is kept as documentation.
+
+## ROI positions in the reference (result of step 3)
+
+`<folder>\02_reg\08_2pa-ref\roi_positions\ref_L433_f02\<fish_id>_roi_positions_in_ref.csv`,
+with a `_metadata.json` next to it (transform files, voxel sizes, date). One row per
+suite2p ROI (all ROIs, not only cells):
+
+| column | meaning |
+|---|---|
+| `fish_id`, `plane`, `suite2p_index` | ROI identity (same as the ROI position table) |
+| `is_cell`, `cell_probability` | from suite2p `iscell.npy` |
+| `x_ref_um`, `y_ref_um`, `z_ref_um` | **ROI centre in the reference brain, µm** |
+| `x_ref_vox`, `y_ref_vox`, `z_ref_vox` | same centre in reference voxels (x = column, y = row, z = slice); for drawing on the reference NRRD |
+| `x_canonical`, `y_canonical`, `z_canonical` | original centre in the fish's canonical anatomy (voxels) |
+
+A few ROIs per fish have no position (NaN): their pixels fell outside the anatomy
+in step 1. The reference fish (L433_f02) is copied without transform. Never
+overwritten: delete a fish's table by hand to redo it.
+
+QC per experiment: `Lab\Results\Paper\2p_derived\registration\<experiment>\rois_in_ref\`
+(one figure per fish, an overview, and `<experiment>_rois_in_ref_qc.csv`). The QC
+checks that each ROI lands on the same anatomy in the fish's warped image as in
+its own anatomy (`correlation`, expected ≥ 0.9). All 36 mapped fish (Exp 1, 5, 7,
+8, 9) gave 0.96–1.00 with 100% of ROIs inside. Not mapped (no step 1 ROI table):
+L742_f08, L978_f08.
+
+The QC also flags fish whose **step 1** plane matching looks wrong (two planes on
+the same anatomy slice, or planes out of depth order). Step 3 moves those
+positions faithfully, so the affected planes are misplaced in the reference too:
+L684_f01 and L733_f01 (planes 0 and 1 share one slice), L800_f06 (plane depths
+52, 51, 25, 35, 33). Check them in the step 1 QC before trusting their positions.
+
+**Linking to dF/F traces:** in `<fish_id>_dFoF_merged_map.csv`, `roi_index_in_plane`
+is the column inside that plane's *filtered* dF/F, **not** the suite2p index.
+Join on the map's `plane` (written `plane0`, `plane1`, ...) + `filtered_roi_index`
+↔ this table's `plane` (0, 1, ...) + `suite2p_index`.
 
 ## Files per fish
 
@@ -120,5 +158,5 @@ up gives wrong positions without any error message.
 - **Linking ROIs to dF/F traces:** use `plane` and `suite2p_index`. The merged
   dF/F of a fish is in `<folder>\03_analysis\functional\suite2P\merged_dFoF\`, and
   `<fish_id>_dFoF_merged_map.csv` maps each column to `plane` and
-  `roi_index_in_plane`. Check whether `roi_index_in_plane` is the suite2p index or
-  an index after filtering before joining.
+  `filtered_roi_index` (the suite2p index). `roi_index_in_plane` is an index
+  after filtering; don't join on it (see "Linking to dF/F traces" above).

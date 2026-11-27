@@ -15,6 +15,8 @@ from registration.reference_qc import (
     fish_mean_image,
     overlap_correlation,
     read_previous_decisions,
+    roi_position_agreement,
+    sample_stack_at_voxels,
     scale_fish_image,
     spread_depths,
     summarize_fish,
@@ -135,6 +137,25 @@ class DecisionColumnTests(unittest.TestCase):
         qc_table = pd.DataFrame({"fish_id": ["fish_a"]})
         merged = add_decision_columns(qc_table, read_previous_decisions(Path("does_not_exist.csv")))
         self.assertEqual(merged["decision"].tolist(), [""])
+
+
+class RoiSamplingTests(unittest.TestCase):
+    def test_samples_xyz_positions_and_nan_outside(self):
+        stack = np.arange(np.prod(STACK_SHAPE_ZYX), dtype=np.float32).reshape(STACK_SHAPE_ZYX)
+        voxels_xyz = np.array([[4.0, 2.0, 1.0], [4.5, 2.0, 1.0], [-1.0, 0.0, 0.0], [np.nan, 1.0, 1.0], [29.0, 19.0, 9.0]])
+        values = sample_stack_at_voxels(stack, voxels_xyz)
+        self.assertEqual(values[0], stack[1, 2, 4])
+        self.assertAlmostEqual(values[1], (stack[1, 2, 4] + stack[1, 2, 5]) / 2)  # linear between x = 4 and 5
+        self.assertTrue(np.isnan(values[2]) and np.isnan(values[3]))
+        self.assertEqual(values[4], stack[9, 19, 29])  # last voxel is still inside
+
+    def test_agreement_is_one_for_identical_values_and_counts_outside(self):
+        fish_values = np.array([1.0, 5.0, 2.0, 8.0, np.nan])
+        warped_values = np.array([2.0, 10.0, 4.0, np.nan, 3.0])
+        agreement = roi_position_agreement(fish_values, warped_values)
+        self.assertAlmostEqual(agreement["correlation"], 1.0)
+        self.assertEqual(agreement["n_compared"], 3)
+        self.assertAlmostEqual(agreement["fraction_inside"], 3 / 4)
 
 
 if __name__ == "__main__":

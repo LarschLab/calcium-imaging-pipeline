@@ -5,21 +5,23 @@ different fish can eventually be compared in one common reference brain.
 
 ## Coordinate chain
 
-Each ROI passes through four coordinate frames. Only steps 1–2 exist here.
+Each ROI passes through four coordinate frames. Steps 1–3 exist here; step 4 is analysis (done downstream).
 
 | Step | From → to | How | Code | Status |
 |---|---|---|---|---|
 | 1 | functional plane → raw 2P anatomy stack | NCC search for best depth + scale + XY, then ANTs Rigid→Affine (2D, in-plane) | `plane_matching.match_plane_to_anatomy`, `plane_registration.register_plane_to_anatomy`, `plane_registration.warp_roi_masks_to_anatomy` | done |
 | 2 | raw anatomy → canonical anatomy (NRRD) | fixed index math: polarity XY flip (north=flipY, south=flipX), Z reversal, resize to 750×750 | `roi_to_reference.convert_rois_to_canonical_space` (coords), `preprocessing.canonical_preprocessing.preprocess_canonical_anatomy` (image) | done, not yet called by the notebook |
-| 3 | canonical anatomy → reference brain | 3D ANTs registration of the anatomy NRRD to a template | — | **not implemented**; reference brain not chosen |
-| 4 | per-fish ROIs in reference → cross-fish maps | pool/density/average responsive ROIs | — | **not implemented** |
+| 3 | canonical anatomy → reference brain (`ref_L433_f02`) | 3D ANTs Rigid+Affine+SyN of the anatomy NRRD (cluster), then applied to ROI centres: inverted affine + `1InverseWarp` | `cluster/ants_toRef.sh` (images); `roi_to_reference.apply_reference_transform_to_points`, `batch_roi_to_reference`, `notebooks/rois_to_reference.ipynb` (ROIs) | done for Exp 1, 5, 7, 8, 9 |
+| 4 | per-fish ROIs in reference → cross-fish maps | pool/density/average responsive ROIs | — | downstream analysis repo (`social_filters`) |
 
 ## Files
 
 - `image_utils.py` — `norm01`, `local_unsharp`, `normalized_cross_correlation`, `read_pixel_size_um` (from TIFF tags).
 - `plane_matching.py` — coarse-to-fine scale search (0.50–1.50) × every anatomy slice; returns `best_z`, `best_z_subslice`, `scale`, `score`, per-depth `scores`.
 - `plane_registration.py` — loads suite2p plane (`{prefix}_ops.npy` meanImg, `{prefix}_stat.npy`); places plane by NCC, ANTs Rigid→Affine in a square mask (plane +10%); warps ROIs as a label image with nearest-neighbour; writes metadata JSON. Adds `xpix_aligned`, `ypix_aligned`, `med_aligned`, `z_pix` to each ROI dict.
-- `roi_to_reference.py` — step 2 for ROI coordinates; step 3 belongs here.
+- `roi_to_reference.py` — coordinate math of steps 2 and 3: canonical voxels ↔ µm (`read_nrrd_geometry`), ANTs point transform into the reference, reference ROI table.
+- `batch_roi_to_reference.py` — step 3 per fish: reads `<fish_id>_roi_positions.csv`, writes `02_reg/08_2pa-ref/roi_positions/<reference>/<fish_id>_roi_positions_in_ref.csv` (never overwritten), scores the mapping.
+- `notebooks/rois_to_reference.ipynb` — step 3 driver, one experiment at a time; QC figures + table in `Paper/2p_derived/registration/<experiment>/rois_in_ref/`.
 - `notebooks/register_plane_to_anatomy.ipynb` — the driver: one fish, all planes, QC plots, then writes the canonical anatomy NRRD.
 
 Method ported from Danin Dharmaperwira's external `ddharmap-ANTs` repo (not in this repo); tuning defaults are his.

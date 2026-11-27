@@ -4,8 +4,10 @@ Loads each fish's warped anatomy (`<fish>_2P_in_ref.nrrd`, on the reference
 grid), scores how well it matches the reference (Pearson correlation where
 the fish has data, coverage, covered depth range), and picks the reference
 depths and low-resolution slices that the QC notebook
-(`notebooks/qc_reference_registration.ipynb`) plots. Plotting itself stays in
-the notebook.
+(`notebooks/qc_reference_registration.ipynb`) plots. It also checks ROIs
+mapped into the reference (`notebooks/rois_to_reference.ipynb`): sampling a
+stack at ROI positions and scoring whether they land on the same anatomy.
+Plotting itself stays in the notebooks.
 """
 
 import json
@@ -15,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import SimpleITK as sitk
+from scipy.ndimage import map_coordinates
 from skimage.transform import downscale_local_mean
 
 from utils import itk_readable_paths, itk_safe_directory
@@ -181,6 +184,56 @@ def summarize_fish(warped_stack, reference_stack, z_spacing_um):
         "bounding_box_yxyx": data_bounding_box(mask),
     }
     return summary
+
+
+def sample_stack_at_voxels(stack, voxels_xyz):
+    """Read a stack's intensity at (sub-voxel) positions, by linear interpolation.
+
+    Args:
+        stack (numpy.ndarray): 3D image, (z, y, x).
+        voxels_xyz (numpy.ndarray): (n, 3) voxel positions, x, y, z columns.
+
+    Returns:
+        numpy.ndarray: (n,) intensities; NaN for NaN positions or positions
+        outside the stack.
+    """
+    voxels_xyz = np.asarray(voxels_xyz, dtype=np.float64)
+    upper_bounds_xyz = np.array(stack.shape[::-1]) - 1
+    inside = np.isfinite(voxels_xyz).all(axis=1) & (voxels_xyz >= 0).all(axis=1) & (voxels_xyz <= upper_bounds_xyz).all(axis=1)
+    values = np.full(len(voxels_xyz), np.nan)
+    inside_zyx = voxels_xyz[inside][:, ::-1].T  # map_coordinates wants one row per array axis (z, y, x)
+    values[inside] = map_coordinates(stack, inside_zyx, order=1)
+    return values
+
+
+def roi_position_agreement(fish_values, warped_values):
+    """Check that ROIs mapped into the reference land on the same anatomy as before.
+
+    `fish_values` are the fish's canonical anatomy at the ROI centres;
+    `warped_values` the same fish's anatomy warped into the reference
+    (`<fish_id>_2P_in_ref.nrrd`), read at the mapped ROI centres. If the point
+    transform matches the image transform, the two agree closely (r ~ 1); a
+    wrong order or direction drops r towards 0 or sends points outside.
+
+    Args:
+        fish_values (numpy.ndarray): (n,) intensities before mapping.
+        warped_values (numpy.ndarray): (n,) intensities after mapping (NaN = outside).
+
+    Returns:
+        dict: `correlation` (Pearson r over ROIs with both values, NaN if
+        fewer than 3), `n_compared`, and `fraction_inside` (share of ROIs with
+        a finite position before mapping that land inside the warped stack).
+    """
+    has_fish_value = np.isfinite(fish_values)
+    compared = has_fish_value & np.isfinite(warped_values)
+    n_compared = int(compared.sum())
+    correlation = float(np.corrcoef(fish_values[compared], warped_values[compared])[0, 1]) if n_compared >= 3 else float("nan")
+    agreement = {
+        "correlation": correlation,
+        "n_compared": n_compared,
+        "fraction_inside": n_compared / int(has_fish_value.sum()) if has_fish_value.any() else float("nan"),
+    }
+    return agreement
 
 
 def spread_depths(z_first, z_last, n_depths):
